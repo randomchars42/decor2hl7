@@ -345,6 +345,29 @@ def _urls(want: Mapping[str, str], prefix: str, language: str) -> list[str]:
     return urls
 
 
+def _existing_cache_payload(target: Path, old: Mapping[str, Any]) -> bytes | None:
+    """Return a usable on-disk cache payload, even if the manifest is stale.
+
+    A valid file is enough to reconstruct a missing/stale manifest entry.  If an
+    existing successful manifest entry carries a checksum, however, a checksum
+    mismatch is treated as a modified/corrupt cache entry and forces a fresh
+    download rather than silently blessing the changed bytes.
+    """
+    if not target.is_file():
+        return None
+    try:
+        payload = target.read_bytes()
+    except OSError:
+        return None
+    status, _detail = classify_payload(payload)
+    if status != "ok":
+        return None
+    expected = str(old.get("sha256") or "")
+    if old.get("status") == "ok" and expected and _digest(payload) != expected:
+        return None
+    return payload
+
+
 def _fetch_direct(
     release_dir: Path,
     manifest: dict[str, Any],
@@ -361,8 +384,19 @@ def _fetch_direct(
     old = resources.get(key, {})
     target = release_dir / relative_file
     display = label or key
-    if old.get("status") == "ok" and target.exists():
-        _emit(progress, f"fetch: {display}: cached")
+    existing = _existing_cache_payload(target, old)
+    if existing is not None:
+        resources[key] = {
+            **old,
+            "status": "ok",
+            "file": relative_file,
+            "url": old.get("url") or url,
+            "bytes": len(existing),
+            "sha256": _digest(existing),
+        }
+        repaired = old.get("status") != "ok" or old.get("file") != relative_file
+        suffix = " (manifest repaired)" if repaired else ""
+        _emit(progress, f"fetch: {display}: cached{suffix}")
         return target
     if old.get("status") == "missing" and not retry_missing:
         _emit(progress, f"fetch: {display}: known missing")
@@ -421,9 +455,27 @@ def _fetch_want(
     relative = str(old.get("file") or _filename(want))
     target = release_dir / relative
     display = _resource_label(want)
-    if old.get("status") == "ok" and target.exists():
-        _emit(progress, f"fetch: {display}: cached")
-        return target
+    existing = _existing_cache_payload(target, old)
+    if existing is not None:
+        resolved_date = _resolved_effective_date(existing, want)
+        requested_date = want.get("effective_date") or ""
+        # A static dependency must not accidentally adopt another revision that
+        # happens to have the expected filename. Dynamic dependencies may adopt
+        # whatever revision the valid cached response actually contains.
+        if not requested_date or not resolved_date or resolved_date == requested_date:
+            manifest["resources"][key] = {
+                **old,
+                "status": "ok",
+                "file": relative,
+                "bytes": len(existing),
+                "sha256": _digest(existing),
+                "requested_effective_date": requested_date or "dynamic",
+                "resolved_effective_date": resolved_date or old.get("resolved_effective_date", ""),
+            }
+            repaired = old.get("status") != "ok" or old.get("file") != relative
+            suffix = " (manifest repaired)" if repaired else ""
+            _emit(progress, f"fetch: {display}: cached{suffix}")
+            return target
     if old.get("status") == "missing" and not retry_missing:
         _emit(progress, f"fetch: {display}: known missing")
         return None

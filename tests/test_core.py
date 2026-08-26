@@ -390,6 +390,57 @@ class CoreTests(unittest.TestCase):
         refs = _evidence_references(root, {"relevant"})
         self.assertEqual({item["id"] for item in refs if item["kind"] == "dataset"}, {"9.1"})
 
+    def test_fetch_want_adopts_valid_existing_file_without_manifest_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            target = release_dir / "templates" / "1.2.3_2025-05-01.xml"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                '<return><template id="1.2.3" effectiveDate="2025-05-01" name="T"><element name="hl7:observation"/></template></return>',
+                encoding="utf-8",
+            )
+            manifest = {"resources": {}}
+            want = {"kind": "template", "id": "1.2.3", "effective_date": "2025-05-01", "prefix": "aktin-"}
+            progress: list[str] = []
+            with patch("decor2hl7.decor.fetch.get", side_effect=AssertionError("must not download")):
+                path = _fetch_want(
+                    release_dir, manifest, want, owners={}, repositories=["aktin-"],
+                    language="de-DE", ipv4=True, retry_missing=False, progress=progress.append,
+                )
+            self.assertEqual(path, target)
+            entry = manifest["resources"]["template:1.2.3@2025-05-01"]
+            self.assertEqual(entry["status"], "ok")
+            self.assertEqual(entry["file"], "templates/1.2.3_2025-05-01.xml")
+            self.assertTrue(entry["sha256"])
+            self.assertTrue(any("manifest repaired" in line for line in progress))
+
+    def test_fetch_want_redownloads_checksum_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            target = release_dir / "templates" / "1.2.3_2025-05-01.xml"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                '<return><template id="1.2.3" effectiveDate="2025-05-01" name="Changed"/></return>',
+                encoding="utf-8",
+            )
+            manifest = {"resources": {
+                "template:1.2.3@2025-05-01": {
+                    "status": "ok",
+                    "file": "templates/1.2.3_2025-05-01.xml",
+                    "sha256": "not-the-current-digest",
+                }
+            }}
+            want = {"kind": "template", "id": "1.2.3", "effective_date": "2025-05-01", "prefix": "aktin-"}
+            downloaded = b'<return><template id="1.2.3" effectiveDate="2025-05-01" name="Fresh"/></return>'
+            with patch("decor2hl7.decor.fetch.get", return_value=downloaded) as mocked:
+                path = _fetch_want(
+                    release_dir, manifest, want, owners={}, repositories=["aktin-"],
+                    language="de-DE", ipv4=True, retry_missing=False,
+                )
+            self.assertEqual(path, target)
+            self.assertEqual(target.read_bytes(), downloaded)
+            self.assertGreaterEqual(mocked.call_count, 1)
+
     def test_dynamic_fetch_records_and_reuses_resolved_effective_date(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
