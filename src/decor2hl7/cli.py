@@ -170,6 +170,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         ipv4=ipv4,
         retry_missing=args.retry_missing,
         max_requests=args.max_requests,
+        progress=_say,
     )
     closure = result["closure"]
     summary = closure.get("summary", {})

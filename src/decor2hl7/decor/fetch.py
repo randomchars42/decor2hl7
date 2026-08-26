@@ -19,7 +19,7 @@ import urllib.error
 import xml.etree.ElementTree as ET
 from collections import deque
 from pathlib import Path
-from typing import Any, Iterable, Mapping, TypedDict
+from typing import Any, Callable, Iterable, Mapping, TypedDict
 
 from .client import FINAL_STATUS, build_url, get
 from .xml import local, parse_text
@@ -45,6 +45,27 @@ KIND_ORDER = {"dataset": 0, "template": 1, "valueset": 2, "concept": 3}
 
 class RequestBudgetExceeded(RuntimeError):
     """Recursive fetch stopped before another HTTP attempt could be made."""
+
+
+Progress = Callable[[str], None]
+
+
+def _emit(progress: Progress | None, message: str) -> None:
+    if progress is not None:
+        progress(message)
+
+
+def _resource_label(want: Mapping[str, str]) -> str:
+    effective = want.get("effective_date") or "dynamic"
+    return f"{want.get('kind', 'resource')} {want.get('id', '?')} @ {effective}"
+
+
+def _size_text(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KiB"
+    return f"{size / (1024 * 1024):.1f} MiB"
 
 
 def _safe(text: str) -> str:
@@ -333,40 +354,52 @@ def _fetch_direct(
     url: str,
     ipv4: bool,
     retry_missing: bool,
+    progress: Progress | None = None,
+    label: str | None = None,
 ) -> Path | None:
     resources = manifest.setdefault("resources", {})
     old = resources.get(key, {})
     target = release_dir / relative_file
+    display = label or key
     if old.get("status") == "ok" and target.exists():
+        _emit(progress, f"fetch: {display}: cached")
         return target
     if old.get("status") == "missing" and not retry_missing:
+        _emit(progress, f"fetch: {display}: known missing")
         return None
     target.parent.mkdir(parents=True, exist_ok=True)
+    _emit(progress, f"fetch: {display}: requesting")
     try:
         payload = get(url, ipv4=ipv4)
     except urllib.error.HTTPError as error:
+        status_name = "missing" if error.code in FINAL_STATUS else "error"
         resources[key] = {
-            "status": "missing" if error.code in FINAL_STATUS else "error",
+            "status": status_name,
             "url": url,
             "http_status": error.code,
         }
+        _emit(progress, f"fetch: {display}: {status_name} (HTTP {error.code})")
         return None
     except OSError as error:
         resources[key] = {"status": "error", "url": url, "error": str(error)}
+        _emit(progress, f"fetch: {display}: error ({error})")
         return None
     status, detail = classify_payload(payload)
     if status == "empty":
         resources[key] = {"status": "missing", "url": url, "detail": detail}
+        _emit(progress, f"fetch: {display}: missing ({detail})")
         return None
     target.write_bytes(payload)
+    stored_status = "ok" if status == "ok" else "error"
     resources[key] = {
-        "status": "ok" if status == "ok" else "error",
+        "status": stored_status,
         "file": relative_file,
         "url": url,
         "bytes": len(payload),
         "sha256": _digest(payload),
         **({"detail": detail} if detail else {}),
     }
+    _emit(progress, f"fetch: {display}: {stored_status} ({_size_text(len(payload))})")
     return target
 
 
@@ -381,14 +414,18 @@ def _fetch_want(
     ipv4: bool,
     retry_missing: bool,
     request_budget: dict[str, int] | None = None,
+    progress: Progress | None = None,
 ) -> Path | None:
     key = _key(want)
     old = manifest.setdefault("resources", {}).get(key, {})
     relative = str(old.get("file") or _filename(want))
     target = release_dir / relative
+    display = _resource_label(want)
     if old.get("status") == "ok" and target.exists():
+        _emit(progress, f"fetch: {display}: cached")
         return target
     if old.get("status") == "missing" and not retry_missing:
+        _emit(progress, f"fetch: {display}: known missing")
         return None
 
     request_want: Want = dict(want)
@@ -404,41 +441,54 @@ def _fetch_want(
                 if request_budget.get("made", 0) >= request_budget.get("max", 0):
                     raise RequestBudgetExceeded
                 request_budget["made"] = request_budget.get("made", 0) + 1
+            count = request_budget.get("made", 0) if request_budget is not None else 0
+            maximum = request_budget.get("max", 0) if request_budget is not None else 0
+            budget = f" [{count}/{maximum}]" if maximum else ""
+            _emit(progress, f"fetch: {display}: requesting via {prefix or '?'}{budget}")
             try:
                 payload = get(url, ipv4=ipv4)
             except urllib.error.HTTPError as error:
                 attempts.append({"prefix": prefix, "url": url, "http_status": error.code})
+                _emit(progress, f"fetch: {display}: HTTP {error.code} via {prefix or '?'}; trying next source")
                 continue
             except OSError as error:
                 attempts.append({"prefix": prefix, "url": url, "error": str(error)})
+                _emit(progress, f"fetch: {display}: {error} via {prefix or '?'}; trying next source")
                 continue
             status, detail = classify_payload(payload)
             if status == "empty":
                 attempts.append({"prefix": prefix, "url": url, "error": detail})
+                _emit(progress, f"fetch: {display}: empty response via {prefix or '?'}; trying next source")
                 continue
             target = release_dir / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(payload)
+            stored_status = "ok" if status == "ok" else "error"
+            resolved_date = _resolved_effective_date(payload, want)
             manifest["resources"][key] = {
-                "status": "ok" if status == "ok" else "error",
+                "status": stored_status,
                 "file": relative,
                 "url": url,
                 "repository": prefix,
                 "bytes": len(payload),
                 "sha256": _digest(payload),
                 "requested_effective_date": want.get("effective_date") or "dynamic",
-                "resolved_effective_date": _resolved_effective_date(payload, want),
+                "resolved_effective_date": resolved_date,
                 **({"detail": detail} if detail else {}),
             }
+            resolved_note = f", resolved {resolved_date}" if not want.get("effective_date") and resolved_date else ""
+            _emit(progress, f"fetch: {display}: {stored_status} via {prefix or '?'} ({_size_text(len(payload))}{resolved_note})")
             return target
     settled = bool(attempts) and all(
         item.get("http_status") in FINAL_STATUS or item.get("error", "").startswith("<")
         for item in attempts
     )
+    final_status = "missing" if settled else "error"
     manifest["resources"][key] = {
-        "status": "missing" if settled else "error",
+        "status": final_status,
         "attempts": attempts,
     }
+    _emit(progress, f"fetch: {display}: {final_status} after {len(attempts)} attempt(s)")
     return None
 
 
@@ -485,6 +535,7 @@ def fetch_spec(
     ipv4: bool = True,
     retry_missing: bool = False,
     max_requests: int = 1500,
+    progress: Progress | None = None,
 ) -> dict[str, Any]:
     """Fetch the selected transaction and recursively close its dependencies."""
     release_dir.mkdir(parents=True, exist_ok=True)
@@ -510,7 +561,8 @@ def fetch_spec(
     pinned = _fetch_direct(
         release_dir, manifest, key=f"project:{prefix}@{release_date}",
         relative_file="project.xml", url=project_url, ipv4=ipv4,
-        retry_missing=retry_missing,
+        retry_missing=retry_missing, progress=progress,
+        label=f"release project {release.get('key') or release_date or '?'}",
     )
     evidence_url = build_url(
         "RetrieveProject", prefix=prefix, language=language,
@@ -519,12 +571,14 @@ def fetch_spec(
     evidence = _fetch_direct(
         release_dir, manifest, key=f"project-evidence:{prefix}",
         relative_file="project-evidence.xml", url=evidence_url, ipv4=ipv4,
-        retry_missing=retry_missing,
+        retry_missing=retry_missing, progress=progress,
+        label=f"live evidence project {prefix}",
     )
     index_url = build_url("ProjectIndex", format="xml", language=language)
     project_index = _fetch_direct(
         release_dir, manifest, key="project-index", relative_file="project-index.xml",
-        url=index_url, ipv4=ipv4, retry_missing=retry_missing,
+        url=index_url, ipv4=ipv4, retry_missing=retry_missing, progress=progress,
+        label="global project index",
     )
     tx_url = build_url(
         "RetrieveTransaction", id=tx_id, effectiveDate=tx_effective or None,
@@ -534,7 +588,8 @@ def fetch_spec(
         release_dir, manifest,
         key=f"transaction:{tx_id}@{tx_effective}",
         relative_file=str((transaction_dir / "transaction.xml").relative_to(release_dir)),
-        url=tx_url, ipv4=ipv4, retry_missing=retry_missing,
+        url=tx_url, ipv4=ipv4, retry_missing=retry_missing, progress=progress,
+        label=f"transaction {transaction.get('key') or tx_id or '?'}",
     )
     root_errors: list[str] = []
     if pinned is None:
@@ -586,6 +641,7 @@ def fetch_spec(
 
     def crawl(queue: deque[Want], role: str, embedded_roots: list[ET.Element | None]) -> None:
         nonlocal resources_considered, budget_exhausted
+        _emit(progress, f"fetch: resolving {role} dependency closure ({len(queue)} initial reference(s))")
         while queue and not budget_exhausted:
             rows = list(queue)
             queue.clear()
@@ -606,7 +662,7 @@ def fetch_spec(
                         release_dir, manifest, want, owners=owners,
                         repositories=repositories, language=language,
                         ipv4=ipv4, retry_missing=retry_missing,
-                        request_budget=request_budget,
+                        request_budget=request_budget, progress=progress,
                     )
                 except RequestBudgetExceeded:
                     # Preserve this resource and the remainder of the current
@@ -685,4 +741,12 @@ def fetch_spec(
         "error": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "error"),
     }
     write_json(manifest_path, manifest)
+    _emit(
+        progress,
+        "fetch: complete: "
+        f"{closure['summary']['ok']} ok/cached, "
+        f"{closure['summary']['missing']} missing, "
+        f"{closure['summary']['error']} error(s), "
+        f"{closure['recursive_http_requests']} recursive HTTP request(s)",
+    )
     return {"manifest": manifest, "closure": closure}

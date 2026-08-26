@@ -184,11 +184,12 @@ class CoreTests(unittest.TestCase):
                     return b'<return><template id="doc" effectiveDate="2026-01-01" name="Doc"><element name="hl7:ClinicalDocument" id="root"/></template></return>'
                 raise AssertionError(url)
 
+            progress: list[str] = []
             with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
                 result = fetch_spec(
                     release_dir, tx_dir, prefix="aktin-",
                     release=RELEASE, transaction={**TRANSACTION, "id": "t"},
-                    retry_missing=False, max_requests=50,
+                    retry_missing=False, max_requests=50, progress=progress.append,
                 )
             self.assertTrue((release_dir / "manifest.json").exists())
             self.assertTrue((tx_dir / "transaction.xml").exists())
@@ -197,6 +198,9 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(any("RetrieveDataSet" in url for url in calls))
             self.assertTrue(any(path.parent.name == "templates" for path in release_dir.rglob("*.xml")))
             self.assertFalse(result["closure"]["truncated"])
+            self.assertTrue(any("release project" in line and "requesting" in line for line in progress))
+            self.assertTrue(any("dataset 9.9.1 @ 2020-01-01" in line for line in progress))
+            self.assertTrue(any(line.startswith("fetch: complete:") for line in progress))
 
             before = len(calls)
             with patch("decor2hl7.decor.fetch.get", side_effect=AssertionError("cache miss")):
