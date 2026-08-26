@@ -1152,7 +1152,54 @@ class CoreTests(unittest.TestCase):
             proposal["fields"]["triage.color"],
             {"rot": "rot", "orange": "orange", "gelb": "gelb"},
         )
-        self.assertIn("3 canonical/code defaults", report)
+        self.assertIn("3 model defaults", report)
+
+    def test_codes_mapping_contains_model_codes_and_display_aliases_without_csv(self) -> None:
+        model = {
+            "fields": {
+                "referral": {
+                    "name": "Zuweisung",
+                    "type": "code",
+                    "values": {
+                        "ohne": {
+                            "code": "NPHYS",
+                            "code_system": "1.2.276.0.76.5.440",
+                            "display_name": "Zuweisung nicht durch Arzt",
+                        },
+                        "Vertragsarzt/Praxis": {
+                            "code": "VAP",
+                            "code_system": "1.2.276.0.76.5.440",
+                            "display_name": "Vertragsarzt/Praxis",
+                        },
+                    },
+                }
+            }
+        }
+        proposal, _ = mapping.codes_mapping_proposal(model, {"fields": {}}, None)
+        self.assertEqual(proposal["fields"]["referral"]["NPHYS"], "ohne")
+        self.assertEqual(proposal["fields"]["referral"]["Zuweisung nicht durch Arzt"], "ohne")
+        self.assertEqual(proposal["fields"]["referral"]["ohne"], "ohne")
+        self.assertEqual(proposal["fields"]["referral"]["VAP"], "Vertragsarzt/Praxis")
+
+    def test_write_code_mapping_is_build_side_and_populated(self) -> None:
+        model = {
+            "fields": {
+                "transport": {
+                    "type": "code",
+                    "values": {
+                        "KTW": {"code": "1", "code_system": "1.2.3", "display_name": "KTW"},
+                        "RTW": {"code": "2", "code_system": "1.2.3", "display_name": "RTW"},
+                    },
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            result = mapping.write_code_mapping(Path(tmp), model)
+            stored = load_json(Path(tmp) / "codes-mapping.proposed.json")
+            self.assertEqual(result, stored)
+            self.assertEqual(stored["fields"]["transport"]["1"], "KTW")
+            self.assertEqual(stored["fields"]["transport"]["2"], "RTW")
+            self.assertTrue((Path(tmp) / "codes-mapping.md").exists())
 
 
 if __name__ == "__main__":

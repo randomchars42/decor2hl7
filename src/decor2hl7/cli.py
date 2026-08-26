@@ -222,7 +222,7 @@ def _build_inputs(root: Path) -> tuple[Path, list[Path], list[Path], list[Path],
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    from .build.mapping import write_cda_mapping
+    from .build.mapping import write_cda_mapping, write_code_mapping
     from .build.model import write_model
     from .build.target import write_cda
 
@@ -233,12 +233,14 @@ def cmd_build(args: argparse.Namespace) -> int:
     model_dir = transaction_model_dir(root, release, transaction)
     model_dir.mkdir(parents=True, exist_ok=True)
     model = write_model(transaction_xml, model_resources, model_dir, terminology_paths=[templates[0]])
+    code_mapping = write_code_mapping(model_dir, model)
     cda = write_cda(
         templates, model_dir, model, fallback_templates,
         cutoff=str(release.get("date") or "") or None,
     )
     cda_mapping = write_cda_mapping(mapping_xml, model_dir, model, cda)
     _say(f"model: {len(model['fields'])} datapoints, {len(model['groups'])} groups")
+    _say(f"code mapping defaults: {sum(len(values) for values in code_mapping['fields'].values())} aliases across {len(code_mapping['fields'])} coded fields")
     _say(
         f"CDA: {cda['stats']['reachable_templates']} reachable templates, "
         f"{cda['stats']['targets']} named targets"
@@ -340,7 +342,7 @@ def cmd_config(args: argparse.Namespace) -> int:
     config_dir.mkdir(parents=True, exist_ok=True)
     proposal_hints = {
         "csv-mapping": "run `decor2hl7 propose-input --input PATH` first",
-        "codes-mapping": "run `decor2hl7 propose-input --input PATH` first",
+        "codes-mapping": "run `decor2hl7 build` first",
         "cda-mapping": "run `decor2hl7 build` first",
     }
     for name, hint in proposal_hints.items():
