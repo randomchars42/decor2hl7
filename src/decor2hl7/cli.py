@@ -222,7 +222,7 @@ def _build_inputs(root: Path) -> tuple[Path, list[Path], list[Path], list[Path],
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    from .build.mapping import write_mappings
+    from .build.mapping import write_cda_mapping
     from .build.model import write_model
     from .build.target import write_cda
 
@@ -237,22 +237,33 @@ def cmd_build(args: argparse.Namespace) -> int:
         templates, model_dir, model, fallback_templates,
         cutoff=str(release.get("date") or "") or None,
     )
-    settings = load_settings(root)
-    configured_input = input_dir(root, required=False)
-    mappings = write_mappings(
-        mapping_xml,
-        model_dir,
-        configured_input,
-        model,
-        cda,
-        join_column=args.join_column or str(settings.get("join_column") or "patient_id"),
-    )
+    cda_mapping = write_cda_mapping(mapping_xml, model_dir, model, cda)
     _say(f"model: {len(model['fields'])} datapoints, {len(model['groups'])} groups")
     _say(
         f"CDA: {cda['stats']['reachable_templates']} reachable templates, "
         f"{cda['stats']['targets']} named targets"
     )
-    _say(f"CDA mapped proposal: {sum(value is not None for value in mappings['cda']['fields'].values())}/{len(model['fields'])}")
+    _say(f"CDA mapped proposal: {sum(value is not None for value in cda_mapping['fields'].values())}/{len(model['fields'])}")
+    return 0
+
+
+def cmd_propose_input(args: argparse.Namespace) -> int:
+    from .build.mapping import write_input_mappings
+
+    root = _root(args)
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    model_dir = transaction_model_dir(root, release, transaction)
+    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build` first"))
+    source_root = input_dir(root, args.input, required=True)
+    proposals = write_input_mappings(
+        model_dir,
+        source_root,
+        model,
+        join_column=args.join_column or "patient_id",
+    )
+    _say(f"CSV mapped proposal: {sum(value is not None for value in proposals['csv']['fields'].values())}/{len(model.get('fields', {}))}")
+    _say(f"input mapping proposals written from: {source_root}")
     return 0
 
 
@@ -304,8 +315,13 @@ def cmd_config(args: argparse.Namespace) -> int:
     model_dir = transaction_model_dir(root, release, transaction)
     config_dir = transaction_config_dir(root, release, transaction)
     config_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("csv-mapping", "codes-mapping", "cda-mapping"):
-        source = _require(model_dir / f"{name}.proposed.json", "run `decor2hl7 build` first")
+    proposal_hints = {
+        "csv-mapping": "run `decor2hl7 propose-input --input PATH` first",
+        "codes-mapping": "run `decor2hl7 propose-input --input PATH` first",
+        "cda-mapping": "run `decor2hl7 build` first",
+    }
+    for name, hint in proposal_hints.items():
+        source = _require(model_dir / f"{name}.proposed.json", hint)
         destination = config_dir / f"{name}.json"
         _say(("created " if copy_if_missing(source, destination) else "kept    ") + str(destination))
 
@@ -659,9 +675,13 @@ def parser() -> argparse.ArgumentParser:
     _add_network_override(q)
     q.set_defaults(func=cmd_fetch)
 
-    q = sub.add_parser("build", help="compile models and generate mapping proposals")
-    q.add_argument("--join-column")
+    q = sub.add_parser("build", help="compile ART-DECOR models and CDA mapping proposal")
     q.set_defaults(func=cmd_build)
+
+    q = sub.add_parser("propose-input", help="inspect CSV input and propose CSV/code mappings")
+    q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
+    q.add_argument("--join-column", default="patient_id")
+    q.set_defaults(func=cmd_propose_input)
 
     q = sub.add_parser("config", help="seed human-editable configuration without overwriting it")
     q.set_defaults(func=cmd_config)
@@ -695,6 +715,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         return int(args.func(args))
+    except KeyboardInterrupt:
+        _say("aborted by user")
+        return 130
     except (OSError, ValueError) as error:
         _say(f"error: {error}")
         return 2

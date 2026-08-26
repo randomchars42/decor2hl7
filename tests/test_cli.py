@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -56,16 +56,74 @@ class CliTests(unittest.TestCase):
             self.assertTrue(lines[0].startswith("KEY"))
             self.assertTrue(lines[1].startswith("notaufnahmeregister--60"))
 
-    def test_input_commands_accept_external_input_root_and_check_is_uncoupled(self) -> None:
+    def test_keyboard_interrupt_exits_130_without_traceback(self) -> None:
+        err = StringIO()
+        with patch("decor2hl7.cli.cmd_init", side_effect=KeyboardInterrupt), redirect_stderr(err):
+            self.assertEqual(main(["init"]), 130)
+        self.assertEqual(err.getvalue().strip(), "aborted by user")
+
+    def test_input_commands_accept_external_input_root_and_build_is_uncoupled(self) -> None:
         from decor2hl7.cli import parser
+        propose = parser().parse_args(["propose-input", "--input", "/tmp/input"])
+        self.assertEqual(propose.input, "/tmp/input")
+        self.assertEqual(propose.join_column, "patient_id")
         transform = parser().parse_args(["transform", "--input", "/tmp/input"])
         self.assertEqual(transform.input, "/tmp/input")
         run = parser().parse_args(["run", "--input", "/tmp/input"])
         self.assertEqual(run.input, "/tmp/input")
         check_input = parser().parse_args(["check-input", "--input", "/tmp/input"])
         self.assertEqual(check_input.input, "/tmp/input")
+        build = parser().parse_args(["build"])
+        self.assertFalse(hasattr(build, "input"))
+        self.assertFalse(hasattr(build, "join_column"))
         check = parser().parse_args(["check"])
         self.assertFalse(hasattr(check, "input"))
+
+    def test_propose_input_writes_only_csv_and_code_proposals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "input"
+            source.mkdir()
+            (source / "cases.csv").write_text(
+                "patient_id;Aufnahmezeitpunkt;Triage\n1;2026-01-01T12:00:00;rot\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            set_release(root, RELEASES[0])
+            set_transaction(root, TRANSACTIONS[0])
+            model_dir = transaction_model_dir(root)
+            model_dir.mkdir(parents=True)
+            write_json(model_dir / "model.json", {
+                "meta": {
+                    "dataset_id": "dataset",
+                    "transaction_id": TRANSACTIONS[0]["id"],
+                    "transaction_effective_date": TRANSACTIONS[0]["effective_date"],
+                },
+                "fields": {
+                    "aufnahme.aufnahmezeitpunkt": {
+                        "name": "Aufnahmezeitpunkt",
+                        "type": "datetime",
+                    },
+                    "aufnahme.triage": {
+                        "name": "Triage",
+                        "type": "code",
+                        "values": {
+                            "rot": {"code": "R", "display_name": "Rot"},
+                        },
+                    },
+                },
+            })
+
+            self.assertEqual(
+                main(["--root", str(root), "propose-input", "--input", str(source)]),
+                0,
+            )
+            csv_proposal = load_json(model_dir / "csv-mapping.proposed.json")
+            code_proposal = load_json(model_dir / "codes-mapping.proposed.json")
+            self.assertEqual(csv_proposal["fields"]["aufnahme.aufnahmezeitpunkt"], "cases:Aufnahmezeitpunkt")
+            self.assertEqual(csv_proposal["fields"]["aufnahme.triage"], "cases:Triage")
+            self.assertEqual(code_proposal["fields"]["aufnahme.triage"]["rot"], "rot")
+            self.assertFalse((model_dir / "cda-mapping.proposed.json").exists())
 
     def test_config_never_overwrites_user_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,7 +12,11 @@ from decor2hl7.build.mapping import cda_mapping_proposal
 from decor2hl7.build.model import compile_model
 from decor2hl7.build.target import compile_cda
 from decor2hl7.decor.catalog import parse_releases, parse_transactions, transactions
-from decor2hl7.decor.fetch import RequestBudgetExceeded, _evidence_references, _fetch_want, _inventory, fetch_spec
+from decor2hl7.decor.fetch import (
+    RequestBudgetExceeded, _candidate_prefixes, _evidence_references, _fetch_want,
+    _inventory, fetch_spec, hard_references, soft_references,
+)
+from decor2hl7.workspace import load_json
 from decor2hl7.workspace import (
     init_workspace, input_dir, load_json, release_spec_dir, set_release, set_transaction,
     transaction_config_dir, transaction_key, transaction_model_dir,
@@ -175,7 +179,7 @@ class CoreTests(unittest.TestCase):
                 if "ProjectIndex" in url:
                     return b'<return><project id="9.9" prefix="ext-"/></return>'
                 if "RetrieveTransaction" in url:
-                    return b'<dataset id="d" transactionId="t" templateId="doc"><concept id="c" shortName="x" type="item"><name>X</name><inherit ref="old" datasetId="9.9.1" datasetEffectiveDate="2020-01-01" prefix="ext-"/></concept></dataset>'
+                    return b'<dataset id="d" transactionId="t" templateId="doc"><concept id="c" shortName="x" type="group"><name>X</name><contains ref="old" datasetId="9.9.1" datasetEffectiveDate="2020-01-01" prefix="ext-"/></concept></dataset>'
                 if "RetrieveProject" in url:
                     return b'<project><transaction id="t"><representingTemplate ref="doc"/></transaction><dataset id="9.9.1" effectiveDate="2020-01-01"><concept id="old" shortName="old" type="item"><name>Old embedded</name></concept></dataset></project>'
                 if "RetrieveDataSet" in url:
@@ -210,6 +214,117 @@ class CoreTests(unittest.TestCase):
                     retry_missing=False, max_requests=50,
                 )
             self.assertEqual(len(calls), before)
+
+    def test_fetch_uses_static_template_from_main_project_evidence_before_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp) / "spec" / "2026.1.2"
+            tx_dir = release_dir / "transactions" / "tx"
+            calls: list[str] = []
+
+            def fake_get(url: str, **_: object) -> bytes:
+                calls.append(url)
+                if "ProjectIndex" in url:
+                    return b"<return/>"
+                if "RetrieveTransaction" in url:
+                    return b'<transaction id="t"><representingTemplate ref="doc" flexibility="2026-01-15T00:00:00"/></transaction>'
+                if "RetrieveProject" in url and "version=" in url:
+                    return b'<project><transaction id="t"><representingTemplate ref="doc" flexibility="2026-01-15T00:00:00"/></transaction></project>'
+                if "RetrieveProject" in url:
+                    return b'<project><template id="doc" effectiveDate="2026-01-15T00:00:00" name="Doc"><element name="hl7:ClinicalDocument" id="root"/></template></project>'
+                if "RetrieveTemplate" in url:
+                    raise AssertionError(f"template should have been satisfied by project-evidence.xml: {url}")
+                raise AssertionError(url)
+
+            progress: list[str] = []
+            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+                result = fetch_spec(
+                    release_dir, tx_dir, prefix="aktin-",
+                    release=RELEASE, transaction={**TRANSACTION, "id": "t", "key": "tx"},
+                    max_requests=20, progress=progress.append,
+                )
+
+            self.assertFalse(any("RetrieveTemplate" in url for url in calls))
+            self.assertFalse(result["closure"]["errors"])
+            self.assertTrue(any(
+                "template doc @ 2026-01-15T00:00:00" in line
+                and "available in main project evidence" in line
+                for line in progress
+            ))
+
+    def test_dynamic_template_from_main_project_evidence_is_capped_at_release(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp) / "spec" / "2026.1.2"
+            tx_dir = release_dir / "transactions" / "tx"
+            calls: list[str] = []
+
+            def fake_get(url: str, **_: object) -> bytes:
+                calls.append(url)
+                if "ProjectIndex" in url:
+                    return b"<return/>"
+                if "RetrieveTransaction" in url:
+                    return b'<transaction id="t"><representingTemplate ref="doc" flexibility="dynamic"/></transaction>'
+                if "RetrieveProject" in url and "version=" in url:
+                    return b'<project><transaction id="t"><representingTemplate ref="doc" flexibility="dynamic"/></transaction></project>'
+                if "RetrieveProject" in url:
+                    return (
+                        b'<project>'
+                        b'<template id="doc" effectiveDate="2026-02-01T00:00:00" name="ReleasedDoc"><element name="hl7:ClinicalDocument" id="released"/></template>'
+                        b'<template id="doc" effectiveDate="2026-05-01T00:00:00" name="FutureDraft"><element name="hl7:ClinicalDocument" id="future"/></template>'
+                        b'</project>'
+                    )
+                if "RetrieveTemplate" in url:
+                    raise AssertionError(f"template should have been satisfied by project-evidence.xml: {url}")
+                raise AssertionError(url)
+
+            progress: list[str] = []
+            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+                result = fetch_spec(
+                    release_dir, tx_dir, prefix="aktin-",
+                    release=RELEASE, transaction={**TRANSACTION, "id": "t", "key": "tx"},
+                    max_requests=20, progress=progress.append,
+                )
+
+            self.assertFalse(any("RetrieveTemplate" in url for url in calls))
+            self.assertFalse(result["closure"]["errors"])
+            evidence_lines = [line for line in progress if "available in main project evidence" in line]
+            self.assertTrue(any("2026-02-01T00:00:00" in line for line in evidence_lines))
+            self.assertFalse(any("2026-05-01T00:00:00" in line for line in evidence_lines))
+
+    def test_fetch_interrupt_writes_incomplete_closure_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp) / "spec" / "2026.1.2"
+            tx_dir = release_dir / "transactions" / "tx"
+
+            def fake_get(url: str, **_: object) -> bytes:
+                if "ProjectIndex" in url:
+                    return b"<return/>"
+                if "RetrieveTransaction" in url:
+                    return b'<dataset id="d"><concept id="c"><contains ref="old" datasetId="9.9.1" datasetEffectiveDate="2020-01-01" prefix="ext-"/></concept></dataset>'
+                if "RetrieveProject" in url:
+                    return b'<project><transaction id="t"/></project>'
+                if "RetrieveDataSet" in url:
+                    raise KeyboardInterrupt
+                raise AssertionError(url)
+
+            progress: list[str] = []
+            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+                with self.assertRaises(KeyboardInterrupt):
+                    fetch_spec(
+                        release_dir, tx_dir, prefix="aktin-",
+                        release=RELEASE, transaction={**TRANSACTION, "id": "t", "key": "tx"},
+                        max_requests=20, progress=progress.append,
+                    )
+
+            closure = load_json(tx_dir / "closure.json")
+            self.assertFalse(closure["complete"])
+            self.assertTrue(closure["interrupted"])
+            self.assertIn("build-interrupted", closure["phase"])
+            self.assertIn("dataset:9.9.1@2020-01-01", closure["pending"]["build"])
+            self.assertTrue((release_dir / "manifest.json").exists())
+            self.assertTrue(any("checkpoint saved" in line for line in progress))
+            with self.assertRaisesRegex(ValueError, "closure is incomplete"):
+                from decor2hl7.decor.fetch import closure_paths
+                closure_paths(release_dir, tx_dir)
 
     def test_recursive_request_budget_counts_actual_http_attempts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -388,7 +503,8 @@ class CoreTests(unittest.TestCase):
           <concept id="unrelated"><name>Unrelated</name><inherit ref="other" datasetId="9.2" datasetEffectiveDate="2020-01-01" prefix="ext-"/></concept>
         </project>''')
         refs = _evidence_references(root, {"relevant"})
-        self.assertEqual({item["id"] for item in refs if item["kind"] == "dataset"}, {"9.1"})
+        self.assertEqual({item["id"] for item in refs if item["kind"] == "concept"}, {"old"})
+        self.assertFalse(any(item["kind"] == "dataset" for item in refs))
 
     def test_fetch_want_adopts_valid_existing_file_without_manifest_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -461,6 +577,87 @@ class CoreTests(unittest.TestCase):
             with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
                 _fetch_want(release_dir, manifest, want, owners={}, repositories=["aktin-"], language="de-DE", ipv4=True, retry_missing=False)
             self.assertTrue(any("effectiveDate=2025-05-01" in url for url in calls))
+
+    def test_hard_and_soft_reference_scopes_are_distinct(self) -> None:
+        root = ET.fromstring('''<dataset id="current" templateId="doc">
+          <relationship type="VERSION" ref="old-dataset" flexibility="2020-01-01" prefix="aktin-"/>
+          <concept id="current-concept">
+            <relationship type="SPEC" ref="old-concept" flexibility="2020-01-01" prefix="aktin-" datasetId="old-dataset" datasetEffectiveDate="2020-01-01"/>
+            <contains ref="external-root" datasetId="external-dataset" datasetEffectiveDate="2023-01-01" prefix="ext-"/>
+          </concept>
+        </dataset>''')
+        hard = hard_references(root)
+        soft = soft_references(root)
+        self.assertEqual({row["id"] for row in hard if row["kind"] == "dataset"}, {"external-dataset"})
+        self.assertNotIn("old-dataset", {row["id"] for row in hard})
+        self.assertEqual({row["id"] for row in soft if row["kind"] == "concept"}, {"old-concept"})
+
+    def test_known_owner_stops_broad_repository_probe(self) -> None:
+        want = {"kind": "dataset", "id": "1.2.3.4", "effective_date": "2020-01-01", "prefix": "aktin-"}
+        self.assertEqual(
+            _candidate_prefixes(want, {"1.2.3": "aktin-"}, ["aktin-", "pmp-", "hl7de-"]),
+            ["aktin-"],
+        )
+        stale = {**want, "prefix": "old-"}
+        self.assertEqual(
+            _candidate_prefixes(stale, {"1.2.3": "aktin-"}, ["aktin-", "pmp-"]),
+            ["aktin-", "old-"],
+        )
+
+    def test_soft_evidence_resolution_is_non_recursive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp) / "spec" / "2026.1.2"
+            tx_dir = release_dir / "transactions" / "tx"
+            calls: list[str] = []
+
+            def fake_get(url: str, **_: object) -> bytes:
+                calls.append(url)
+                if "ProjectIndex" in url:
+                    return b'<return><project id="9" prefix="ext-"/></return>'
+                if "RetrieveTransaction" in url:
+                    return b'<dataset id="d" transactionId="t"><concept id="current"><inherit ref="9.1" effectiveDate="2020-01-01" prefix="ext-"/></concept></dataset>'
+                if "RetrieveProject" in url:
+                    return b'<project><transaction id="t"/></project>'
+                if "RetrieveConcept" in url and "conceptId=9.1" in url:
+                    return b'<return><concept id="9.1" effectiveDate="2020-01-01"><inherit ref="9.2" effectiveDate="2019-01-01" prefix="ext-"/></concept></return>'
+                if "RetrieveConcept" in url and "conceptId=9.2" in url:
+                    raise AssertionError("soft evidence must not recurse")
+                raise AssertionError(url)
+
+            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+                result = fetch_spec(
+                    release_dir, tx_dir, prefix="aktin-",
+                    release=RELEASE, transaction={**TRANSACTION, "id": "t", "key": "tx"},
+                    max_requests=20,
+                )
+            self.assertTrue(any("RetrieveConcept" in url and "conceptId=9.1" in url for url in calls))
+            self.assertFalse(any("conceptId=9.2" in url for url in calls))
+            self.assertIn("concept:9.1@2020-01-01", result["closure"]["evidence_resources"])
+
+    def test_settled_missing_is_persisted_and_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            manifest = {"resources": {}}
+            want = {"kind": "dataset", "id": "1.2.3.4", "effective_date": "2020-01-01", "prefix": "aktin-"}
+            persisted: list[dict[str, object]] = []
+            def save() -> None:
+                persisted.append(dict(manifest["resources"]["dataset:1.2.3.4@2020-01-01"]))
+            def missing(url: str, **_: object) -> bytes:
+                from urllib.error import HTTPError
+                raise HTTPError(url, 404, "missing", None, None)
+            with patch("decor2hl7.decor.fetch.get", side_effect=missing) as mocked:
+                self.assertIsNone(_fetch_want(
+                    release_dir, manifest, want, owners={"1.2.3": "aktin-"}, repositories=["aktin-", "pmp-"],
+                    language="de-DE", ipv4=True, retry_missing=False, save_manifest=save,
+                ))
+            self.assertEqual(mocked.call_count, 1)
+            self.assertTrue(persisted)
+            self.assertTrue(manifest["resources"]["dataset:1.2.3.4@2020-01-01"]["settled"])
+            with patch("decor2hl7.decor.fetch.get", side_effect=AssertionError("known missing must not retry")):
+                self.assertIsNone(_fetch_want(
+                    release_dir, manifest, want, owners={"1.2.3": "aktin-"}, repositories=["aktin-", "pmp-"],
+                    language="de-DE", ipv4=True, retry_missing=False,
+                ))
 
     def test_state_fingerprint_includes_repeating_instances(self) -> None:
         a = {"values": {}, "instances": {"med": [{"values": {"drug": "A", "route": None}}, {"values": {"drug": "B", "route": "oral"}}]}}

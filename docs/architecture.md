@@ -76,7 +76,7 @@ Artifact-producing commands own their directories:
 - `config` creates missing user scaffolds.
 - `transform` creates `out/<release>/<transaction>/...`.
 
-The CSV input root is external to the workspace. `check-input`, `transform`, and `run` accept `--input PATH`; otherwise they resolve the optional deployment default `aktin.json: input.directory`. `check` deliberately does not touch source CSVs. Relative source filenames in `site.json` are resolved below this input root.
+The CSV input root is external to the workspace. `propose-input`, `check-input`, `transform`, and `run` accept `--input PATH`; otherwise they resolve the optional deployment default `aktin.json: input.directory`. `build` and `check` deliberately do not touch source CSVs. Relative source filenames in `site.json` are resolved below this input root.
 
 Release-wide downloads are shared; transaction-specific products are isolated.
 
@@ -182,7 +182,7 @@ The producer owns the CSV directory; decor2hl7 never requires another program to
 
 `data.py` receives the resolved external root explicitly. Source definitions remain logical (`cases`, `medications`, ...) and `site.json` supplies relative filenames/cardinality/occurrence keys. The physical input path is excluded from transformation fingerprints, so moving an otherwise identical snapshot does not create a correction.
 
-`build` does not gain an input command-line option. It uses the optional configured default only to improve CSV/code proposals; model/CDA compilation does not depend on source CSV availability.
+`build` has no input argument and never inspects CSVs. CSV/code proposal generation is a separate explicit `propose-input` step. The proposal step may inspect column names and observed coded values, but it does not infer relationships between CSV sources; joins/cardinalities remain explicit configuration.
 
 ## State
 

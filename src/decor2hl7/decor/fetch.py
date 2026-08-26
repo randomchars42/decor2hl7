@@ -116,8 +116,15 @@ def _parse(path: Path) -> ET.Element | None:
         return None
 
 
-def references(root: ET.Element) -> list[Want]:
-    """Extract typed references from one ART-DECOR XML tree."""
+def _collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
+    """Extract either recursive build dependencies or direct evidence refs.
+
+    Build dependencies are resources required to materialize the selected data
+    model/CDA structure and may be recursively closed. Evidence references are
+    semantic lineage targets (SPEC/INHERIT/ADAPT/etc.) that may improve mapping;
+    they are resolved as the smallest directly referenced resource and are never
+    recursively expanded by the fetcher.
+    """
     found: dict[tuple[str, str, str, str], Want] = {}
 
     def add(kind: str, ident: str | None, effective: str | None = None,
@@ -138,42 +145,107 @@ def references(root: ET.Element) -> list[Want]:
     while stack:
         node, ancestors = stack.pop()
         tag = local(node.tag)
+        parent_tag = ancestors[-1] if ancestors else ""
         for child in node:
             stack.append((child, ancestors + (tag,)))
 
-        if tag == "include" and node.get("ref"):
-            in_valueset = any(item in {"valueSet", "conceptList", "questionnaire"} for item in ancestors[-4:])
-            add("valueset" if in_valueset else "template", node.get("ref"), node.get("flexibility"))
-            continue
-        if tag == "answerValueSet":
-            add("valueset", node.get("ref"), node.get("flexibility"))
-            continue
-        if tag in {"inherit", "relationship", "contains"}:
-            dataset = node.get("datasetId")
-            add("dataset", dataset, node.get("datasetEffectiveDate"), node.get("prefix"))
-            # Prefer the dataset when it is known; the concept remains useful as
-            # evidence but does not need its own HTTP call.
-            if not dataset:
-                add("concept", node.get("ref"), node.get("effectiveDate") or node.get("flexibility"), node.get("prefix"))
-            add("template", node.get("template"), node.get("flexibility"), node.get("prefix"))
-        elif tag == "element":
-            add("template", node.get("contains"), node.get("flexibility"))
-        elif tag == "representingTemplate":
-            add("template", node.get("ref"), node.get("flexibility"))
-            add("dataset", node.get("sourceDataset"), node.get("sourceDatasetFlexibility"))
-        elif tag == "valueSet":
-            if node.get("ref"):
+        if not soft:
+            if tag == "include" and node.get("ref"):
+                in_valueset = any(
+                    item in {"valueSet", "conceptList", "questionnaire"}
+                    for item in ancestors[-4:]
+                )
+                add(
+                    "valueset" if in_valueset else "template",
+                    node.get("ref"), node.get("flexibility"),
+                )
+                continue
+            if tag == "answerValueSet":
                 add("valueset", node.get("ref"), node.get("flexibility"))
-            elif node.get("id"):
-                add("valueset", node.get("id"), node.get("effectiveDate"))
-        elif tag == "vocabulary":
-            add("valueset", node.get("valueSet"), node.get("flexibility"))
-        elif tag == "templateAssociation":
-            add("template", node.get("templateId"), node.get("effectiveDate"))
-        if node.get("templateId") and tag in {"dataset", "transaction"}:
-            add("template", node.get("templateId"), node.get("templateEffectiveDate"))
+                continue
+            if tag == "contains":
+                dataset = node.get("datasetId")
+                if dataset:
+                    add(
+                        "dataset", dataset, node.get("datasetEffectiveDate"),
+                        node.get("prefix"),
+                    )
+                elif node.get("ref"):
+                    # A structural contains without dataset metadata still has
+                    # to materialize the referred concept itself.
+                    add(
+                        "concept", node.get("ref"),
+                        node.get("effectiveDate") or node.get("flexibility"),
+                        node.get("prefix"),
+                    )
+                continue
+            if tag == "relationship" and node.get("template"):
+                if (node.get("type") or "") in {"SPEC", "VERSION", "COPY"}:
+                    add(
+                        "template", node.get("template"),
+                        node.get("flexibility"), node.get("prefix"),
+                    )
+                continue
+            if tag == "element":
+                add("template", node.get("contains"), node.get("flexibility"))
+            elif tag == "representingTemplate":
+                add("template", node.get("ref"), node.get("flexibility"))
+                add(
+                    "dataset", node.get("sourceDataset"),
+                    node.get("sourceDatasetFlexibility"),
+                )
+            elif tag == "valueSet":
+                if node.get("ref"):
+                    add("valueset", node.get("ref"), node.get("flexibility"))
+                elif node.get("id"):
+                    add("valueset", node.get("id"), node.get("effectiveDate"))
+            elif tag == "vocabulary":
+                add("valueset", node.get("valueSet"), node.get("flexibility"))
+            if node.get("templateId") and tag in {"dataset", "transaction"}:
+                add("template", node.get("templateId"), node.get("templateEffectiveDate"))
+            continue
+
+        # Evidence mode: semantic lineage is useful, but its containing dataset
+        # is not a recursive dependency. Resolve the directly referenced concept
+        # (or non-structural template) only when it is not already available.
+        if tag == "inherit":
+            add(
+                "concept", node.get("ref"),
+                node.get("effectiveDate") or node.get("flexibility"),
+                node.get("prefix"), node.get("datasetId"),
+            )
+            add(
+                "concept", node.get("originalId"), node.get("originalEffectiveDate"),
+                node.get("originalPrefix"),
+            )
+        elif tag == "relationship":
+            if node.get("ref") and parent_tag == "concept":
+                add(
+                    "concept", node.get("ref"),
+                    node.get("effectiveDate") or node.get("flexibility"),
+                    node.get("prefix"), node.get("datasetId"),
+                )
+            if node.get("template") and (node.get("type") or "") not in {"SPEC", "VERSION", "COPY"}:
+                add(
+                    "template", node.get("template"),
+                    node.get("flexibility"), node.get("prefix"),
+                )
     return list(found.values())
 
+
+def hard_references(root: ET.Element) -> list[Want]:
+    """Resources that are recursively required to build the selected spec."""
+    return _collect_references(root, soft=False)
+
+
+def soft_references(root: ET.Element) -> list[Want]:
+    """Direct non-recursive semantic evidence references."""
+    return _collect_references(root, soft=True)
+
+
+def references(root: ET.Element) -> list[Want]:
+    """Backward-compatible name for recursive/build dependencies."""
+    return hard_references(root)
 
 
 
@@ -209,7 +281,20 @@ def _satisfied(want: Mapping[str, str], have: set[tuple[str, str, str]]) -> bool
         return (kind, ident, effective) in have
     return any(k == kind and i == ident for k, i, _ in have)
 
-def _matching_embedded(roots: Iterable[ET.Element | None], want: Mapping[str, str]) -> list[ET.Element]:
+def _matching_embedded(
+    roots: Iterable[ET.Element | None],
+    want: Mapping[str, str],
+    *,
+    not_after: str = "",
+) -> list[ET.Element]:
+    """Return the embedded resource revision that satisfies *want*.
+
+    ``not_after`` is used for the unpinned main-project snapshot: a live
+    project may contain draft template revisions newer than the selected
+    release, and those must never become part of a released build merely
+    because they are locally available.  For a dynamic reference the newest
+    eligible revision is returned.
+    """
     tag_for = {"dataset": "dataset", "concept": "concept", "template": "template", "valueset": "valueSet"}
     wanted_tag = tag_for.get(want.get("kind", ""))
     if not wanted_tag:
@@ -222,9 +307,12 @@ def _matching_embedded(roots: Iterable[ET.Element | None], want: Mapping[str, st
         for node in root.iter():
             if local(node.tag) != wanted_tag or node.get("id") != want.get("id"):
                 continue
-            if effective and (node.get("effectiveDate") or "") != effective:
+            node_effective = node.get("effectiveDate") or ""
+            if effective and node_effective != effective:
                 continue
-            if wanted_tag == "template" and not (node.get("name") or node.get("displayName") or node.get("effectiveDate")):
+            if not_after and node_effective and node_effective > not_after:
+                continue
+            if wanted_tag == "template" and not (node.get("name") or node.get("displayName") or node_effective):
                 continue
             rows.append(node)
     if effective or len(rows) <= 1:
@@ -259,7 +347,7 @@ def _evidence_references(root: ET.Element, relevant_ids: set[str]) -> list[Want]
             selected = (node.get("id") or "") in relevant_ids
         if not selected:
             continue
-        for want in references(node):
+        for want in soft_references(node):
             found[_key(want)] = want
     return list(found.values())
 
@@ -316,10 +404,25 @@ def _owner(identifier: str, directory: Mapping[str, str]) -> str:
 
 
 def _candidate_prefixes(want: Mapping[str, str], owners: Mapping[str, str], repositories: Iterable[str]) -> list[str]:
+    """Return repository candidates without probing the whole ecosystem blindly.
+
+    A ProjectIndex owner is authoritative enough to stop broad repository
+    probing. A differing declared prefix is retained as one historical fallback
+    because old references can contain stale project metadata. Only when owner
+    inference fails do building-block repositories become search candidates.
+    """
     owner = _owner(want["id"], owners)
+    declared = want.get("prefix") or ""
     result: list[str] = []
-    # ProjectIndex ownership beats stale prefixes embedded in historical refs.
-    for value in (owner, want.get("prefix") or "", *repositories):
+    if owner:
+        result.append(owner)
+        if declared and declared != owner:
+            result.append(declared)
+        return result
+
+    if declared:
+        result.append(declared)
+    for value in repositories:
         if value and value not in result:
             result.append(value)
     return result or [""]
@@ -449,6 +552,7 @@ def _fetch_want(
     retry_missing: bool,
     request_budget: dict[str, int] | None = None,
     progress: Progress | None = None,
+    save_manifest: Callable[[], None] | None = None,
 ) -> Path | None:
     key = _key(want)
     old = manifest.setdefault("resources", {}).get(key, {})
@@ -475,6 +579,8 @@ def _fetch_want(
             repaired = old.get("status") != "ok" or old.get("file") != relative
             suffix = " (manifest repaired)" if repaired else ""
             _emit(progress, f"fetch: {display}: cached{suffix}")
+            if repaired and save_manifest is not None:
+                save_manifest()
             return target
     if old.get("status") == "missing" and not retry_missing:
         _emit(progress, f"fetch: {display}: known missing")
@@ -530,16 +636,26 @@ def _fetch_want(
             }
             resolved_note = f", resolved {resolved_date}" if not want.get("effective_date") and resolved_date else ""
             _emit(progress, f"fetch: {display}: {stored_status} via {prefix or '?'} ({_size_text(len(payload))}{resolved_note})")
+            if save_manifest is not None:
+                save_manifest()
             return target
     settled = bool(attempts) and all(
         item.get("http_status") in FINAL_STATUS or item.get("error", "").startswith("<")
         for item in attempts
     )
     final_status = "missing" if settled else "error"
+    owner = _owner(want["id"], owners)
+    attempted_prefixes = list(dict.fromkeys(str(item.get("prefix") or "") for item in attempts))
     manifest["resources"][key] = {
         "status": final_status,
+        "settled": settled,
+        "owner": owner,
+        "declared_prefix": want.get("prefix") or "",
+        "attempted_prefixes": attempted_prefixes,
         "attempts": attempts,
     }
+    if save_manifest is not None:
+        save_manifest()
     _emit(progress, f"fetch: {display}: {final_status} after {len(attempts)} attempt(s)")
     return None
 
@@ -562,8 +678,10 @@ def verify_manifest(release_dir: Path) -> list[str]:
 
 
 def closure_paths(release_dir: Path, transaction_dir: Path, role: str = "build") -> list[Path]:
-    """Resolve resource paths recorded for a transaction closure."""
+    """Resolve resource paths recorded for a completed transaction closure."""
     closure = load_json(transaction_dir / "closure.json")
+    if closure.get("complete") is False or closure.get("interrupted") or closure.get("truncated"):
+        raise ValueError("transaction closure is incomplete; rerun `decor2hl7 fetch`")
     manifest = load_json(release_dir / "manifest.json")
     keys = closure.get(f"{role}_resources", [])
     result: list[Path] = []
@@ -589,10 +707,17 @@ def fetch_spec(
     max_requests: int = 1500,
     progress: Progress | None = None,
 ) -> dict[str, Any]:
-    """Fetch the selected transaction and recursively close its dependencies."""
+    """Fetch the selected transaction and recursively close its dependencies.
+
+    ``closure.json`` is a checkpoint, not merely an end-of-run report.  It is
+    written after the root resources, after each crawler batch, when the
+    request budget is exhausted, and when the user interrupts the command.
+    An incomplete closure is deliberately not accepted by ``build``.
+    """
     release_dir.mkdir(parents=True, exist_ok=True)
     transaction_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = release_dir / "manifest.json"
+    closure_path = transaction_dir / "closure.json"
     manifest = load_json(manifest_path) if manifest_path.exists() else {
         "format": 1,
         "release": dict(release),
@@ -606,108 +731,275 @@ def fetch_spec(
     tx_id = transaction.get("id") or ""
     tx_effective = transaction.get("effective_date") or ""
 
-    project_url = build_url(
-        "RetrieveProject", prefix=prefix, version=release_date,
-        language=language, mode="verbatim", format="xml"
-    )
-    pinned = _fetch_direct(
-        release_dir, manifest, key=f"project:{prefix}@{release_date}",
-        relative_file="project.xml", url=project_url, ipv4=ipv4,
-        retry_missing=retry_missing, progress=progress,
-        label=f"release project {release.get('key') or release_date or '?'}",
-    )
-    evidence_url = build_url(
-        "RetrieveProject", prefix=prefix, language=language,
-        mode="verbatim", format="xml"
-    )
-    evidence = _fetch_direct(
-        release_dir, manifest, key=f"project-evidence:{prefix}",
-        relative_file="project-evidence.xml", url=evidence_url, ipv4=ipv4,
-        retry_missing=retry_missing, progress=progress,
-        label=f"live evidence project {prefix}",
-    )
-    index_url = build_url("ProjectIndex", format="xml", language=language)
-    project_index = _fetch_direct(
-        release_dir, manifest, key="project-index", relative_file="project-index.xml",
-        url=index_url, ipv4=ipv4, retry_missing=retry_missing, progress=progress,
-        label="global project index",
-    )
-    tx_url = build_url(
-        "RetrieveTransaction", id=tx_id, effectiveDate=tx_effective or None,
-        prefix=prefix, version=release_date, language=language, format="xml"
-    )
-    tx_path = _fetch_direct(
-        release_dir, manifest,
-        key=f"transaction:{tx_id}@{tx_effective}",
-        relative_file=str((transaction_dir / "transaction.xml").relative_to(release_dir)),
-        url=tx_url, ipv4=ipv4, retry_missing=retry_missing, progress=progress,
-        label=f"transaction {transaction.get('key') or tx_id or '?'}",
-    )
-    root_errors: list[str] = []
-    if pinned is None:
-        root_errors.append("selected release project could not be fetched")
-    if tx_path is None:
-        root_errors.append("selected transaction could not be fetched")
-
-    build_roots = [_parse(path) for path in (pinned, tx_path) if path]
-    evidence_roots = [_parse(evidence)] if evidence else []
-    owners = _project_directory(_parse(project_index) if project_index else None)
-    repositories = _repositories(*(build_roots + evidence_roots), own=prefix)
-
-    build_queue: deque[Want] = deque()
-    tx_root = _parse(tx_path) if tx_path else None
-    if tx_root is not None:
-        build_queue.extend(references(tx_root))
-    # Some deployments expose representingTemplate metadata only on the
-    # transaction object inside RetrieveProject. Seed only that transaction,
-    # never the whole pinned project.
-    pinned_root = _parse(pinned) if pinned else None
-    if pinned_root is not None:
-        for node in pinned_root.iter():
-            if local(node.tag) == "transaction" and node.get("id") == tx_id:
-                build_queue.extend(references(node))
-
     roles: dict[str, set[str]] = {"build": set(), "evidence": set()}
     visited: dict[str, set[str]] = {"build": set(), "evidence": set()}
-    # Only count embedded resources as "already available" when the later
-    # compiler actually receives the container that holds them.  The selected
-    # transaction is a model input for every resource kind; the pinned project
-    # is a CDA/template input, but its datasets/value sets/concepts are not fed
-    # wholesale into model compilation (doing so would mix unrelated project
-    # history into the selected transaction).  Those non-template dependencies
-    # therefore still need their own targeted download.
-    build_have: set[tuple[str, str, str]] = set()
-    if tx_root is not None:
-        build_have.update(_inventory(tx_root))
-    if pinned_root is not None:
-        build_have.update(
-            item for item in _inventory(pinned_root) if item[0] == "template"
-        )
-    evidence_have = set(build_have)
-    for root in evidence_roots:
-        evidence_have.update(_inventory(root))
-    have_by_role = {"build": build_have, "evidence": evidence_have}
+    build_queue: deque[Want] = deque()
+    evidence_queue: deque[Want] = deque()
+    pending_batch: dict[str, list[Want]] = {"build": [], "evidence": []}
     request_budget = {"made": 0, "max": max(0, int(max_requests))}
     resources_considered = 0
     budget_exhausted = False
+    phase = "roots"
+    root_errors: list[str] = []
+    root_status = {
+        "project": "pending",
+        "transaction": "pending",
+        "project_evidence": "pending",
+        "project_index": "pending",
+    }
 
-    def crawl(queue: deque[Want], role: str, embedded_roots: list[ET.Element | None]) -> None:
-        nonlocal resources_considered, budget_exhausted
-        _emit(progress, f"fetch: resolving {role} dependency closure ({len(queue)} initial reference(s))")
-        while queue and not budget_exhausted:
+    pinned: Path | None = None
+    evidence: Path | None = None
+    project_index: Path | None = None
+    tx_path: Path | None = None
+
+    def pending_keys(role: str) -> list[str]:
+        wants = list(pending_batch[role]) + list(
+            build_queue if role == "build" else evidence_queue
+        )
+        seen: set[str] = set()
+        keys: list[str] = []
+        for want in wants:
+            key = _key(want)
+            if key not in seen and key not in visited[role]:
+                seen.add(key)
+                keys.append(key)
+        return sorted(keys)
+
+    def checkpoint(*, complete: bool, interrupted: bool = False) -> dict[str, Any]:
+        current_keys = roles["build"] | roles["evidence"]
+        current_errors = sorted(
+            key for key in current_keys
+            if manifest.get("resources", {}).get(key, {}).get("status") == "error"
+        )
+        current_missing = sorted(
+            key for key in current_keys
+            if manifest.get("resources", {}).get(key, {}).get("status") == "missing"
+        )
+        build_pending = pending_keys("build")
+        evidence_pending = pending_keys("evidence")
+        closure = {
+            "format": 1,
+            "release": dict(release),
+            "transaction": dict(transaction),
+            "complete": complete,
+            "interrupted": interrupted,
+            "phase": phase,
+            "build_resources": sorted(roles["build"]),
+            "evidence_resources": sorted(roles["evidence"] | roles["build"]),
+            "pending": {
+                "build": build_pending,
+                "evidence": evidence_pending,
+            },
+            "missing": current_missing,
+            "errors": current_errors + root_errors,
+            "root_status": dict(root_status),
+            "summary": {
+                "ok": sum(
+                    manifest.get("resources", {}).get(key, {}).get("status") == "ok"
+                    for key in current_keys
+                ) + int(root_status["project"] == "ok") + int(root_status["transaction"] == "ok"),
+                "missing": len(current_missing),
+                "error": len(current_errors) + len(root_errors),
+            },
+            "resources_considered": resources_considered,
+            "recursive_http_requests": request_budget["made"],
+            # Backwards-compatible meaning: the request budget stopped the
+            # crawler.  A user interruption is recorded separately.
+            "truncated": budget_exhausted,
+        }
+        manifest["summary"] = {
+            "resources": len(manifest.get("resources", {})),
+            "ok": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "ok"),
+            "missing": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "missing"),
+            "error": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "error"),
+        }
+        write_json(manifest_path, manifest)
+        write_json(closure_path, closure)
+        return closure
+
+    try:
+        project_url = build_url(
+            "RetrieveProject", prefix=prefix, version=release_date,
+            language=language, mode="verbatim", format="xml"
+        )
+        pinned = _fetch_direct(
+            release_dir, manifest, key=f"project:{prefix}@{release_date}",
+            relative_file="project.xml", url=project_url, ipv4=ipv4,
+            retry_missing=retry_missing, progress=progress,
+            label=f"release project {release.get('key') or release_date or '?'}",
+        )
+        root_status["project"] = "ok" if pinned is not None else "missing"
+
+        evidence_url = build_url(
+            "RetrieveProject", prefix=prefix, language=language,
+            mode="verbatim", format="xml"
+        )
+        evidence = _fetch_direct(
+            release_dir, manifest, key=f"project-evidence:{prefix}",
+            relative_file="project-evidence.xml", url=evidence_url, ipv4=ipv4,
+            retry_missing=retry_missing, progress=progress,
+            label=f"live evidence project {prefix}",
+        )
+        root_status["project_evidence"] = "ok" if evidence is not None else "missing"
+
+        index_url = build_url("ProjectIndex", format="xml", language=language)
+        project_index = _fetch_direct(
+            release_dir, manifest, key="project-index", relative_file="project-index.xml",
+            url=index_url, ipv4=ipv4, retry_missing=retry_missing, progress=progress,
+            label="global project index",
+        )
+        root_status["project_index"] = "ok" if project_index is not None else "missing"
+
+        tx_url = build_url(
+            "RetrieveTransaction", id=tx_id, effectiveDate=tx_effective or None,
+            prefix=prefix, version=release_date, language=language, format="xml"
+        )
+        tx_path = _fetch_direct(
+            release_dir, manifest,
+            key=f"transaction:{tx_id}@{tx_effective}",
+            relative_file=str((transaction_dir / "transaction.xml").relative_to(release_dir)),
+            url=tx_url, ipv4=ipv4, retry_missing=retry_missing, progress=progress,
+            label=f"transaction {transaction.get('key') or tx_id or '?'}",
+        )
+        root_status["transaction"] = "ok" if tx_path is not None else "missing"
+
+        if pinned is None:
+            root_errors.append("selected release project could not be fetched")
+        if tx_path is None:
+            root_errors.append("selected transaction could not be fetched")
+
+        build_roots = [_parse(path) for path in (pinned, tx_path) if path]
+        evidence_roots = [_parse(evidence)] if evidence else []
+        owners = _project_directory(_parse(project_index) if project_index else None)
+        repositories = _repositories(*(build_roots + evidence_roots), own=prefix)
+
+        tx_root = _parse(tx_path) if tx_path else None
+        if tx_root is not None:
+            build_queue.extend(hard_references(tx_root))
+            evidence_queue.extend(soft_references(tx_root))
+        # Some deployments expose representingTemplate metadata only on the
+        # transaction object inside RetrieveProject. Seed only that transaction,
+        # never the whole pinned project.
+        pinned_root = _parse(pinned) if pinned else None
+        if pinned_root is not None:
+            for node in pinned_root.iter():
+                if local(node.tag) == "transaction" and node.get("id") == tx_id:
+                    build_queue.extend(hard_references(node))
+                    evidence_queue.extend(soft_references(node))
+
+        # Only count embedded resources as "already available" when the later
+        # compiler actually receives the container that holds them.
+        build_have: set[tuple[str, str, str]] = set()
+        if tx_root is not None:
+            build_have.update(_inventory(tx_root))
+        if pinned_root is not None:
+            build_have.update(
+                item for item in _inventory(pinned_root) if item[0] == "template"
+            )
+        evidence_have = set(build_have)
+        for root in evidence_roots:
+            evidence_have.update(_inventory(root))
+        have_by_role = {"build": build_have, "evidence": evidence_have}
+
+        phase = "build"
+        checkpoint(complete=False)
+
+        def save_manifest() -> None:
+            write_json(manifest_path, manifest)
+
+        def crawl_build(queue: deque[Want], embedded_roots: list[ET.Element | None]) -> None:
+            nonlocal resources_considered, budget_exhausted, phase
+            phase = "build"
+            _emit(progress, f"fetch: resolving build dependency closure ({len(queue)} initial reference(s))")
+            while queue and not budget_exhausted:
+                rows = list(queue)
+                queue.clear()
+                rows.sort(key=lambda item: (KIND_ORDER.get(item["kind"], 9), item.get("prefix", ""), item["id"]))
+                pending_batch["build"] = list(rows)
+                for row_index, want in enumerate(rows):
+                    pending_batch["build"] = rows[row_index:]
+                    key = _key(want)
+                    if key in visited["build"]:
+                        continue
+                    embedded = _matching_embedded(embedded_roots, want)
+                    if _satisfied(want, have_by_role["build"]):
+                        visited["build"].add(key)
+                        for node in embedded:
+                            queue.extend(hard_references(node))
+                            evidence_queue.extend(soft_references(node))
+                        continue
+
+                    if want.get("kind") == "template" and evidence_roots:
+                        evidence_template = _matching_embedded(
+                            evidence_roots, want, not_after=release_date
+                        )
+                        if evidence_template:
+                            visited["build"].add(key)
+                            resolved = evidence_template[-1].get("effectiveDate") or ""
+                            suffix = f" @ {resolved}" if resolved else ""
+                            _emit(
+                                progress,
+                                f"fetch: {_resource_label(want)}: available in main project evidence{suffix}",
+                            )
+                            for node in evidence_template:
+                                queue.extend(hard_references(node))
+                                evidence_queue.extend(soft_references(node))
+                            continue
+
+                    resources_considered += 1
+                    try:
+                        path = _fetch_want(
+                            release_dir, manifest, want, owners=owners,
+                            repositories=repositories, language=language,
+                            ipv4=ipv4, retry_missing=retry_missing,
+                            request_budget=request_budget, progress=progress,
+                            save_manifest=save_manifest,
+                        )
+                    except RequestBudgetExceeded:
+                        for pending in reversed(rows[row_index:]):
+                            queue.appendleft(pending)
+                        pending_batch["build"] = []
+                        budget_exhausted = True
+                        checkpoint(complete=False)
+                        return
+                    visited["build"].add(key)
+                    roles["build"].add(key)
+                    if path is None:
+                        continue
+                    root = _parse(path)
+                    if root is not None:
+                        inventory = _inventory(root)
+                        have_by_role["build"].update(inventory)
+                        have_by_role["evidence"].update(inventory)
+                        queue.extend(hard_references(root))
+                        evidence_queue.extend(soft_references(root))
+                pending_batch["build"] = []
+                checkpoint(complete=False)
+
+        def resolve_evidence(queue: deque[Want], embedded_roots: list[ET.Element | None]) -> None:
+            """Resolve soft dependencies directly and deliberately stop there."""
+            nonlocal resources_considered, budget_exhausted, phase
+            phase = "evidence"
             rows = list(queue)
             queue.clear()
             rows.sort(key=lambda item: (KIND_ORDER.get(item["kind"], 9), item.get("prefix", ""), item["id"]))
+            _emit(progress, f"fetch: resolving direct evidence ({len(rows)} reference(s), non-recursive)")
+            pending_batch["evidence"] = list(rows)
             for row_index, want in enumerate(rows):
+                pending_batch["evidence"] = rows[row_index:]
                 key = _key(want)
-                if key in visited[role]:
+                if key in visited["evidence"] or key in visited["build"]:
                     continue
-                embedded = _matching_embedded(embedded_roots, want)
-                if _satisfied(want, have_by_role[role]):
-                    visited[role].add(key)
-                    for node in embedded:
-                        queue.extend(references(node))
+                if _satisfied(want, have_by_role["evidence"]):
+                    visited["evidence"].add(key)
                     continue
+                # The complete main-project evidence snapshot is already local;
+                # use an exact/direct embedded resource before making a request.
+                if _matching_embedded(embedded_roots, want):
+                    visited["evidence"].add(key)
+                    continue
+
                 resources_considered += 1
                 try:
                     path = _fetch_want(
@@ -715,90 +1007,55 @@ def fetch_spec(
                         repositories=repositories, language=language,
                         ipv4=ipv4, retry_missing=retry_missing,
                         request_budget=request_budget, progress=progress,
+                        save_manifest=save_manifest,
                     )
                 except RequestBudgetExceeded:
-                    # Preserve this resource and the remainder of the current
-                    # batch for a later fetch run.
                     for pending in reversed(rows[row_index:]):
                         queue.appendleft(pending)
+                    pending_batch["evidence"] = []
                     budget_exhausted = True
+                    checkpoint(complete=False)
                     return
-                visited[role].add(key)
-                roles[role].add(key)
-                if path is None:
-                    continue
-                root = _parse(path)
-                if root is not None:
-                    have_by_role[role].update(_inventory(root))
-                    queue.extend(references(root))
+                visited["evidence"].add(key)
+                roles["evidence"].add(key)
+                if path is not None:
+                    root = _parse(path)
+                    if root is not None:
+                        have_by_role["evidence"].update(_inventory(root))
+                # Crucially: no references(root) here. Soft evidence stops at the
+                # directly resolved resource and cannot turn into another crawl.
+            pending_batch["evidence"] = []
+            checkpoint(complete=False)
 
-    crawl(build_queue, "build", build_roots)
+        crawl_build(build_queue, build_roots)
 
-    # The unpinned project is fetched only for the selected/main project.  Its
-    # local history is consumed directly by mapping; recursive external evidence
-    # is restricted to concepts/templates already relevant to this transaction.
-    relevant_ids: set[str] = set()
-    if tx_root is not None:
-        relevant_ids.update(ident for _, ident, _ in _inventory(tx_root))
-    for key in visited["build"] | roles["build"]:
-        try:
-            relevant_ids.add(key.split(":", 1)[1].split("@", 1)[0])
-        except IndexError:
-            pass
-    evidence_queue: deque[Want] = deque()
-    for root in evidence_roots:
-        if root is not None:
-            evidence_queue.extend(_evidence_references(root, relevant_ids))
-    crawl(evidence_queue, "evidence", build_roots + evidence_roots)
+        relevant_ids: set[str] = set()
+        if tx_root is not None:
+            relevant_ids.update(ident for _, ident, _ in _inventory(tx_root))
+        for key in visited["build"] | roles["build"]:
+            try:
+                relevant_ids.add(key.split(":", 1)[1].split("@", 1)[0])
+            except IndexError:
+                pass
+        for root in evidence_roots:
+            if root is not None:
+                evidence_queue.extend(_evidence_references(root, relevant_ids))
+        resolve_evidence(evidence_queue, build_roots + evidence_roots)
 
-    current_keys = roles["build"] | roles["evidence"]
-    current_errors = sorted(
-        key for key in current_keys
-        if manifest.get("resources", {}).get(key, {}).get("status") == "error"
-    )
-    current_missing = sorted(
-        key for key in current_keys
-        if manifest.get("resources", {}).get(key, {}).get("status") == "missing"
-    )
-    closure = {
-        "format": 1,
-        "release": dict(release),
-        "transaction": dict(transaction),
-        "build_resources": sorted(roles["build"]),
-        "evidence_resources": sorted(roles["evidence"] | roles["build"]),
-        "missing": current_missing,
-        "errors": current_errors + root_errors,
-        "root_status": {
-            "project": "ok" if pinned is not None else "missing",
-            "transaction": "ok" if tx_path is not None else "missing",
-            "project_evidence": "ok" if evidence is not None else "missing",
-            "project_index": "ok" if project_index is not None else "missing",
-        },
-        "summary": {
-            "ok": sum(manifest.get("resources", {}).get(key, {}).get("status") == "ok" for key in current_keys)
-                  + int(pinned is not None) + int(tx_path is not None),
-            "missing": len(current_missing),
-            "error": len(current_errors) + len(root_errors),
-        },
-        "resources_considered": resources_considered,
-        "recursive_http_requests": request_budget["made"],
-        "truncated": budget_exhausted or bool(build_queue or evidence_queue),
-    }
-    write_json(transaction_dir / "closure.json", closure)
-
-    manifest["summary"] = {
-        "resources": len(manifest.get("resources", {})),
-        "ok": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "ok"),
-        "missing": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "missing"),
-        "error": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "error"),
-    }
-    write_json(manifest_path, manifest)
-    _emit(
-        progress,
-        "fetch: complete: "
-        f"{closure['summary']['ok']} ok/cached, "
-        f"{closure['summary']['missing']} missing, "
-        f"{closure['summary']['error']} error(s), "
-        f"{closure['recursive_http_requests']} recursive HTTP request(s)",
-    )
-    return {"manifest": manifest, "closure": closure}
+        phase = "complete"
+        complete = not budget_exhausted and not build_queue and not evidence_queue
+        closure = checkpoint(complete=complete)
+        _emit(
+            progress,
+            "fetch: complete: "
+            f"{closure['summary']['ok']} ok/cached, "
+            f"{closure['summary']['missing']} missing, "
+            f"{closure['summary']['error']} error(s), "
+            f"{closure['recursive_http_requests']} recursive HTTP request(s)",
+        )
+        return {"manifest": manifest, "closure": closure}
+    except KeyboardInterrupt:
+        phase = f"{phase}-interrupted"
+        checkpoint(complete=False, interrupted=True)
+        _emit(progress, "fetch: interrupted by user; checkpoint saved")
+        raise
