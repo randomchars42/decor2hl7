@@ -1,0 +1,660 @@
+"""One CLI for selection, acquisition, compilation and transformation."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+from . import __version__
+from .workspace import (
+    copy_if_missing,
+    init_workspace,
+    load_json,
+    load_settings,
+    raw_dir,
+    release_config_dir,
+    release_spec_dir,
+    selected_release,
+    selected_transaction,
+    set_release,
+    set_transaction,
+    state_dir,
+    transaction_config_dir,
+    transaction_model_dir,
+    transaction_out_dir,
+    transaction_spec_dir,
+    write_json,
+)
+
+
+def _say(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+def _root(args: argparse.Namespace) -> Path:
+    return Path(args.root).resolve()
+
+
+def _require(path: Path, hint: str = "") -> Path:
+    if path.exists():
+        return path
+    message = f"missing {path}"
+    if hint:
+        message += f"\n  {hint}"
+    raise ValueError(message)
+
+
+def _safe_key(value: str) -> str:
+    base = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "record"
+    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
+    return f"{base}--{digest}"
+
+
+def _network(root: Path, ipv6_override: bool = False) -> tuple[str, str, bool]:
+    settings = load_settings(root)
+    prefix = str(settings.get("prefix") or "aktin-")
+    language = str(settings.get("language") or "de-DE")
+    configured = bool((settings.get("network") or {}).get("ipv4", True))
+    return prefix, language, False if ipv6_override else configured
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    path = init_workspace(_root(args), args.prefix, args.language)
+    _say(f"workspace initialized: {path}")
+    return 0
+
+
+def _filter(rows: list[dict[str, str]], needle: str | None) -> list[dict[str, str]]:
+    if not needle:
+        return rows
+    value = needle.casefold()
+    return [row for row in rows if any(value in str(item).casefold() for item in row.values())]
+
+
+def _print_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
+    """Print a compact terminal table with visibly separated columns."""
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, value in enumerate(row):
+            widths[index] = max(widths[index], len(value))
+    print("  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)))
+    for row in rows:
+        print("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
+
+
+def cmd_list_versions(args: argparse.Namespace) -> int:
+    from .decor.catalog import releases
+
+    root = _root(args)
+    prefix, _, ipv4 = _network(root, args.ipv6)
+    rows = _filter(releases(prefix, ipv4=ipv4), args.filter)
+    selected = load_settings(root).get("release") or {}
+    table = [
+        (row["key"], "*" if row["key"] == selected.get("key") else "",
+         row["label"], row["date"], row["status"])
+        for row in rows
+    ]
+    _print_table(("KEY", "SELECTED", "LABEL", "RELEASE_DATE", "STATUS"), table)
+    if rows:
+        _say("select with: decor2hl7 set-version <KEY>")
+    return 0 if rows else 1
+
+
+def cmd_set_version(args: argparse.Namespace) -> int:
+    from .decor.catalog import releases, select_release
+
+    root = _root(args)
+    prefix, _, ipv4 = _network(root, args.ipv6)
+    row = select_release(releases(prefix, ipv4=ipv4), args.identifier)
+    set_release(root, row)
+    _say(f"selected release: {row['key']} ({row['date']})")
+    _say("transaction selection cleared; run `decor2hl7 list-transactions`")
+    return 0
+
+
+def _transaction_rows(root: Path, ipv6: bool = False) -> list[dict[str, str]]:
+    from .decor.catalog import transactions
+
+    release = selected_release(root)
+    prefix, language, ipv4 = _network(root, ipv6)
+    return transactions(prefix, str(release["date"]), language=language, ipv4=ipv4)
+
+
+def cmd_list_transactions(args: argparse.Namespace) -> int:
+    root = _root(args)
+    rows = _filter(_transaction_rows(root, args.ipv6), args.filter)
+    selected = load_settings(root).get("transaction") or {}
+    table = [
+        (row["key"], "*" if row["key"] == selected.get("key") else "",
+         row["version_label"], row["effective_date"], row["status"], row["name"], row["id"])
+        for row in rows
+    ]
+    _print_table(("KEY", "SELECTED", "VERSION", "EFFECTIVE_DATE", "STATUS", "NAME", "OID"), table)
+    if rows:
+        _say("select with: decor2hl7 set-transaction <KEY>")
+    return 0 if rows else 1
+
+
+def cmd_set_transaction(args: argparse.Namespace) -> int:
+    from .decor.catalog import select_transaction
+
+    root = _root(args)
+    row = select_transaction(_transaction_rows(root, args.ipv6), args.identifier)
+    set_transaction(root, row)
+    _say(
+        f"selected transaction: {row['key']} "
+        f"({row['id']} @ {row['effective_date'] or 'dynamic'})"
+    )
+    return 0
+
+
+def cmd_fetch(args: argparse.Namespace) -> int:
+    from .decor.fetch import fetch_spec
+
+    root = _root(args)
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    prefix, language, ipv4 = _network(root, args.ipv6)
+    result = fetch_spec(
+        release_spec_dir(root, release),
+        transaction_spec_dir(root, release, transaction),
+        prefix=prefix,
+        release=release,
+        transaction=transaction,
+        language=language,
+        ipv4=ipv4,
+        retry_missing=args.retry_missing,
+        max_requests=args.max_requests,
+    )
+    closure = result["closure"]
+    summary = closure.get("summary", {})
+    _say(
+        f"selected transaction fetch: {summary.get('ok', 0)} cached/ok, "
+        f"{summary.get('missing', 0)} missing, {summary.get('error', 0)} errors"
+    )
+    _say(
+        f"transaction closure: {len(closure.get('build_resources', []))} build resources, "
+        f"{len(closure.get('evidence_resources', []))} evidence resources"
+    )
+    if closure.get("truncated"):
+        _say("warning: closure stopped at --max-requests; increase the limit and rerun fetch")
+    if closure.get("errors"):
+        for error in closure.get("errors", []):
+            _say(f"error: {error}")
+    return 0 if not closure.get("errors") and not closure.get("truncated") else 2
+
+
+def _build_inputs(root: Path) -> tuple[Path, list[Path], list[Path], list[Path], list[Path]]:
+    from .decor.fetch import closure_paths
+
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    release_dir = release_spec_dir(root, release)
+    tx_dir = transaction_spec_dir(root, release, transaction)
+    transaction_xml = _require(tx_dir / "transaction.xml", "run `decor2hl7 fetch` first")
+    project = _require(release_dir / "project.xml", "run `decor2hl7 fetch` first")
+    build_resources = closure_paths(release_dir, tx_dir, "build")
+    evidence_resources = closure_paths(release_dir, tx_dir, "evidence")
+    model_resources = [
+        path for path in build_resources
+        if path.parent.name in {"datasets", "valuesets", "concepts"}
+    ]
+    templates = [project] + [path for path in build_resources if path.parent.name == "templates"]
+    evidence = release_dir / "project-evidence.xml"
+    fallback_templates = [path for path in evidence_resources if path.parent.name == "templates"]
+    if evidence.exists():
+        fallback_templates.insert(0, evidence)
+    mapping = [transaction_xml, project]
+    if evidence.exists():
+        mapping.append(evidence)
+    mapping.extend(evidence_resources)
+    return (
+        transaction_xml, model_resources, templates,
+        list(dict.fromkeys(fallback_templates)),
+        list(dict.fromkeys(mapping)),
+    )
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    from .build.mapping import write_mappings
+    from .build.model import write_model
+    from .build.target import write_cda
+
+    root = _root(args)
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    transaction_xml, model_resources, templates, fallback_templates, mapping_xml = _build_inputs(root)
+    model_dir = transaction_model_dir(root, release, transaction)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model = write_model(transaction_xml, model_resources, model_dir, terminology_paths=[templates[0]])
+    cda = write_cda(
+        templates, model_dir, model, fallback_templates,
+        cutoff=str(release.get("date") or "") or None,
+    )
+    settings = load_settings(root)
+    mappings = write_mappings(
+        mapping_xml,
+        model_dir,
+        raw_dir(root),
+        model,
+        cda,
+        join_column=args.join_column or str(settings.get("join_column") or "patient_id"),
+    )
+    _say(f"model: {len(model['fields'])} datapoints, {len(model['groups'])} groups")
+    _say(
+        f"CDA: {cda['stats']['reachable_templates']} reachable templates, "
+        f"{cda['stats']['targets']} named targets"
+    )
+    _say(f"CDA mapped proposal: {sum(value is not None for value in mappings['cda']['fields'].values())}/{len(model['fields'])}")
+    return 0
+
+
+def _site_scaffold(root: Path, release: Mapping[str, Any], transaction: Mapping[str, Any]) -> dict[str, Any]:
+    sources: dict[str, Any] = {}
+    for path in sorted(raw_dir(root).glob("*.csv")):
+        sources[path.stem] = {"file": path.name, "cardinality": "1:1"}
+    return {
+        "version": 1,
+        "release": release.get("key"),
+        "timezone": "Europe/Berlin",
+        "organization": {"name": None, "oid": None},
+        "identifiers": {"document_root": None, "patient_root": None, "encounter_root": None, "roots": {}},
+        "null_flavor": {"missing_required": "NI", "unmapped_code": "OTH"},
+        "input": {
+            "join_column": "patient_id",
+            "case_source": None,
+            "encoding": "utf-8-sig",
+            "delimiter": None,
+            "decimal_separator": ".",
+            "empty_is_null": True,
+            "null_values": ["NULL", "NA", "N/A"],
+            "sources": sources,
+            "source_note": (
+                "For 1:n sources set cardinality to 1:n. Optional primary: "
+                "{column, true_values, false_value} moves one flagged row first "
+                "and demotes duplicate flags."
+            ),
+        },
+        "cda": {
+            "values": {},
+            "note": (
+                "Optional site/static values keyed by names from the generated cda.json; "
+                "strings may use {key} and {document_version}."
+            ),
+        },
+        "state": {"rotate_days": 90},
+        "transport": {"url": None, "timeout": 60, "headers": {}},
+    }
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    root = _root(args)
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    model_dir = transaction_model_dir(root, release, transaction)
+    config_dir = transaction_config_dir(root, release, transaction)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("csv-mapping", "codes-mapping", "cda-mapping"):
+        source = _require(model_dir / f"{name}.proposed.json", "run `decor2hl7 build` first")
+        destination = config_dir / f"{name}.json"
+        _say(("created " if copy_if_missing(source, destination) else "kept    ") + str(destination))
+
+    site_dir = release_config_dir(root, release)
+    site = site_dir / "site.json"
+    if not site.exists():
+        write_json(site, _site_scaffold(root, release, transaction))
+        _say(f"created {site}")
+    else:
+        _say(f"kept    {site}")
+    return 0
+
+
+def _runtime_files(root: Path) -> tuple[
+    dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]
+]:
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    model_dir = transaction_model_dir(root, release, transaction)
+    config_dir = transaction_config_dir(root, release, transaction)
+    site_dir = release_config_dir(root, release)
+    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build`"))
+    cda = load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`"))
+    csv_mapping = load_json(_require(config_dir / "csv-mapping.json", "run `decor2hl7 config`"))
+    codes_mapping = load_json(_require(config_dir / "codes-mapping.json", "run `decor2hl7 config`"))
+    cda_mapping = load_json(_require(config_dir / "cda-mapping.json", "run `decor2hl7 config`"))
+    site = load_json(_require(site_dir / "site.json", "run `decor2hl7 config`"))
+    return model, cda, csv_mapping, codes_mapping, cda_mapping, site
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    from . import validate
+    from .decor.fetch import verify_manifest
+
+    root = _root(args)
+    release = selected_release(root)
+    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(root)
+    errors = verify_manifest(release_spec_dir(root, release))
+    errors.extend(validate.verify_compiled_cda(cda))
+    errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
+    try:
+        _, _, templates, fallback_templates, _ = _build_inputs(root)
+        errors.extend(validate.verify_compiled_against_artdecor(cda, templates + fallback_templates))
+    except ValueError as error:
+        errors.append(str(error))
+    print(f"model datapoints: {len(model.get('fields', {}))}")
+    print(f"CSV mapped: {sum(value is not None for value in csv_mapping.get('fields', {}).values())}")
+    print(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
+    print(f"CDA unresolved templates: {len(cda.get('unresolved_templates', []))}")
+    if errors:
+        print("configuration errors:")
+        for error in errors:
+            print(f"  - {error}")
+        return 1
+    print("configuration: OK")
+    return 0
+
+
+def _state_key(transaction: Mapping[str, Any], record_key: str) -> str:
+    # Transaction identity, not release identity: a later release of the same
+    # transaction should still detect unchanged/corrected source records.
+    return f"{transaction['id']}::{record_key}"
+
+
+def _prune_stale_pending(out_dir: Path, state_key: str, fingerprint: str) -> int:
+    """Remove pending artifacts for an older source state of the same record."""
+    removed = 0
+    if not out_dir.exists():
+        return removed
+    for sidecar in out_dir.glob("*.json"):
+        try:
+            info = load_json(sidecar)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if str(info.get("state_key") or "") != state_key:
+            continue
+        if str(info.get("fingerprint") or "") == fingerprint:
+            continue
+        xml = sidecar.with_suffix(".xml")
+        if xml.exists():
+            xml.unlink()
+        sidecar.unlink()
+        removed += 1
+    return removed
+
+
+def _prune_absent_pending(out_dir: Path, current_keys: set[str], state_path: Path) -> int:
+    """Remove unsent artifacts whose source record is no longer present."""
+    from . import state
+
+    removed = 0
+    if not out_dir.exists():
+        return removed
+    for sidecar in out_dir.glob("*.json"):
+        try:
+            info = load_json(sidecar)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        stream_key = str(info.get("state_key") or "")
+        if not stream_key or stream_key in current_keys:
+            continue
+        disposition, _ = state.classify(state_path, stream_key, str(info.get("fingerprint") or ""))
+        if disposition == "UNCHANGED":
+            continue  # already sent; keep the generated document as an audit artifact
+        xml = sidecar.with_suffix(".xml")
+        if xml.exists():
+            xml.unlink()
+        sidecar.unlink()
+        removed += 1
+    return removed
+
+
+def _json_digest(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _transformation_context(
+    release: Mapping[str, Any], transaction: Mapping[str, Any], model: Mapping[str, Any],
+    cda: Mapping[str, Any], cda_mapping: Mapping[str, Any], site: Mapping[str, Any],
+) -> dict[str, Any]:
+    relevant_site = {
+        "identifiers": site.get("identifiers", {}),
+        "null_flavor": site.get("null_flavor", {}),
+        "cda": site.get("cda", {}),
+    }
+    return {
+        "decor2hl7": __version__,
+        "release": {"key": release.get("key"), "date": release.get("date")},
+        "transaction": {"id": transaction.get("id"), "effective_date": transaction.get("effective_date")},
+        "model": _json_digest(model), "cda": _json_digest(cda),
+        "cda_mapping": _json_digest(cda_mapping), "site": _json_digest(relevant_site),
+    }
+
+
+def _transform(root: Path) -> tuple[list[Path], dict[str, int]]:
+    from . import cda as cda_runtime
+    from . import data, state, validate
+
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(root)
+    config_errors = validate.verify_compiled_cda(cda)
+    config_errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
+    if config_errors:
+        raise ValueError("configuration is invalid:\n" + "\n".join("  " + item for item in config_errors))
+    records = data.ingest(raw_dir(root), model, csv_mapping, codes_mapping, site)
+    validation = validate.validate_records(records, model)
+    out_dir = transaction_out_dir(root, release, transaction)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    emitted: list[Path] = []
+    skipped_unchanged = skipped_invalid = 0
+    state_path = state_dir(root)
+    current_keys = {_state_key(transaction, str(record["key"])) for record in records}
+    _prune_absent_pending(out_dir, current_keys, state_path)
+    transformation_context = _transformation_context(release, transaction, model, cda, cda_mapping, site)
+    for record in records:
+        raw_key = str(record["key"])
+        stream_key = _state_key(transaction, raw_key)
+        digest = state.fingerprint(record, transformation_context)
+        # Invalidate an older pending representation even when the current
+        # record is invalid and therefore cannot be emitted.
+        _prune_stale_pending(out_dir, stream_key, digest)
+        if any(problem.get("severity") == "error" for problem in record.get("problems", [])):
+            skipped_invalid += 1
+            continue
+        disposition, document_version = state.classify(state_path, stream_key, digest)
+        if disposition == "UNCHANGED":
+            skipped_unchanged += 1
+            continue
+        payload, render_problems = cda_runtime.emit(
+            record, model, cda, cda_mapping, site, document_version=document_version
+        )
+        stem = f"{_safe_key(raw_key)}-v{document_version}"
+        xml_path = out_dir / f"{stem}.xml"
+        xml_path.write_bytes(payload)
+        write_json(out_dir / f"{stem}.json", {
+            "key": raw_key,
+            "state_key": stream_key,
+            "fingerprint": digest,
+            "document_version": document_version,
+            "release": release.get("key"),
+            "transaction": transaction,
+            "source_status": disposition,
+            "validation": record.get("problems", []),
+            "render_warnings": render_problems,
+        })
+        emitted.append(xml_path)
+    return emitted, {
+        **validation,
+        "emitted": len(emitted),
+        "unchanged": skipped_unchanged,
+        "invalid": skipped_invalid,
+    }
+
+
+def cmd_transform(args: argparse.Namespace) -> int:
+    emitted, summary = _transform(_root(args))
+    print(json.dumps(summary, ensure_ascii=False))
+    for path in emitted:
+        print(path)
+    return 0 if summary["invalid"] == 0 else 2
+
+
+def _send_paths(root: Path, paths: list[Path] | None = None) -> tuple[int, int]:
+    from . import state, transport
+
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    site = load_json(_require(release_config_dir(root, release) / "site.json"))
+    out_dir = transaction_out_dir(root, release, transaction)
+    candidates = paths or sorted(out_dir.glob("*.xml"))
+    sent = failed = 0
+    for path in candidates:
+        sidecar_path = path.with_suffix(".json")
+        if not sidecar_path.exists():
+            _say(f"skip {path.name}: no sidecar")
+            continue
+        info = load_json(sidecar_path)
+        stream_key = str(info.get("state_key") or _state_key(transaction, str(info["key"])))
+        disposition, _ = state.classify(state_dir(root), stream_key, str(info["fingerprint"]))
+        if disposition == "UNCHANGED":
+            continue
+        ok, message = transport.send(path, site)
+        if not ok:
+            _say(f"send failed {path.name}: {message}")
+            failed += 1
+            continue
+        state.record_sent(
+            state_dir(root), key=stream_key, digest=str(info["fingerprint"]),
+            document_version=int(info["document_version"]), file=str(path),
+            spec_version=str(release["key"]),
+        )
+        _say(f"sent {path.name}: {message}")
+        sent += 1
+    state.rotate(state_dir(root), int(site.get("state", {}).get("rotate_days") or 0))
+    return sent, failed
+
+
+def cmd_send(args: argparse.Namespace) -> int:
+    sent, failed = _send_paths(_root(args), [Path(value) for value in args.files] if args.files else None)
+    print(json.dumps({"sent": sent, "failed": failed}))
+    return 0 if failed == 0 else 2
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    root = _root(args)
+    emitted, summary = _transform(root)
+    print(json.dumps(summary, ensure_ascii=False))
+    if args.send:
+        sent, failed = _send_paths(root, emitted)
+        print(json.dumps({"sent": sent, "failed": failed}))
+        return 0 if failed == 0 and summary["invalid"] == 0 else 2
+    _say("documents were emitted but not sent; pass --send to transmit them")
+    return 0 if summary["invalid"] == 0 else 2
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    from . import state
+
+    root = _root(args)
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    current = state.load_state(state_dir(root))
+    out_dir = transaction_out_dir(root, release, transaction)
+    pending = 0
+    for sidecar_path in out_dir.glob("*.json") if out_dir.exists() else []:
+        info = load_json(sidecar_path)
+        stream_key = str(info.get("state_key") or _state_key(transaction, str(info.get("key"))))
+        disposition, _ = state.classify(state_dir(root), stream_key, str(info.get("fingerprint")))
+        pending += disposition != "UNCHANGED"
+    print(json.dumps({
+        "sent_documents": len(current.get("documents", {})),
+        "pending_documents": pending,
+        "release": release.get("key"),
+        "transaction": transaction.get("key"),
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _add_network_override(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--ipv6", action="store_true",
+        help="diagnostic override; ART-DECOR uses IPv4 by default",
+    )
+
+
+def parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="decor2hl7")
+    p.add_argument("--version", action="version", version=__version__)
+    p.add_argument("--root", default=".", help="workspace root (default: current directory)")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    q = sub.add_parser("init", help="create the workspace skeleton")
+    q.add_argument("--prefix", default="aktin-")
+    q.add_argument("--language", default="de-DE")
+    q.set_defaults(func=cmd_init)
+
+    q = sub.add_parser("list-versions", help="list ART-DECOR project release keys")
+    q.add_argument("filter", nargs="?", help="optional text filter")
+    _add_network_override(q)
+    q.set_defaults(func=cmd_list_versions)
+
+    q = sub.add_parser("set-version", help="select an ART-DECOR release by KEY from `list-versions`")
+    q.add_argument("identifier")
+    _add_network_override(q)
+    q.set_defaults(func=cmd_set_version)
+
+    q = sub.add_parser("list-transactions", help="list transaction keys for the selected release")
+    q.add_argument("filter", nargs="?", help="optional text filter")
+    _add_network_override(q)
+    q.set_defaults(func=cmd_list_transactions)
+
+    q = sub.add_parser("set-transaction", help="select a transaction by KEY from `list-transactions`")
+    q.add_argument("identifier")
+    _add_network_override(q)
+    q.set_defaults(func=cmd_set_transaction)
+
+    q = sub.add_parser("fetch", help="fetch the selected transaction specification to closure")
+    q.add_argument("--retry-missing", action="store_true")
+    q.add_argument("--max-requests", type=int, default=1500)
+    _add_network_override(q)
+    q.set_defaults(func=cmd_fetch)
+
+    q = sub.add_parser("build", help="compile models and generate mapping proposals")
+    q.add_argument("--join-column")
+    q.set_defaults(func=cmd_build)
+
+    q = sub.add_parser("config", help="seed human-editable configuration without overwriting it")
+    q.set_defaults(func=cmd_config)
+
+    q = sub.add_parser("check", help="check downloads and configuration")
+    q.set_defaults(func=cmd_check)
+
+    q = sub.add_parser("transform", help="read, normalize, validate and emit changed documents")
+    q.set_defaults(func=cmd_transform)
+
+    q = sub.add_parser("send", help="send emitted documents not already recorded as sent")
+    q.add_argument("files", nargs="*")
+    q.set_defaults(func=cmd_send)
+
+    q = sub.add_parser("run", help="perform the runtime pipeline")
+    q.add_argument("--send", action="store_true")
+    q.set_defaults(func=cmd_run)
+
+    q = sub.add_parser("status", help="show sent/pending document state")
+    q.set_defaults(func=cmd_status)
+    return p
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        return int(args.func(args))
+    except (OSError, ValueError) as error:
+        _say(f"error: {error}")
+        return 2

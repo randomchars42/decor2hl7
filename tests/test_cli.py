@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from decor2hl7.cli import _prune_absent_pending, _prune_stale_pending, main
+from decor2hl7.workspace import load_json, set_release, set_transaction, transaction_model_dir, write_json
+
+RELEASES = [{"key": "2026.1.2", "label": "2026.1.2", "date": "2026-04-27T18:50:33", "status": "final"}]
+TRANSACTIONS = [{
+    "key": "notaufnahmeregister--60", "id": "2.16.840.1.113883.2.6.60.3.4.60",
+    "effective_date": "2026-03-25T00:00:00", "version_label": "2026",
+    "status": "active", "name": "Notaufnahmeregister Transitionsversion",
+}]
+
+
+class CliTests(unittest.TestCase):
+    def test_symmetric_release_and_transaction_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            with patch("decor2hl7.decor.catalog.releases", return_value=RELEASES):
+                self.assertEqual(main(["--root", str(root), "version", "set", "2026.1.2"]), 0)
+            settings = load_json(root / "aktin.json")
+            self.assertEqual(settings["release"]["key"], "2026.1.2")
+            self.assertIsNone(settings["transaction"])
+            with patch("decor2hl7.decor.catalog.transactions", return_value=TRANSACTIONS):
+                self.assertEqual(main(["--root", str(root), "transaction", "set", "notaufnahmeregister--60"]), 0)
+            settings = load_json(root / "aktin.json")
+            self.assertEqual(settings["transaction"]["key"], "notaufnahmeregister--60")
+            # Set commands still have no artifact-directory side effects.
+            self.assertFalse((root / "spec" / "2026.1.2").exists())
+
+    def test_config_never_overwrites_user_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            set_release(root, RELEASES[0])
+            set_transaction(root, TRANSACTIONS[0])
+            model = transaction_model_dir(root)
+            model.mkdir(parents=True)
+            (model / "csv-mapping.proposed.json").write_text('{"fields":{"a":"cases:a"}}')
+            (model / "codes-mapping.proposed.json").write_text('{"fields":{}}')
+            (model / "cda-mapping.proposed.json").write_text('{"fields":{"a":"Doc.value"}}')
+            self.assertEqual(main(["--root", str(root), "config"]), 0)
+            config = root / "config" / "2026.1.2" / "notaufnahmeregister--60" / "csv-mapping.json"
+            config.write_text('{"user":true}')
+            self.assertEqual(main(["--root", str(root), "config"]), 0)
+            self.assertEqual(load_json(config), {"user": True})
+            self.assertTrue((root / "config" / "2026.1.2" / "site.json").exists())
+
+    def test_stale_pending_output_is_pruned_when_source_changes_or_reverts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            xml = out / "case-v2.xml"
+            sidecar = out / "case-v2.json"
+            xml.write_text("<old/>", encoding="utf-8")
+            write_json(sidecar, {"state_key": "tx::case", "fingerprint": "old"})
+            removed = _prune_stale_pending(out, "tx::case", "current")
+            self.assertEqual(removed, 1)
+            self.assertFalse(xml.exists())
+            self.assertFalse(sidecar.exists())
+
+
+    def test_absent_pending_output_is_pruned_but_sent_artifact_is_kept(self) -> None:
+        from decor2hl7 import state
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out = root / "out"
+            state_path = root / "state"
+            out.mkdir()
+            (out / "pending.xml").write_text("<pending/>", encoding="utf-8")
+            write_json(out / "pending.json", {"state_key": "tx::gone", "fingerprint": "new"})
+            (out / "sent.xml").write_text("<sent/>", encoding="utf-8")
+            write_json(out / "sent.json", {"state_key": "tx::sent", "fingerprint": "same"})
+            state.record_sent(state_path, key="tx::sent", digest="same", document_version=1, file="sent.xml", spec_version="v")
+            removed = _prune_absent_pending(out, set(), state_path)
+            self.assertEqual(removed, 1)
+            self.assertFalse((out / "pending.xml").exists())
+            self.assertTrue((out / "sent.xml").exists())
+
+
+
+if __name__ == "__main__":
+    unittest.main()
