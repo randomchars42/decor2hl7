@@ -120,8 +120,14 @@ class CoreTests(unittest.TestCase):
             target = compile_cda([project], model)
             self.assertIn("ExampleDocument.value", target["targets"])
             proposal, report = cda_mapping_proposal(model, target, [project])
+            _, _, details = mapping.cda_mapping_reports(model, target, [project])
             self.assertEqual(proposal["fields"]["foo"], "ExampleDocument.value")
             self.assertIn("TA", report)
+            self.assertIn("Reason", report)
+            self.assertIn("Candidates", report)
+            self.assertNotIn("Evidence chain", report)
+            self.assertIn("Evidence chain", details)
+            self.assertIn("Dataset concept: `c`", details)
 
     def test_code_normalization_and_unmapped_code(self) -> None:
         field = {"type": "code", "values": {"rot": {"code": "R", "code_system": "1.2.3", "display_name": "rot"}}}
@@ -634,6 +640,27 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(any("conceptId=9.2" in url for url in calls))
             self.assertIn("concept:9.1@2020-01-01", result["closure"]["evidence_resources"])
 
+
+    def test_fetch_progress_does_not_claim_nonexistent_next_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            manifest = {"resources": {}}
+            want = {"kind": "concept", "id": "1.2.3.4", "effective_date": "2020-01-01", "prefix": "pmp-"}
+            progress: list[str] = []
+
+            def missing(url: str, **_: object) -> bytes:
+                from urllib.error import HTTPError
+                raise HTTPError(url, 404, "missing", None, None)
+
+            with patch("decor2hl7.decor.fetch.get", side_effect=missing):
+                self.assertIsNone(_fetch_want(
+                    release_dir, manifest, want, owners={"1.2.3": "pmp-"}, repositories=["pmp-", "hl7de-"],
+                    language="de-DE", ipv4=True, retry_missing=False, progress=progress.append,
+                ))
+            failure = next(line for line in progress if "HTTP 404" in line)
+            self.assertEqual(failure, "fetch: concept 1.2.3.4 @ 2020-01-01: HTTP 404 via pmp-")
+            self.assertFalse(any("trying next source" in line for line in progress))
+
     def test_settled_missing_is_persisted_and_reused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
@@ -1108,6 +1135,24 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(model["fields"]["derived"]["unit"], "mg")
             self.assertEqual(model["fields"]["adapted"]["type"], "text")
 
+
+
+    def test_codes_mapping_prepopulates_option_identities_without_expanded_values(self) -> None:
+        model = {
+            "fields": {
+                "triage.color": {
+                    "type": "code",
+                    "options": ["rot", "orange", "gelb"],
+                }
+            }
+        }
+        csv_mapping = {"fields": {"triage.color": None}}
+        proposal, report = mapping.codes_mapping_proposal(model, csv_mapping, None)
+        self.assertEqual(
+            proposal["fields"]["triage.color"],
+            {"rot": "rot", "orange": "orange", "gelb": "gelb"},
+        )
+        self.assertIn("3 canonical/code defaults", report)
 
 
 if __name__ == "__main__":

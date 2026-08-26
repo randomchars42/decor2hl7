@@ -591,54 +591,65 @@ def _fetch_want(
         request_want["effective_date"] = str(old["resolved_effective_date"])
 
     attempts: list[dict[str, Any]] = []
+    request_plan: list[tuple[str, str]] = []
     for prefix in _candidate_prefixes(request_want, owners, repositories):
         resolved = dict(request_want)
         resolved["prefix"] = prefix
-        for url in _urls(resolved, prefix, language):
-            if request_budget is not None:
-                if request_budget.get("made", 0) >= request_budget.get("max", 0):
-                    raise RequestBudgetExceeded
-                request_budget["made"] = request_budget.get("made", 0) + 1
-            count = request_budget.get("made", 0) if request_budget is not None else 0
-            maximum = request_budget.get("max", 0) if request_budget is not None else 0
-            budget = f" [{count}/{maximum}]" if maximum else ""
-            _emit(progress, f"fetch: {display}: requesting via {prefix or '?'}{budget}")
-            try:
-                payload = get(url, ipv4=ipv4)
-            except urllib.error.HTTPError as error:
-                attempts.append({"prefix": prefix, "url": url, "http_status": error.code})
-                _emit(progress, f"fetch: {display}: HTTP {error.code} via {prefix or '?'}; trying next source")
-                continue
-            except OSError as error:
-                attempts.append({"prefix": prefix, "url": url, "error": str(error)})
-                _emit(progress, f"fetch: {display}: {error} via {prefix or '?'}; trying next source")
-                continue
-            status, detail = classify_payload(payload)
-            if status == "empty":
-                attempts.append({"prefix": prefix, "url": url, "error": detail})
-                _emit(progress, f"fetch: {display}: empty response via {prefix or '?'}; trying next source")
-                continue
-            target = release_dir / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(payload)
-            stored_status = "ok" if status == "ok" else "error"
-            resolved_date = _resolved_effective_date(payload, want)
-            manifest["resources"][key] = {
-                "status": stored_status,
-                "file": relative,
-                "url": url,
-                "repository": prefix,
-                "bytes": len(payload),
-                "sha256": _digest(payload),
-                "requested_effective_date": want.get("effective_date") or "dynamic",
-                "resolved_effective_date": resolved_date,
-                **({"detail": detail} if detail else {}),
-            }
-            resolved_note = f", resolved {resolved_date}" if not want.get("effective_date") and resolved_date else ""
-            _emit(progress, f"fetch: {display}: {stored_status} via {prefix or '?'} ({_size_text(len(payload))}{resolved_note})")
-            if save_manifest is not None:
-                save_manifest()
-            return target
+        request_plan.extend((prefix, url) for url in _urls(resolved, prefix, language))
+
+    def retry_note(index: int, prefix: str) -> str:
+        if index + 1 >= len(request_plan):
+            return ""
+        next_prefix = request_plan[index + 1][0]
+        if next_prefix == prefix:
+            return f"; trying compatibility request via {prefix or '?'}"
+        return f"; trying next source {next_prefix or '?'}"
+
+    for request_index, (prefix, url) in enumerate(request_plan):
+        if request_budget is not None:
+            if request_budget.get("made", 0) >= request_budget.get("max", 0):
+                raise RequestBudgetExceeded
+            request_budget["made"] = request_budget.get("made", 0) + 1
+        count = request_budget.get("made", 0) if request_budget is not None else 0
+        maximum = request_budget.get("max", 0) if request_budget is not None else 0
+        budget = f" [{count}/{maximum}]" if maximum else ""
+        _emit(progress, f"fetch: {display}: requesting via {prefix or '?'}{budget}")
+        try:
+            payload = get(url, ipv4=ipv4)
+        except urllib.error.HTTPError as error:
+            attempts.append({"prefix": prefix, "url": url, "http_status": error.code})
+            _emit(progress, f"fetch: {display}: HTTP {error.code} via {prefix or '?'}{retry_note(request_index, prefix)}")
+            continue
+        except OSError as error:
+            attempts.append({"prefix": prefix, "url": url, "error": str(error)})
+            _emit(progress, f"fetch: {display}: {error} via {prefix or '?'}{retry_note(request_index, prefix)}")
+            continue
+        status, detail = classify_payload(payload)
+        if status == "empty":
+            attempts.append({"prefix": prefix, "url": url, "error": detail})
+            _emit(progress, f"fetch: {display}: empty response via {prefix or '?'}{retry_note(request_index, prefix)}")
+            continue
+        target = release_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        stored_status = "ok" if status == "ok" else "error"
+        resolved_date = _resolved_effective_date(payload, want)
+        manifest["resources"][key] = {
+            "status": stored_status,
+            "file": relative,
+            "url": url,
+            "repository": prefix,
+            "bytes": len(payload),
+            "sha256": _digest(payload),
+            "requested_effective_date": want.get("effective_date") or "dynamic",
+            "resolved_effective_date": resolved_date,
+            **({"detail": detail} if detail else {}),
+        }
+        resolved_note = f", resolved {resolved_date}" if not want.get("effective_date") and resolved_date else ""
+        _emit(progress, f"fetch: {display}: {stored_status} via {prefix or '?'} ({_size_text(len(payload))}{resolved_note})")
+        if save_manifest is not None:
+            save_manifest()
+        return target
     settled = bool(attempts) and all(
         item.get("http_status") in FINAL_STATUS or item.get("error", "").startswith("<")
         for item in attempts

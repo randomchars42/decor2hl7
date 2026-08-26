@@ -109,6 +109,7 @@ class CliTests(unittest.TestCase):
                         "type": "code",
                         "values": {
                             "rot": {"code": "R", "display_name": "Rot"},
+                            "orange": {"code": "O", "display_name": "Orange"},
                         },
                     },
                 },
@@ -123,7 +124,37 @@ class CliTests(unittest.TestCase):
             self.assertEqual(csv_proposal["fields"]["aufnahme.aufnahmezeitpunkt"], "cases:Aufnahmezeitpunkt")
             self.assertEqual(csv_proposal["fields"]["aufnahme.triage"], "cases:Triage")
             self.assertEqual(code_proposal["fields"]["aufnahme.triage"]["rot"], "rot")
+            self.assertEqual(code_proposal["fields"]["aufnahme.triage"]["R"], "rot")
+            self.assertEqual(code_proposal["fields"]["aufnahme.triage"]["orange"], "orange")
+            self.assertEqual(code_proposal["fields"]["aufnahme.triage"]["O"], "orange")
             self.assertFalse((model_dir / "cda-mapping.proposed.json").exists())
+
+    def test_config_adds_new_code_defaults_without_overwriting_user_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            set_release(root, RELEASES[0])
+            set_transaction(root, TRANSACTIONS[0])
+            model = transaction_model_dir(root)
+            model.mkdir(parents=True)
+            write_json(model / "csv-mapping.proposed.json", {"version": 1, "fields": {}})
+            write_json(model / "cda-mapping.proposed.json", {"version": 2, "fields": {}})
+            write_json(model / "codes-mapping.proposed.json", {
+                "version": 1,
+                "fields": {"triage": {"R": "rot", "O": "orange", "unknown": None}},
+            })
+            config_dir = root / "config" / "2026.1.2" / "notaufnahmeregister--60"
+            config_dir.mkdir(parents=True)
+            write_json(config_dir / "codes-mapping.json", {
+                "version": 1,
+                "fields": {"triage": {"R": "custom"}},
+            })
+
+            self.assertEqual(main(["--root", str(root), "config"]), 0)
+            configured = load_json(config_dir / "codes-mapping.json")
+            self.assertEqual(configured["fields"]["triage"]["R"], "custom")
+            self.assertEqual(configured["fields"]["triage"]["O"], "orange")
+            self.assertNotIn("unknown", configured["fields"]["triage"] )
 
     def test_config_never_overwrites_user_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

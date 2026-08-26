@@ -308,6 +308,29 @@ def _site_scaffold(root: Path, release: Mapping[str, Any], transaction: Mapping[
     }
 
 
+def _merge_code_mapping_defaults(source: Path, destination: Path) -> int:
+    """Add newly generated non-null code defaults without changing user choices."""
+    proposed = load_json(source)
+    current = load_json(destination)
+    proposed_fields = proposed.get("fields", {})
+    current_fields = current.setdefault("fields", {})
+    added = 0
+    for path, proposed_values in proposed_fields.items():
+        if not isinstance(proposed_values, Mapping):
+            continue
+        current_values = current_fields.setdefault(path, {})
+        if not isinstance(current_values, dict):
+            continue
+        for raw, canonical in proposed_values.items():
+            if canonical is None or raw in current_values:
+                continue
+            current_values[raw] = canonical
+            added += 1
+    if added:
+        write_json(destination, current)
+    return added
+
+
 def cmd_config(args: argparse.Namespace) -> int:
     root = _root(args)
     release = selected_release(root)
@@ -323,7 +346,14 @@ def cmd_config(args: argparse.Namespace) -> int:
     for name, hint in proposal_hints.items():
         source = _require(model_dir / f"{name}.proposed.json", hint)
         destination = config_dir / f"{name}.json"
-        _say(("created " if copy_if_missing(source, destination) else "kept    ") + str(destination))
+        if copy_if_missing(source, destination):
+            _say("created " + str(destination))
+        elif name == "codes-mapping":
+            added = _merge_code_mapping_defaults(source, destination)
+            suffix = f" (+{added} generated defaults)" if added else ""
+            _say("kept    " + str(destination) + suffix)
+        else:
+            _say("kept    " + str(destination))
 
     site_dir = release_config_dir(root, release)
     site = site_dir / "site.json"
