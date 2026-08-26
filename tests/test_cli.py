@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,16 +24,37 @@ class CliTests(unittest.TestCase):
             root = Path(tmp)
             self.assertEqual(main(["--root", str(root), "init"]), 0)
             with patch("decor2hl7.decor.catalog.releases", return_value=RELEASES):
-                self.assertEqual(main(["--root", str(root), "version", "set", "2026.1.2"]), 0)
+                self.assertEqual(main(["--root", str(root), "set-version", "2026.1.2"]), 0)
             settings = load_json(root / "aktin.json")
             self.assertEqual(settings["release"]["key"], "2026.1.2")
             self.assertIsNone(settings["transaction"])
             with patch("decor2hl7.decor.catalog.transactions", return_value=TRANSACTIONS):
-                self.assertEqual(main(["--root", str(root), "transaction", "set", "notaufnahmeregister--60"]), 0)
+                self.assertEqual(main(["--root", str(root), "set-transaction", "notaufnahmeregister--60"]), 0)
             settings = load_json(root / "aktin.json")
             self.assertEqual(settings["transaction"]["key"], "notaufnahmeregister--60")
             # Set commands still have no artifact-directory side effects.
             self.assertFalse((root / "spec" / "2026.1.2").exists())
+
+
+    def test_selection_lists_put_key_first_and_use_verb_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            out = StringIO()
+            with patch("decor2hl7.decor.catalog.releases", return_value=RELEASES), redirect_stdout(out):
+                self.assertEqual(main(["--root", str(root), "list-versions"]), 0)
+            lines = out.getvalue().splitlines()
+            self.assertTrue(lines[0].startswith("KEY"))
+            self.assertTrue(lines[1].startswith("2026.1.2"))
+
+            with patch("decor2hl7.decor.catalog.releases", return_value=RELEASES):
+                self.assertEqual(main(["--root", str(root), "set-version", "2026.1.2"]), 0)
+            out = StringIO()
+            with patch("decor2hl7.decor.catalog.transactions", return_value=TRANSACTIONS), redirect_stdout(out):
+                self.assertEqual(main(["--root", str(root), "list-transactions"]), 0)
+            lines = out.getvalue().splitlines()
+            self.assertTrue(lines[0].startswith("KEY"))
+            self.assertTrue(lines[1].startswith("notaufnahmeregister--60"))
 
     def test_config_never_overwrites_user_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -61,10 +61,10 @@ src/decor2hl7/
 Selection is state, not filesystem behavior:
 
 ```text
-versions list      → discover releases
-version set KEY    → write aktin.json, clear transaction
-transactions list  → discover transactions in selected release
-transaction set KEY→ write aktin.json
+list-versions         → discover releases
+set-version KEY       → write aktin.json, clear transaction
+list-transactions     → discover transactions in selected release
+set-transaction KEY   → write aktin.json
 ```
 
 None of these commands creates release/transaction artifact paths.

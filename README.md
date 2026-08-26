@@ -16,19 +16,19 @@ Selection is explicit and separate from fetching:
 ```bash
 decor2hl7 init
 
-decor2hl7 versions list
-decor2hl7 version set 2026.1.2
+decor2hl7 list-versions
+decor2hl7 set-version 2026.1.2
 
-decor2hl7 transactions list
-decor2hl7 transaction set notaufnahmeregister--60
+decor2hl7 list-transactions
+decor2hl7 set-transaction notaufnahmeregister--60
 
 decor2hl7 fetch
 decor2hl7 build
 decor2hl7 config
 ```
 
-Both catalogs print a `KEY`; the corresponding `set` command accepts that key.
-`versions list FILTER` and `transactions list FILTER` optionally narrow the
+Both catalogs print a `KEY`; pass that key to the corresponding `set-*` command.
+`list-versions FILTER` and `list-transactions FILTER` optionally narrow the
 printed catalog.
 
 Changing the selected release clears the transaction selection. Selection
