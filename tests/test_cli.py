@@ -56,6 +56,17 @@ class CliTests(unittest.TestCase):
             self.assertTrue(lines[0].startswith("KEY"))
             self.assertTrue(lines[1].startswith("notaufnahmeregister--60"))
 
+    def test_input_commands_accept_external_input_root_and_check_is_uncoupled(self) -> None:
+        from decor2hl7.cli import parser
+        transform = parser().parse_args(["transform", "--input", "/tmp/input"])
+        self.assertEqual(transform.input, "/tmp/input")
+        run = parser().parse_args(["run", "--input", "/tmp/input"])
+        self.assertEqual(run.input, "/tmp/input")
+        check_input = parser().parse_args(["check-input", "--input", "/tmp/input"])
+        self.assertEqual(check_input.input, "/tmp/input")
+        check = parser().parse_args(["check"])
+        self.assertFalse(hasattr(check, "input"))
+
     def test_config_never_overwrites_user_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -35,15 +35,34 @@ Changing the selected release clears the transaction selection. Selection
 commands modify only `aktin.json`; they never create version/transaction
 artifact directories.
 
+Input/runtime commands are separate from workspace validation:
+
+```bash
+decor2hl7 check
+decor2hl7 check-input --input /data/aktin/export
+decor2hl7 transform --input /data/aktin/export
+decor2hl7 run --input /data/aktin/export
+```
+
+`check` never reads CSV input. `check-input`, `transform`, and `run` use the explicit `--input` directory first and otherwise fall back to `aktin.json` `input.directory`.
+
 ART-DECOR network access uses **IPv4 by default** because the IPv6 route used
 during development was dramatically slower. `--ipv6` is a diagnostic override
 scoped to ART-DECOR requests; global socket resolution is never monkey-patched.
 
-## Workspace
+## Workspace and input
+
+Source CSVs are external to the decor2hl7 workspace. The producer owns the input directory; decor2hl7 only reads one coherent snapshot from it.
 
 ```text
+# producer-owned
+INPUT/
+    cases.csv
+    medications.csv
+    ...
+
+# decor2hl7-owned workspace
 aktin.json
-raw/
 state/
 
 spec/
@@ -82,6 +101,14 @@ out/
     └── notaufnahmeregister--60/
         └── *.xml
 ```
+
+The input root is passed to data-consuming commands with `--input PATH`, or set as a deployment default in `aktin.json`:
+
+```json
+{"input": {"directory": "/data/aktin/export"}}
+```
+
+Relative source filenames in `site.json` are resolved below that root. The input path is diagnostic provenance only and is never part of sent-state fingerprints. `init` does not create or own a `raw/` directory.
 
 The **release is the acquisition/cache scope**. Shared datasets/templates/value
 sets/concepts are downloaded once per release. The **transaction is the
@@ -132,7 +159,8 @@ resource count.
 
 ## Generated models
 
-`build` compiles ART-DECOR into two runtime models:
+`build` compiles ART-DECOR into two runtime models. If `aktin.json` has an `input.directory` default, `build` may inspect CSV headers/observed values there to improve CSV/code mapping proposals; without it, ART-DECOR/CDA compilation still proceeds and those proposals simply contain no input-derived evidence.
+
 
 - `model.json`: groups plus value-bearing dataset fields and canonical coded
   values.
@@ -171,6 +199,9 @@ the user file does not already exist. `site.json` is release-specific and is
 also never overwritten.
 
 ### CSV → model
+
+Logical sources map to relative filenames under the external input root via release `site.json`; for example `cases` may resolve to `cases.csv`. Upstream programs do not need to know or modify the decor2hl7 workspace layout.
+
 
 ```json
 {

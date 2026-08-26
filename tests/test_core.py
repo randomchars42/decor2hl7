@@ -14,7 +14,7 @@ from decor2hl7.build.target import compile_cda
 from decor2hl7.decor.catalog import parse_releases, parse_transactions, transactions
 from decor2hl7.decor.fetch import RequestBudgetExceeded, _evidence_references, _fetch_want, _inventory, fetch_spec
 from decor2hl7.workspace import (
-    init_workspace, load_json, release_spec_dir, set_release, set_transaction,
+    init_workspace, input_dir, load_json, release_spec_dir, set_release, set_transaction,
     transaction_config_dir, transaction_key, transaction_model_dir,
 )
 
@@ -35,8 +35,9 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_workspace(root)
-            for path in ("spec", "model", "config", "raw", "out", "state"):
+            for path in ("spec", "model", "config", "out", "state"):
                 self.assertTrue((root / path).is_dir())
+            self.assertFalse((root / "raw").exists())
             self.assertIsNone(load_json(root / "aktin.json")["release"])
             set_release(root, RELEASE)
             set_transaction(root, TRANSACTION)
@@ -44,6 +45,23 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(release_spec_dir(root).exists())
             self.assertFalse(transaction_model_dir(root).exists())
             self.assertFalse(transaction_config_dir(root).exists())
+
+    def test_external_input_directory_uses_override_then_workspace_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as configured, tempfile.TemporaryDirectory() as override:
+            root = Path(tmp)
+            init_workspace(root)
+            settings = load_json(root / "aktin.json")
+            settings["input"]["directory"] = configured
+            from decor2hl7.workspace import write_json
+            write_json(root / "aktin.json", settings)
+            self.assertEqual(input_dir(root), Path(configured).resolve())
+            self.assertEqual(input_dir(root, override), Path(override).resolve())
+            settings = load_json(root / "aktin.json")
+            settings["input"]["directory"] = "relative-input"
+            from decor2hl7.workspace import write_json
+            write_json(root / "aktin.json", settings)
+            self.assertEqual(input_dir(root, required=False), (root / "relative-input").resolve())
+            self.assertFalse((root / "raw").exists())
 
     def test_catalog_keys_are_human_readable_and_stable(self) -> None:
         releases = parse_releases('''<return><release date="2026-04-27T18:50:33" versionLabel="2026.1.2" statusCode="final"/></return>''')

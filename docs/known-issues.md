@@ -1,6 +1,6 @@
-# Known boundaries after 0.4.0 correctness pass
+# Known boundaries after the 0.1.0 correctness pass
 
-The 0.4.0 rewrite now supports declarative semantic transforms, formal
+The 0.1.0 rewrite now supports declarative semantic transforms, formal
 ART-DECOR assertion enforcement, transitive identity-lineage enrichment and
 explicitly keyed nested repetitions. The remaining items are boundaries where
 external protocol information or broader ART-DECOR expression coverage is

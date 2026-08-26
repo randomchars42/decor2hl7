@@ -172,11 +172,11 @@ def normalize_value(
 
 
 def _source_spec(
-    name: str, raw_dir: Path, site: Mapping[str, Any]
+    name: str, input_dir: Path, site: Mapping[str, Any]
 ) -> tuple[Path, str, str | None, Mapping[str, Any] | None, dict[str, str]]:
     raw = site.get("input", {}).get("sources", {}).get(name)
     if isinstance(raw, str):
-        return raw_dir / raw, "1:1", None, None, {}
+        return input_dir / raw, "1:1", None, None, {}
     if isinstance(raw, Mapping):
         primary = raw.get("primary") if isinstance(raw.get("primary"), Mapping) else None
         occurrence = raw.get("occurrence_keys", {})
@@ -185,13 +185,13 @@ def _source_spec(
             if isinstance(occurrence, Mapping) else {}
         )
         return (
-            raw_dir / str(raw.get("file") or f"{name}.csv"),
+            input_dir / str(raw.get("file") or f"{name}.csv"),
             str(raw.get("cardinality") or "1:1"),
             raw.get("join_column"),
             primary,
             occurrence_keys,
         )
-    return raw_dir / f"{name}.csv", "1:1", None, None, {}
+    return input_dir / f"{name}.csv", "1:1", None, None, {}
 
 
 def _order_rows(rows: list[dict[str, str]], primary: Mapping[str, Any] | None) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
@@ -277,7 +277,7 @@ def _ensure_occurrence(
     return selected
 
 def ingest(
-    raw_dir: Path,
+    input_dir: Path,
     model: Mapping[str, Any],
     csv_mapping: Mapping[str, Any],
     codes_mapping: Mapping[str, Any],
@@ -304,7 +304,7 @@ def ingest(
         if isinstance(locator, str) and ":" in locator:
             source, column = locator.split(":", 1); mapped_columns.setdefault(source, set()).add(column)
     for name in source_names:
-        path, cardinality, source_join, primary, occurrence_keys = _source_spec(name, raw_dir, site)
+        path, cardinality, source_join, primary, occurrence_keys = _source_spec(name, input_dir, site)
         if cardinality not in {"1:1", "1:n"}:
             raise ValueError(f"source {name!r} has invalid cardinality {cardinality!r}")
         if not path.exists():

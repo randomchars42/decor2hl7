@@ -3,7 +3,7 @@
 Selection is deliberately independent from filesystem creation:
 
 * ``init`` creates only the top-level workspace and ``aktin.json``.
-* ``version set`` and ``transaction set`` only update selection state.
+* ``set-version KEY`` and ``set-transaction KEY`` only update selection state.
 * commands that create artifacts create the directories they own lazily.
 
 ART-DECOR releases are the acquisition/cache scope. Transactions are the
@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 SETTINGS = "aktin.json"
-TOP_LEVEL = ("spec", "model", "config", "raw", "out", "state")
+TOP_LEVEL = ("spec", "model", "config", "out", "state")
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -70,6 +70,7 @@ def init_workspace(root: Path, prefix: str = "aktin-", language: str = "de-DE") 
         current.setdefault("network", {"ipv4": True})
         current.setdefault("release", None)
         current.setdefault("transaction", None)
+        current.setdefault("input", {"directory": None})
     else:
         current = {
             "prefix": prefix,
@@ -77,6 +78,7 @@ def init_workspace(root: Path, prefix: str = "aktin-", language: str = "de-DE") 
             "network": {"ipv4": True},
             "release": None,
             "transaction": None,
+            "input": {"directory": None},
         }
     write_json(path, current)
     return path
@@ -100,7 +102,7 @@ def set_release(root: Path, release: Mapping[str, Any]) -> None:
 def set_transaction(root: Path, transaction: Mapping[str, Any]) -> None:
     current = load_settings(root)
     if not current.get("release"):
-        raise ValueError("no release selected; run `decor2hl7 versions list` and `decor2hl7 version set <key>`")
+        raise ValueError("no release selected; run `decor2hl7 list-versions` and `decor2hl7 set-version <KEY>`")
     current["transaction"] = dict(transaction)
     write_json(settings_path(root), current)
 
@@ -108,14 +110,14 @@ def set_transaction(root: Path, transaction: Mapping[str, Any]) -> None:
 def selected_release(root: Path) -> dict[str, Any]:
     release = load_settings(root).get("release")
     if not isinstance(release, dict) or not release.get("key") or not release.get("date"):
-        raise ValueError("no release selected; run `decor2hl7 versions list` and `decor2hl7 version set <key>`")
+        raise ValueError("no release selected; run `decor2hl7 list-versions` and `decor2hl7 set-version <KEY>`")
     return dict(release)
 
 
 def selected_transaction(root: Path) -> dict[str, Any]:
     transaction = load_settings(root).get("transaction")
     if not isinstance(transaction, dict) or not transaction.get("key") or not transaction.get("id"):
-        raise ValueError("no transaction selected; run `decor2hl7 transactions list` and `decor2hl7 transaction set <key>`")
+        raise ValueError("no transaction selected; run `decor2hl7 list-transactions` and `decor2hl7 set-transaction <KEY>`")
     return dict(transaction)
 
 
@@ -128,7 +130,7 @@ def _slug(value: str) -> str:
 
 
 def release_key(label: str, date: str = "") -> str:
-    """Stable human-facing key printed by ``versions list``.
+    """Stable human-facing key printed by ``list-versions``.
 
     Version labels are normally already ideal keys (``2026.1.2``). A date is
     only appended when a label is unavailable.
@@ -148,8 +150,35 @@ def transaction_key(name: str, oid: str) -> str:
     return f"{slug}--{digest}"
 
 
-def raw_dir(root: Path) -> Path:
-    return root / "raw"
+def input_dir(root: Path, override: str | Path | None = None, *, required: bool = True) -> Path | None:
+    """Resolve the external CSV input root.
+
+    Command-line input wins over the optional deployment default in ``aktin.json``.
+    The path is external to the decor2hl7 workspace and is never created here.
+    """
+    explicit = override is not None
+    value: str | Path | None = override
+    if value is None:
+        configured = load_settings(root).get("input", {})
+        if isinstance(configured, Mapping):
+            value = configured.get("directory")
+    if value in (None, ""):
+        if required:
+            raise ValueError(
+                "no input directory configured; pass `--input PATH` or set "
+                "`input.directory` in aktin.json"
+            )
+        return None
+    path = Path(str(value)).expanduser()
+    if not path.is_absolute():
+        # Explicit CLI paths follow ordinary shell semantics; a stored relative
+        # deployment default is anchored at the workspace that owns aktin.json.
+        path = path.resolve() if explicit else (root / path).resolve()
+    else:
+        path = path.resolve()
+    if required and not path.is_dir():
+        raise ValueError(f"input directory does not exist or is not a directory: {path}")
+    return path
 
 
 def state_dir(root: Path) -> Path:

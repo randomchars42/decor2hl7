@@ -16,7 +16,7 @@ from .workspace import (
     init_workspace,
     load_json,
     load_settings,
-    raw_dir,
+    input_dir,
     release_config_dir,
     release_spec_dir,
     selected_release,
@@ -237,10 +237,11 @@ def cmd_build(args: argparse.Namespace) -> int:
         cutoff=str(release.get("date") or "") or None,
     )
     settings = load_settings(root)
+    configured_input = input_dir(root, required=False)
     mappings = write_mappings(
         mapping_xml,
         model_dir,
-        raw_dir(root),
+        configured_input,
         model,
         cda,
         join_column=args.join_column or str(settings.get("join_column") or "patient_id"),
@@ -256,8 +257,10 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 def _site_scaffold(root: Path, release: Mapping[str, Any], transaction: Mapping[str, Any]) -> dict[str, Any]:
     sources: dict[str, Any] = {}
-    for path in sorted(raw_dir(root).glob("*.csv")):
-        sources[path.stem] = {"file": path.name, "cardinality": "1:1"}
+    configured_input = input_dir(root, required=False)
+    if configured_input is not None and configured_input.is_dir():
+        for path in sorted(configured_input.glob("*.csv")):
+            sources[path.stem] = {"file": path.name, "cardinality": "1:1"}
     return {
         "version": 1,
         "release": release.get("key"),
@@ -275,6 +278,7 @@ def _site_scaffold(root: Path, release: Mapping[str, Any], transaction: Mapping[
             "null_values": ["NULL", "NA", "N/A"],
             "sources": sources,
             "source_note": (
+                "Source file names are relative to the external input root. "
                 "For 1:n sources set cardinality to 1:n. Optional primary: "
                 "{column, true_values, false_value} moves one flagged row first "
                 "and demotes duplicate flags."
@@ -359,6 +363,33 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check_input(args: argparse.Namespace) -> int:
+    from . import data, validate
+
+    root = _root(args)
+    source_root = input_dir(root, args.input, required=True)
+    assert source_root is not None
+    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(root)
+    errors = validate.verify_compiled_cda(cda)
+    errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
+    if errors:
+        print("configuration errors:")
+        for error in errors:
+            print(f"  - {error}")
+        return 1
+    records = data.ingest(source_root, model, csv_mapping, codes_mapping, site)
+    summary = validate.validate_records(records, model)
+    print(f"input: {source_root}")
+    print(f"records: {summary['records']}")
+    print(f"errors: {summary['errors']}")
+    print(f"warnings: {summary['warnings']}")
+    for record in records:
+        for problem in record.get("problems", []):
+            key = record.get("key", "?")
+            print(f"  {problem.get('severity', 'error')}: {key}: {problem.get('path', '')}: {problem.get('message', '')}")
+    return 0 if summary["errors"] == 0 else 1
+
+
 def _state_key(transaction: Mapping[str, Any], record_key: str) -> str:
     # Transaction identity, not release identity: a later release of the same
     # transaction should still detect unchanged/corrected source records.
@@ -436,7 +467,7 @@ def _transformation_context(
     }
 
 
-def _transform(root: Path) -> tuple[list[Path], dict[str, int]]:
+def _transform(root: Path, input_override: str | Path | None = None) -> tuple[list[Path], dict[str, int]]:
     from . import cda as cda_runtime
     from . import data, state, validate
 
@@ -447,7 +478,9 @@ def _transform(root: Path) -> tuple[list[Path], dict[str, int]]:
     config_errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
     if config_errors:
         raise ValueError("configuration is invalid:\n" + "\n".join("  " + item for item in config_errors))
-    records = data.ingest(raw_dir(root), model, csv_mapping, codes_mapping, site)
+    source_root = input_dir(root, input_override, required=True)
+    assert source_root is not None
+    records = data.ingest(source_root, model, csv_mapping, codes_mapping, site)
     validation = validate.validate_records(records, model)
     out_dir = transaction_out_dir(root, release, transaction)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -498,7 +531,7 @@ def _transform(root: Path) -> tuple[list[Path], dict[str, int]]:
 
 
 def cmd_transform(args: argparse.Namespace) -> int:
-    emitted, summary = _transform(_root(args))
+    emitted, summary = _transform(_root(args), args.input)
     print(json.dumps(summary, ensure_ascii=False))
     for path in emitted:
         print(path)
@@ -548,7 +581,7 @@ def cmd_send(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     root = _root(args)
-    emitted, summary = _transform(root)
+    emitted, summary = _transform(root, args.input)
     print(json.dumps(summary, ensure_ascii=False))
     if args.send:
         sent, failed = _send_paths(root, emitted)
@@ -632,10 +665,15 @@ def parser() -> argparse.ArgumentParser:
     q = sub.add_parser("config", help="seed human-editable configuration without overwriting it")
     q.set_defaults(func=cmd_config)
 
-    q = sub.add_parser("check", help="check downloads and configuration")
+    q = sub.add_parser("check", help="check downloads, compiled models and configuration")
     q.set_defaults(func=cmd_check)
 
+    q = sub.add_parser("check-input", help="validate the external CSV input snapshot without emitting CDA")
+    q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
+    q.set_defaults(func=cmd_check_input)
+
     q = sub.add_parser("transform", help="read, normalize, validate and emit changed documents")
+    q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
     q.set_defaults(func=cmd_transform)
 
     q = sub.add_parser("send", help="send emitted documents not already recorded as sent")
@@ -643,6 +681,7 @@ def parser() -> argparse.ArgumentParser:
     q.set_defaults(func=cmd_send)
 
     q = sub.add_parser("run", help="perform the runtime pipeline")
+    q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
     q.add_argument("--send", action="store_true")
     q.set_defaults(func=cmd_run)
 
