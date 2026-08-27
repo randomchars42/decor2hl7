@@ -20,8 +20,7 @@ import urllib.error
 import xml.etree.ElementTree as ET
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, TypedDict
-from urllib.parse import parse_qs, unquote, urlsplit
+from typing import Any, Callable, Iterable, Mapping
 
 from .api import (
     artifact_representations,
@@ -34,31 +33,22 @@ from .api import (
     valueset_expansion_url,
 )
 from .client import DEFAULT_API_BASE, FINAL_STATUS, get
+from .artifacts import REQUIRED_ROLES
 from .sources import apply_source_hint
 from .xml import local, parse_text
+from .references import (
+    KIND_ORDER, KINDS, Want, display_references, hard_references,
+    references, soft_references,
+)
+from .resolution import (
+    candidate_projects as _candidate_projects,
+    load_artifact_owners as _load_artifact_owners,
+    payload_artifact_owner as _payload_artifact_owner,
+    project_owner as _owner,
+    remember_artifact_owner as _remember_artifact_owner,
+    write_artifact_owners as _write_artifact_owners,
+)
 from ..workspace import load_json, write_json
-
-
-class Want(TypedDict, total=False):
-    kind: str
-    id: str
-    effective_date: str
-    project: str
-    api_base: str
-    publication_url: str
-    source_hint: str
-    dataset: str
-    dataset_effective_date: str
-
-
-KINDS = {"dataset", "concept", "template", "valueset", "codesystem"}
-KIND_ORDER = {
-    "dataset": 0,
-    "template": 1,
-    "valueset": 2,
-    "codesystem": 3,
-    "concept": 4,
-}
 
 
 class RequestBudgetExceeded(RuntimeError):
@@ -161,216 +151,6 @@ def _parse(path: Path) -> ET.Element | None:
         return parse_text(path.read_text(encoding="utf-8", errors="replace"))[0]
     except (ET.ParseError, OSError):
         return None
-
-
-def _project_from_link(value: str | None) -> str:
-    """Return an ART-DECOR project prefix carried by a link, if present."""
-    if not value:
-        return ""
-    parsed = urlsplit(value)
-    for query in (parsed.query, urlsplit(parsed.fragment).query):
-        values = parse_qs(query)
-        for name in ("project", "prefix"):
-            if values.get(name):
-                return values[name][0]
-    path = unquote("/".join(filter(None, (parsed.path, parsed.fragment))))
-    match = re.search(r"(?:^|/)project/([^/?#]+-)(?:/|$)", path)
-    return match.group(1) if match else ""
-
-
-def _reference_project(node: ET.Element) -> str:
-    """Prefer an explicit prefix, then derive project context from links."""
-    if node.get("prefix"):
-        return node.get("prefix") or ""
-    preferred = ("href", "url", "link", "source", "canonicalUri")
-    for name in preferred:
-        project = _project_from_link(node.get(name))
-        if project:
-            return project
-    for name, value in node.attrib.items():
-        lowered = local(name).lower()
-        if lowered.endswith(("href", "url", "link", "uri")):
-            project = _project_from_link(value)
-            if project:
-                return project
-    return ""
-
-
-def _collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
-    """Extract either recursive build dependencies or direct evidence refs.
-
-    Build dependencies are resources required to materialize the selected data
-    model/CDA structure and may be recursively closed. Evidence references are
-    semantic lineage targets (SPEC/INHERIT/ADAPT/etc.) that may improve mapping;
-    they are resolved as the smallest directly referenced resource and are never
-    recursively expanded by the fetcher.
-    """
-    found: dict[tuple[str, str, str, str, str, str], Want] = {}
-    reference_project = ""
-
-    def add(kind: str, ident: str | None, effective: str | None = None,
-            project: str | None = None, dataset: str | None = None,
-            dataset_effective_date: str | None = None) -> None:
-        if not ident or kind not in KINDS:
-            return
-        want: Want = {
-            "kind": kind,
-            "id": ident,
-            "effective_date": "" if effective in (None, "dynamic") else str(effective),
-            "project": project or reference_project,
-        }
-        if dataset:
-            want["dataset"] = dataset
-        if dataset_effective_date:
-            want["dataset_effective_date"] = dataset_effective_date
-        found[(
-            kind, ident, want["effective_date"], want["project"],
-            want.get("dataset", ""), want.get("dataset_effective_date", ""),
-        )] = want
-
-    stack: list[tuple[ET.Element, tuple[str, ...]]] = [(root, ())]
-    while stack:
-        node, ancestors = stack.pop()
-        tag = local(node.tag)
-        parent_tag = ancestors[-1] if ancestors else ""
-        reference_project = _reference_project(node)
-        for child in node:
-            stack.append((child, ancestors + (tag,)))
-
-        if not soft:
-            if tag == "include" and node.get("ref"):
-                in_valueset = any(
-                    item in {"valueSet", "conceptList", "questionnaire"}
-                    for item in ancestors[-4:]
-                )
-                add(
-                    "valueset" if in_valueset else "template",
-                    node.get("ref"), node.get("flexibility"),
-                )
-                continue
-            if tag == "answerValueSet":
-                add("valueset", node.get("ref"), node.get("flexibility"))
-                continue
-            if tag == "contains":
-                dataset = node.get("datasetId")
-                if dataset:
-                    add(
-                        "dataset", dataset, node.get("datasetEffectiveDate"),
-                        node.get("prefix"),
-                    )
-                elif node.get("ref"):
-                    # A structural contains without dataset metadata still has
-                    # to materialize the referred concept itself.
-                    add(
-                        "concept", node.get("ref"),
-                        node.get("effectiveDate") or node.get("flexibility"),
-                        node.get("prefix"),
-                    )
-                continue
-            if tag == "relationship" and node.get("template"):
-                if (node.get("type") or "") in {"SPEC", "VERSION", "COPY"}:
-                    add(
-                        "template", node.get("template"),
-                        node.get("flexibility"), node.get("prefix"),
-                    )
-                continue
-            if tag == "element":
-                add("template", node.get("contains"), node.get("flexibility"))
-            elif tag == "representingTemplate":
-                add("template", node.get("ref"), node.get("flexibility"))
-                add(
-                    "dataset", node.get("sourceDataset"),
-                    node.get("sourceDatasetFlexibility"),
-                )
-            elif tag == "valueSet":
-                if node.get("ref"):
-                    add("valueset", node.get("ref"), node.get("flexibility"))
-                elif node.get("id"):
-                    add("valueset", node.get("id"), node.get("effectiveDate"))
-            elif tag == "vocabulary":
-                add("valueset", node.get("valueSet"), node.get("flexibility"))
-                add(
-                    "codesystem", node.get("codeSystem"),
-                    node.get("codeSystemEffectiveDate"), node.get("prefix"),
-                )
-            elif tag == "sourceCodeSystem":
-                add(
-                    "codesystem", node.get("id"),
-                    node.get("effectiveDate") or node.get("flexibility"),
-                    node.get("prefix"),
-                )
-            elif tag == "include" and node.get("codeSystem"):
-                add(
-                    "codesystem", node.get("codeSystem"),
-                    node.get("effectiveDate") or node.get("flexibility"),
-                    node.get("prefix"),
-                )
-            elif tag in {"concept", "exception"} and node.get("codeSystem"):
-                add(
-                    "codesystem", node.get("codeSystem"),
-                    node.get("codeSystemEffectiveDate"), node.get("prefix"),
-                )
-            if node.get("templateId") and tag in {"dataset", "transaction"}:
-                add("template", node.get("templateId"), node.get("templateEffectiveDate"))
-            continue
-
-        # Evidence mode: semantic lineage is useful, but its containing dataset
-        # is not a recursive dependency. Resolve the directly referenced concept
-        # (or non-structural template) only when it is not already available.
-        if tag == "inherit":
-            add(
-                "concept", node.get("ref"),
-                node.get("effectiveDate") or node.get("flexibility"),
-                node.get("prefix"), node.get("datasetId"),
-                node.get("datasetEffectiveDate"),
-            )
-            add(
-                "concept", node.get("originalId"), node.get("originalEffectiveDate"),
-                node.get("originalPrefix"),
-            )
-        elif tag == "relationship":
-            if node.get("ref") and parent_tag == "concept":
-                add(
-                    "concept", node.get("ref"),
-                    node.get("effectiveDate") or node.get("flexibility"),
-                    node.get("prefix"), node.get("datasetId"),
-                    node.get("datasetEffectiveDate"),
-                )
-            if node.get("template") and (node.get("type") or "") not in {"SPEC", "VERSION", "COPY"}:
-                add(
-                    "template", node.get("template"),
-                    node.get("flexibility"), node.get("prefix"),
-                )
-    rows = list(found.values())
-    dated_code_systems = {
-        (item["id"], item.get("project", ""))
-        for item in rows
-        if item["kind"] == "codesystem" and item.get("effective_date")
-    }
-    return [
-        item for item in rows
-        if not (
-            item["kind"] == "codesystem"
-            and not item.get("effective_date")
-            and (item["id"], item.get("project", "")) in dated_code_systems
-        )
-    ]
-
-
-def hard_references(root: ET.Element) -> list[Want]:
-    """Resources that are recursively required to build the selected spec."""
-    return _collect_references(root, soft=False)
-
-
-def soft_references(root: ET.Element) -> list[Want]:
-    """Direct non-recursive semantic evidence references."""
-    return _collect_references(root, soft=True)
-
-
-def references(root: ET.Element) -> list[Want]:
-    """Backward-compatible name for recursive/build dependencies."""
-    return hard_references(root)
-
 
 
 def _valueset_complete(node: ET.Element) -> bool:
@@ -536,57 +316,6 @@ def _project_directory(root: ET.Element | None) -> dict[str, str]:
     return result
 
 
-def _owner(identifier: str, directory: Mapping[str, str]) -> str:
-    best = ""
-    for project_id in directory:
-        if identifier == project_id or identifier.startswith(project_id + "."):
-            if len(project_id) > len(best):
-                best = project_id
-    return directory.get(best, "") if best else ""
-
-
-def _artifact_owner_key(
-    kind: str, identifier: str, effective_date: str = "",
-) -> str:
-    effective = effective_date or "dynamic"
-    return f"{kind}:{identifier}@{effective}"
-
-
-def _indexed_artifact_owner(
-    artifact_owners: Mapping[str, str],
-    want: Mapping[str, str],
-) -> str:
-    return artifact_owners.get(
-        _artifact_owner_key(
-            want.get("kind", ""),
-            want.get("id", ""),
-            want.get("effective_date", ""),
-        ),
-        "",
-    )
-
-
-def _remember_artifact_owner(
-    artifact_owners: dict[str, str],
-    want: Mapping[str, str],
-    project: str,
-    *,
-    replace: bool = False,
-) -> bool:
-    if not project:
-        return False
-    key = _artifact_owner_key(
-        want.get("kind", ""),
-        want.get("id", ""),
-        want.get("effective_date", ""),
-    )
-    current = artifact_owners.get(key) or ""
-    if key == ":" or current == project or (current and not replace):
-        return False
-    artifact_owners[key] = project
-    return True
-
-
 def _seed_artifact_owners(
     artifact_owners: dict[str, str],
     *roots: ET.Element | None,
@@ -596,7 +325,9 @@ def _seed_artifact_owners(
     for root in roots:
         if root is None:
             continue
-        for want in hard_references(root) + soft_references(root):
+        for want in (
+            hard_references(root) + soft_references(root) + display_references(root)
+        ):
             project = want.get("project") or ""
             if project:
                 changed = _remember_artifact_owner(
@@ -633,90 +364,6 @@ def _seed_manifest_artifact_owners(
                 replace=True,
             ) or changed
     return changed
-
-
-def _payload_artifact_owner(payload: bytes, want: Mapping[str, str]) -> str:
-    """Read repository context from an API response/reference stub."""
-    try:
-        root, _ = parse_text(payload.decode("utf-8", "replace"))
-    except (ET.ParseError, ValueError):
-        return ""
-    ident = want.get("id") or ""
-    reference_names = {
-        "id", "ref", "template", "valueSet", "codeSystem", "datasetId",
-        "sourceDataset",
-    }
-    for node in root.iter():
-        if ident and not any(node.get(name) == ident for name in reference_names):
-            continue
-        project = _reference_project(node)
-        if project:
-            return project
-    return ""
-
-
-def _load_artifact_owners(path: Path) -> dict[str, str]:
-    if not path.is_file():
-        return {}
-    data = load_json(path)
-    # Format 1 used unversioned kind:OID keys. Do not import it: an owner
-    # learned for one revision must not influence another historical revision.
-    if not isinstance(data, Mapping) or data.get("format") != 2:
-        return {}
-    owners = data.get("owners", {})
-    if not isinstance(owners, Mapping):
-        return {}
-    return {
-        str(key): str(value)
-        for key, value in owners.items()
-        if key and value
-    }
-
-
-def _write_artifact_owners(path: Path, artifact_owners: Mapping[str, str]) -> None:
-    write_json(path, {
-        "format": 2,
-        "owners": dict(sorted(artifact_owners.items())),
-    })
-
-
-def _candidate_projects(
-    want: Mapping[str, str],
-    owners: Mapping[str, str],
-    repositories: Iterable[str],
-    artifact_owners: Mapping[str, str] | None = None,
-) -> list[str]:
-    """Return project candidates without probing the whole ecosystem blindly.
-
-    OID/project-directory ownership retains the original crawler semantics and
-    stops broad repository probing. For otherwise ownerless external artifacts,
-    explicit reference context and the version-aware artifact-owner index are
-    tried before the configured BBR list.
-    """
-    owner = _owner(want["id"], owners)
-    declared = want.get("project") or ""
-    indexed = _indexed_artifact_owner(artifact_owners or {}, want)
-    result: list[str] = []
-
-    # Preserve the old crawler's scope rule: an OID/project-directory owner is
-    # authoritative. Explicit reference context is retained only as the same
-    # historical fallback the crawler already had; neither cached BBR ownership
-    # nor broad repository probing may supersede it.
-    if owner:
-        result.append(owner)
-        if declared and declared != owner:
-            result.append(declared)
-        return result
-
-    # For ownerless/external identifiers, use the strongest local evidence
-    # before probing every configured BBR.
-    for value in (declared, indexed):
-        if value and value not in result:
-            result.append(value)
-    for value in repositories:
-        if value and value not in result:
-            result.append(value)
-    return result or [""]
 
 
 def _requests(
@@ -1323,8 +970,17 @@ def verify_manifest(release_dir: Path) -> list[str]:
 def closure_paths(release_dir: Path, transaction_dir: Path, role: str = "build") -> list[Path]:
     """Resolve resource paths recorded for a completed transaction closure."""
     closure = load_json(transaction_dir / "closure.json")
-    if closure.get("complete") is False or closure.get("interrupted") or closure.get("truncated"):
-        raise ValueError("transaction closure is incomplete; rerun `decor2hl7 fetch`")
+    crawl_complete = closure.get("crawl_complete", closure.get("complete"))
+    if not crawl_complete or closure.get("interrupted") or closure.get("truncated"):
+        raise ValueError("transaction crawl is incomplete; rerun `decor2hl7 fetch`")
+    if role == "build" and closure.get("build_ready") is not True:
+        reasons = closure.get("readiness_errors", [])
+        if "build_ready" not in closure:
+            reasons = [
+                "closure predates build-readiness validation; rerun `decor2hl7 fetch`"
+            ]
+        suffix = f": {'; '.join(map(str, reasons))}" if reasons else ""
+        raise ValueError(f"transaction specification is not build-ready{suffix}")
     manifest = load_json(release_dir / "manifest.json")
     keys = closure.get(f"{role}_resources", [])
     result: list[Path] = []
@@ -1383,9 +1039,11 @@ def fetch_spec(
     tx_effective = transaction.get("effective_date") or ""
 
     roles: dict[str, set[str]] = {"build": set(), "evidence": set()}
+    resource_roles: dict[str, set[str]] = {}
     visited: dict[str, set[str]] = {"build": set(), "evidence": set()}
     build_queue: deque[Want] = deque()
     evidence_queue: deque[Want] = deque()
+    optional_references: dict[str, Want] = {}
     pending_batch: dict[str, list[Want]] = {"build": [], "evidence": []}
     request_budget = {"made": 0, "max": max(0, int(max_requests))}
     resources_considered = 0
@@ -1406,6 +1064,13 @@ def fetch_spec(
     project_directory: Path | None = None
     tx_source: Path | None = None
     tx_path: Path | None = None
+
+    def observe_optional(*roots: ET.Element | None) -> None:
+        for root in roots:
+            if root is None:
+                continue
+            for want in display_references(root):
+                optional_references.setdefault(_key(want), want)
 
     def pending_keys(role: str) -> list[str]:
         wants = list(pending_batch[role]) + list(
@@ -1432,15 +1097,46 @@ def fetch_spec(
         )
         build_pending = pending_keys("build")
         evidence_pending = pending_keys("evidence")
+        crawl_complete = complete
+        required_failures = sorted(
+            key for key in roles["build"]
+            if any(
+                role in REQUIRED_ROLES
+                for role in resource_roles.get(key, set())
+            )
+            and manifest.get("resources", {}).get(key, {}).get("status") != "ok"
+        )
+        readiness_errors: list[str] = []
+        if root_status["transaction"] != "ok":
+            readiness_errors.append("selected transaction analysis form is unavailable")
+        if root_status["transaction_source"] != "ok":
+            readiness_errors.append("selected transaction source form is unavailable")
+        readiness_errors.extend(
+            f"required artifact unavailable: {key}" for key in required_failures
+        )
+        build_ready = crawl_complete and not readiness_errors
         closure = {
             "format": 2,
             "release": dict(release),
             "transaction": dict(transaction),
-            "complete": complete,
+            # ``complete`` remains the compatibility spelling for crawl state.
+            # It must not be interpreted as permission to compile.
+            "complete": crawl_complete,
+            "crawl_complete": crawl_complete,
+            "build_ready": build_ready,
+            "readiness_errors": readiness_errors,
             "interrupted": interrupted,
             "phase": phase,
             "build_resources": sorted(roles["build"]),
             "evidence_resources": sorted(roles["evidence"] | roles["build"]),
+            "resource_roles": {
+                key: sorted(values)
+                for key, values in sorted(resource_roles.items())
+                if values
+            },
+            "optional_references": [
+                dict(optional_references[key]) for key in sorted(optional_references)
+            ],
             "pending": {
                 "build": build_pending,
                 "evidence": evidence_pending,
@@ -1580,6 +1276,10 @@ def fetch_spec(
             *(build_roots + evidence_roots),
         ) or artifact_owners:
             _write_artifact_owners(artifact_owners_path, artifact_owners)
+        observe_optional(
+            _parse(project_config) if project_config else None,
+            *(build_roots + evidence_roots),
+        )
 
         tx_root = _parse(tx_path) if tx_path else None
         if tx_root is not None:
@@ -1624,6 +1324,9 @@ def fetch_spec(
                 for row_index, want in enumerate(rows):
                     pending_batch["build"] = rows[row_index:]
                     key = _key(want)
+                    resource_roles.setdefault(key, set()).add(
+                        want.get("role") or "structure"
+                    )
                     if key in visited["build"]:
                         continue
                     embedded = _matching_embedded(embedded_roots, want)
@@ -1633,23 +1336,6 @@ def fetch_spec(
                             queue.extend(hard_references(node))
                             evidence_queue.extend(soft_references(node))
                         continue
-
-                    if want.get("kind") == "template" and evidence_roots:
-                        evidence_template = _matching_embedded(
-                            evidence_roots, want, not_after=release_date
-                        )
-                        if evidence_template:
-                            visited["build"].add(key)
-                            resolved = evidence_template[-1].get("effectiveDate") or ""
-                            suffix = f" @ {resolved}" if resolved else ""
-                            _emit(
-                                progress,
-                                f"fetch: {_resource_label(want)}: available in main project evidence{suffix}",
-                            )
-                            for node in evidence_template:
-                                queue.extend(hard_references(node))
-                                evidence_queue.extend(soft_references(node))
-                            continue
 
                     resources_considered += 1
                     try:
@@ -1679,6 +1365,7 @@ def fetch_spec(
                     if root is not None:
                         if _seed_artifact_owners(artifact_owners, root):
                             save_artifact_owners()
+                        observe_optional(root)
                         inventory = _inventory(root)
                         have_by_role["build"].update(inventory)
                         have_by_role["evidence"].update(inventory)
@@ -1706,6 +1393,9 @@ def fetch_spec(
             for row_index, want in enumerate(rows):
                 pending_batch["evidence"] = rows[row_index:]
                 key = _key(want)
+                resource_roles.setdefault(key, set()).add(
+                    want.get("role") or "mapping-evidence"
+                )
                 if key in visited["evidence"] or key in visited["build"]:
                     continue
                 if _satisfied(want, have_by_role["evidence"]):
@@ -1744,6 +1434,7 @@ def fetch_spec(
                     if root is not None:
                         if _seed_artifact_owners(artifact_owners, root):
                             save_artifact_owners()
+                        observe_optional(root)
                         have_by_role["evidence"].update(_inventory(root))
                 # Crucially: no references(root) here. Soft evidence stops at the
                 # directly resolved resource and cannot turn into another crawl.

@@ -70,6 +70,7 @@ spec/
 └── 2026.1.2/
     ├── api.json
     ├── manifest.json
+    ├── artifact-owners.json        # exact artifact revision → repository
     ├── project.xml                 # project configuration
     ├── project-evidence.xml        # live analysis evidence only
     ├── project-directory.xml
@@ -89,6 +90,9 @@ model/
     └── notaufnahmeregister--60/
         ├── model.json
         ├── cda.json
+        ├── mapping-audit.json
+        ├── cda-expanded-readable.xml
+        ├── cda-expanded-readable.md
         ├── *.proposed.json
         └── *.md
 
@@ -144,9 +148,18 @@ build truth. For templates, value sets, and code systems, both a source form and
 an analysis form are retained. Template analysis uses the API's expanded tree
 (`$extract?tree=expand`); intensional value sets also request `$expand` when
 available. Source files remain provenance/debugging material, while analysis
-files are compiler input. The global project directory is used to resolve the
+files provide resolved definitions. The compiler receives both forms, uses the
+transaction source as selection truth, and cross-checks their identities. The
+global project directory is used to resolve the
 owning project for OIDs when possible, avoiding repeated guessing and handling
 stale project metadata in historical links.
+
+Repository candidates are ordered by authoritative longest OID owner, explicit
+reference prefix/link context, cached exact artifact owner, and finally the
+configured building-block repositories. The owner cache key includes type, OID
+and effective date. Extensional member CodeSystems are recorded as optional
+display evidence without causing HTTP requests; only CodeSystems needed for an
+intensional expansion are build dependencies.
 
 HTTP 200 responses containing an empty `<return/>` are treated as not-found.
 Known terminal failures are recorded in `manifest.json` and skipped on later
@@ -154,9 +167,9 @@ runs unless `--retry-missing` is given.
 
 The live main-project file is read directly for local history and associations,
 while external evidence is fetched only for concepts/templates already relevant
-to the selected transaction. `project-evidence.xml` may supply a missing
-historical template definition only as a fallback: exact downloaded definitions
-always win, and fallback definitions newer than the selected release are ignored.
+to the selected transaction. `project-evidence.xml` is mapping evidence only: it
+never satisfies the representing template or another build dependency. A
+statically dated reference must resolve to that exact revision.
 
 Known cross-project references are data-driven. The bundled source catalog, plus
 an optional `config/sources.json` override with the same shape, can supply an API
@@ -171,18 +184,31 @@ checksums. A missing cache file is refetched using that exact resolved date.
 `--max-requests` limits actual recursive HTTP attempts rather than merely logical
 resource count.
 
+`closure.json` separates `crawl_complete` from `build_ready`. A crawl may settle
+all requests while a required artifact is unavailable; `build` rejects that
+state and reports the exact identities. Missing optional display or mapping
+evidence does not block compilation. Closures written before this distinction
+are rejected conservatively and must be refreshed with `decor2hl7 fetch`.
+
 ## Generated models
 
 `build` is completely CSV-independent. It compiles ART-DECOR into the runtime models, generates the model-to-CDA proposal, and writes a populated `codes-mapping.proposed.json` directly from the model terminology. `propose-input` is the explicit, optional CSV-inspection step: it compares CSV headers with model field names and augments the code proposal with any additional raw values observed in proposed coded columns. It does not infer source relationships, cardinalities, or joins.
 
 
-- `model.json`: groups plus value-bearing dataset fields and canonical coded
-  values.
+- `model.json`: groups plus value-bearing dataset fields. Logical dataset
+  options, formal transaction terminology, direct terminology associations and
+  executable accepted values are distinct; formal transaction membership wins
+  when both domains exist.
 - `cda.json`: reachable CDA template constraints, compiled document structure,
   formal ART-DECOR assertions, and readable writable target names such as
   `PatientIdentifier.id` or `ersteinschatzung.effectiveTime`.
 - `cda-assertions.sch`: ISO Schematron containing the original effective
   ART-DECOR `<assert>` expressions and `<let>` variables.
+- `mapping-audit.json`: structured candidates, evidence, confidence, conflicts
+  and executability decisions behind the mapping reports.
+- `cda-expanded-readable.xml` and `.md`: the effective CDA tree with human
+  descriptions and XML comments linking nodes, source templates and dataset
+  paths.
 
 CDA `SPEC` relationships are compiled as constraint refinement at every tree
 depth. A specialized constraint inherits omitted constraints from a matching
@@ -210,6 +236,8 @@ csv-mapping.proposed.json     csv-mapping.md
 codes-mapping.proposed.json   codes-mapping.md
 cda-mapping.proposed.json     cda-mapping.md
 cda-mapping-details.md
+mapping-audit.json
+cda-expanded-readable.xml     cda-expanded-readable.md
 ```
 
 `propose-input` is intentionally heuristic and input-local. Source filenames, case source, 1:1/1:n cardinalities, join columns, and occurrence semantics remain explicit configuration rather than inferred relationships.

@@ -24,6 +24,27 @@ DATATYPE_FAMILIES: dict[str, set[str]] = {
 }
 
 
+def accepted_values(field: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return the executable domain, with model-v1 compatibility."""
+    values = field.get("accepted_values")
+    if isinstance(values, Mapping):
+        return values
+    formal = field.get("formal_terminology")
+    if isinstance(formal, Mapping) and isinstance(formal.get("members"), Mapping):
+        members = formal.get("members", {})
+        if members:
+            return members
+    legacy = field.get("values")
+    return legacy if isinstance(legacy, Mapping) else {}
+
+
+def logical_values(field: Mapping[str, Any]) -> Mapping[str, Any]:
+    domain = field.get("logical_domain")
+    if isinstance(domain, Mapping) and isinstance(domain.get("options"), Mapping):
+        return domain.get("options", {})
+    return accepted_values(field)
+
+
 def base_datatype(value: Any) -> str:
     return str(value or "").upper().split(".", 1)[0]
 
@@ -82,7 +103,7 @@ def direct_compatibility(
     if model_type == "ordinal":
         coded = any(
             isinstance(info, Mapping) and info.get("code")
-            for info in field.get("values", {}).values()
+            for info in accepted_values(field).values()
         )
         target_base = base_datatype(target.get("datatype"))
         allowed = {"CD", "CE", "CV", "CO", "SC"} if coded else {"INT", "REAL", "PQ"}

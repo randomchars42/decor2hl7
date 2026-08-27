@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+from .semantics import accepted_values
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import xml.etree.ElementTree as ET
 
@@ -120,7 +122,7 @@ def check_config(
             errors.append(f"codes-mapping: unknown model field {path}")
         for path, translations in codes_mapping.get("fields", {}).items():
             field = model.get("fields", {}).get(path, {})
-            canonical = set(field.get("values", {}))
+            canonical = set(accepted_values(field))
             if not isinstance(translations, Mapping):
                 errors.append(f"codes-mapping: {path} must contain a JSON object")
                 continue

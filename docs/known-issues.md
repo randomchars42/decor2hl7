@@ -33,11 +33,10 @@ Schematron validation are still useful additional deployment gates.
 
 ## Exact/static historical template resolution
 
-For some historical external repositories the available source corpus can be
-incomplete. Static template flexibility may still fall back to the nearest older
-revision when the exact referenced revision is unavailable. In a production
-release cache known to be complete, an unavailable exact static revision should
-be treated as a closure error instead of falling back.
+Static template and terminology references are exact identities. An unavailable
+revision is a fetch/readiness error and is never replaced with an older or newer
+revision. Dynamic references remain explicitly dynamic and resolve to a frozen
+identity recorded in the manifest.
 
 ## Repetition identifiers
 

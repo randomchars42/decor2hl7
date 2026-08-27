@@ -12,14 +12,17 @@ from decor2hl7 import assertions, cda, data, state, validate
 from decor2hl7.build import mapping
 from decor2hl7.build.mapping import cda_mapping_proposal
 from decor2hl7.build.model import compile_model
-from decor2hl7.build.target import compile_cda
+from decor2hl7.build.target import collect_templates, compile_cda, select_template
+from decor2hl7.compile.terminology import domain_difference
+from decor2hl7.retrieval.artifacts import artifact_problems, artifact_record, closure_records
 from decor2hl7.retrieval.catalog import parse_releases, parse_transactions, transactions
 from decor2hl7.retrieval.fetch import (
     RequestBudgetExceeded, _candidate_projects, _evidence_references, _fetch_want,
-    _inventory, fetch_spec, hard_references, soft_references,
+    _inventory, display_references, fetch_spec, hard_references, soft_references,
 )
 from decor2hl7.retrieval.api import REQUIRED_PATHS, artifact_representations
 from decor2hl7.retrieval.sources import apply_source_hint, load_source_hints
+from decor2hl7.semantics import accepted_values
 from decor2hl7.workspace import load_json
 from decor2hl7.workspace import (
     init_workspace, input_dir, load_json, release_spec_dir, set_release, set_transaction,
@@ -140,7 +143,10 @@ class CoreTests(unittest.TestCase):
             datasetId="9" datasetEffectiveDate="2021-01-01" prefix="ext-"/></concept>
         </valueSet>''')
         hard = hard_references(root)
-        code_systems = [row for row in hard if row["kind"] == "codesystem"]
+        code_systems = [
+            row for row in display_references(root)
+            if row["kind"] == "codesystem"
+        ]
         self.assertEqual(len(code_systems), 1)
         code_system = code_systems[0]
         self.assertEqual(
@@ -163,11 +169,33 @@ class CoreTests(unittest.TestCase):
           <vocabulary codeSystem="2.16.840.1.113883.5.25"
             url="https://art-decor.org/exist/apps/api/codesystem/2.16.840.1.113883.5.25?project=ad1bbr-"/>
         </template>''')
-        rows = hard_references(root)
-        template = next(row for row in rows if row["kind"] == "template")
-        codesystem = next(row for row in rows if row["kind"] == "codesystem")
+        template = next(
+            row for row in hard_references(root) if row["kind"] == "template"
+        )
+        codesystem = next(
+            row for row in display_references(root) if row["kind"] == "codesystem"
+        )
         self.assertEqual(template["project"], "ad1bbr-")
         self.assertEqual(codesystem["project"], "ad1bbr-")
+
+    def test_extensional_codesystem_is_evidence_but_intensional_is_required(self) -> None:
+        root = ET.fromstring('''<valueSet id="vs"><conceptList>
+          <concept code="A" codeSystem="display-cs"/>
+          <include code="root" codeSystem="expansion-cs" op="is-a"/>
+        </conceptList></valueSet>''')
+        hard = hard_references(root)
+        display = display_references(root)
+        self.assertEqual(
+            [(row["id"], row["role"]) for row in hard if row["kind"] == "codesystem"],
+            [("expansion-cs", "expansion-support")],
+        )
+        self.assertIn(
+            ("display-cs", "display-evidence"),
+            [(row["id"], row["role"]) for row in display if row["kind"] == "codesystem"],
+        )
+        self.assertNotIn(
+            "display-cs", {row["id"] for row in hard + soft_references(root)}
+        )
 
 
     def test_model_separates_groups_and_fields(self) -> None:
@@ -186,6 +214,56 @@ class CoreTests(unittest.TestCase):
             self.assertIn("vital", model["groups"])
             self.assertNotIn("vital", model["fields"])
             self.assertEqual(model["fields"]["vital.temp"]["repeat"], "vital")
+
+    def test_transaction_source_controls_selection_and_formal_domain(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            source = directory / "transaction.source.xml"
+            analysis = directory / "transaction.xml"
+            terminology = directory / "valueset.xml"
+            source.write_text('''<transaction id="tx" effectiveDate="2026-01-01">
+              <representingTemplate>
+                <concept ref="c" minimumMultiplicity="1" maximumMultiplicity="1">
+                  <terminologyAssociation conceptId="old.c" valueSet="vs" flexibility="2025-01-01"
+                    code="B" codeSystem="legacy-cs" displayName="Predecessor status"/>
+                  <terminologyAssociation conceptId="c.option.c" code="A" codeSystem="cs" displayName="Alpha"/>
+                </concept>
+              </representingTemplate>
+            </transaction>''', encoding="utf-8")
+            analysis.write_text('''<dataset id="dataset" transactionId="tx" transactionEffectiveDate="2026-01-01">
+              <concept id="c" shortName="status" type="item" minimumMultiplicity="0" maximumMultiplicity="1">
+                <inherit ref="old.c"/><name>Status</name><valueDomain type="code"><conceptList>
+                  <concept><name>Logical only</name></concept>
+                </conceptList></valueDomain>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            terminology.write_text('''<valueSet id="vs" effectiveDate="2025-01-01">
+              <conceptList><concept code="A" codeSystem="cs" displayName="Alpha"><name>Alpha</name></concept></conceptList>
+            </valueSet>''', encoding="utf-8")
+            model = compile_model(
+                analysis, [terminology], [terminology], transaction_source=source
+            )
+            field = model["fields"]["status"]
+            self.assertTrue(field["required"])
+            self.assertEqual(model["meta"]["selected_concepts"], 1)
+            self.assertEqual(set(field["accepted_values"]), {"Alpha"})
+            self.assertEqual(set(field["logical_domain"]["options"]), {"Logical only"})
+            self.assertEqual(
+                domain_difference(field)["logical_only"], ["Logical only"]
+            )
+            self.assertEqual(len(field["terminology_associations"]), 2)
+            self.assertEqual(
+                {row["scope"] for row in field["terminology_associations"]},
+                {"lineage-concept", "related-concept"},
+            )
+            self.assertEqual(
+                [(row["code"], row["scope"]) for row in field["codes"]],
+                [("B", "lineage-concept")],
+            )
+            defaults = mapping.code_mapping_defaults(model)["fields"]["status"]
+            self.assertEqual(defaults["A"], "Alpha")
+            self.assertNotIn("Logical only", defaults)
+            self.assertNotIn("values", field)
 
     def test_named_cda_target_and_ta_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -211,6 +289,14 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("Evidence chain", report)
             self.assertIn("Evidence chain", details)
             self.assertIn("Dataset concept: `c`", details)
+            output = Path(tmp) / "model"
+            output.mkdir()
+            mapping.write_cda_mapping([project], output, model, target)
+            audit = load_json(output / "mapping-audit.json")
+            self.assertEqual(audit["fields"]["foo"]["selected"], "ExampleDocument.value")
+            readable = (output / "cda-expanded-readable.xml").read_text(encoding="utf-8")
+            self.assertIn("Mapped dataset path(s): foo", readable)
+            self.assertTrue((output / "cda-expanded-readable.md").is_file())
 
     def test_code_normalization_and_unmapped_code(self) -> None:
         field = {"type": "code", "values": {"rot": {"code": "R", "code_system": "1.2.3", "display_name": "rot"}}}
@@ -309,7 +395,7 @@ class CoreTests(unittest.TestCase):
                 )
             self.assertEqual(len(calls), before)
 
-    def test_fetch_uses_static_template_from_main_project_evidence_before_http(self) -> None:
+    def test_fetches_static_template_even_when_present_in_live_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp) / "spec" / "2026.1.2"
             tx_dir = release_dir / "transactions" / "tx"
@@ -329,7 +415,7 @@ class CoreTests(unittest.TestCase):
                 if path.endswith("/project/aktin-"):
                     return b'<project/>'
                 if "/template/doc/" in path:
-                    raise AssertionError(f"template should have been satisfied by project-evidence.xml: {url}")
+                    return b'<return><template id="doc" effectiveDate="2026-01-15T00:00:00" name="Doc"><element name="hl7:ClinicalDocument" id="root"/></template></return>'
                 raise AssertionError(url)
 
             progress: list[str] = []
@@ -340,15 +426,15 @@ class CoreTests(unittest.TestCase):
                     max_requests=20, progress=progress.append,
                 )
 
-            self.assertFalse(any("/template/doc/" in api_path(url) for url in calls))
+            self.assertTrue(any("/template/doc/" in api_path(url) for url in calls))
             self.assertFalse(result["closure"]["errors"])
-            self.assertTrue(any(
-                "template doc @ 2026-01-15T00:00:00" in line
-                and "available in main project evidence" in line
-                for line in progress
-            ))
+            self.assertTrue(result["closure"]["build_ready"])
+            self.assertIn(
+                "template:doc@2026-01-15T00:00:00",
+                result["closure"]["build_resources"],
+            )
 
-    def test_dynamic_template_from_main_project_evidence_is_capped_at_release(self) -> None:
+    def test_dynamic_template_is_fetched_and_frozen_not_taken_from_live_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp) / "spec" / "2026.1.2"
             tx_dir = release_dir / "transactions" / "tx"
@@ -373,7 +459,7 @@ class CoreTests(unittest.TestCase):
                 if path.endswith("/project/aktin-"):
                     return b'<project/>'
                 if "/template/doc" in path:
-                    raise AssertionError(f"template should have been satisfied by project-evidence.xml: {url}")
+                    return b'<return><template id="doc" effectiveDate="2026-02-01T00:00:00" name="ReleasedDoc"><element name="hl7:ClinicalDocument" id="released"/></template></return>'
                 raise AssertionError(url)
 
             progress: list[str] = []
@@ -384,11 +470,11 @@ class CoreTests(unittest.TestCase):
                     max_requests=20, progress=progress.append,
                 )
 
-            self.assertFalse(any("/template/doc" in api_path(url) for url in calls))
+            self.assertTrue(any("/template/doc" in api_path(url) for url in calls))
             self.assertFalse(result["closure"]["errors"])
-            evidence_lines = [line for line in progress if "available in main project evidence" in line]
-            self.assertTrue(any("2026-02-01T00:00:00" in line for line in evidence_lines))
-            self.assertFalse(any("2026-05-01T00:00:00" in line for line in evidence_lines))
+            entry = result["manifest"]["resources"]["template:doc"]
+            self.assertEqual(entry["resolved_effective_date"], "2026-02-01T00:00:00")
+            self.assertTrue(result["closure"]["build_ready"])
 
     def test_fetch_interrupt_writes_incomplete_closure_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -425,7 +511,7 @@ class CoreTests(unittest.TestCase):
             self.assertIn("dataset:9.9.1@2020-01-01", closure["pending"]["build"])
             self.assertTrue((release_dir / "manifest.json").exists())
             self.assertTrue(any("checkpoint saved" in line for line in progress))
-            with self.assertRaisesRegex(ValueError, "closure is incomplete"):
+            with self.assertRaisesRegex(ValueError, "crawl is incomplete"):
                 from decor2hl7.retrieval.fetch import closure_paths
                 closure_paths(release_dir, tx_dir)
 
@@ -598,7 +684,7 @@ class CoreTests(unittest.TestCase):
             transaction.write_text('''<dataset id="d"><concept type="item" shortName="status" id="c"><name>Status</name><valueDomain type="code"/><valueSet id="1.2.3"/></concept></dataset>''', encoding="utf-8")
             valueset.write_text('''<valueSet id="1.2.3"><concept code="A" codeSystem="9.9"><name>aktiv</name></concept></valueSet>''', encoding="utf-8")
             model = compile_model(transaction, [valueset])
-            self.assertEqual(model["fields"]["status"]["values"]["aktiv"]["code"], "A")
+            self.assertEqual(accepted_values(model["fields"]["status"])["aktiv"]["code"], "A")
 
     def test_live_evidence_does_not_seed_unrelated_external_crawl(self) -> None:
         root = ET.fromstring('''<project>
@@ -710,6 +796,102 @@ class CoreTests(unittest.TestCase):
             _candidate_projects(stale, {"1.2.3": "aktin-"}, ["aktin-", "pmp-"]),
             ["aktin-", "old-"],
         )
+
+    def test_static_template_selection_never_substitutes_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "templates.xml"
+            source.write_text('''<project>
+              <template id="t" effectiveDate="2007-01-01" name="Newer"/>
+            </project>''', encoding="utf-8")
+            templates = collect_templates([source])
+            self.assertIsNone(select_template(templates, "t", "2005-01-01"))
+            selected = select_template(templates, "t", "dynamic")
+            self.assertIsNotNone(selected)
+            assert selected is not None
+            self.assertEqual(selected.get("effectiveDate"), "2007-01-01")
+            with self.assertRaisesRegex(ValueError, "fallback template inputs"):
+                collect_templates([], [source])
+
+    def test_artifact_identity_mismatch_and_readiness_are_independent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release = Path(tmp)
+            analysis = release / "templates" / "t.xml"
+            analysis.parent.mkdir()
+            analysis.write_text('<template id="t" effectiveDate="2007"/>', encoding="utf-8")
+            entry = {
+                "status": "ok", "file": "templates/t.xml",
+                "requested_effective_date": "2005",
+                "resolved_effective_date": "2007",
+                "identity": {"type": "template", "id": "t", "effective_date": "2007"},
+            }
+            record = artifact_record(release, "template:t@2005", entry, ["structure"])
+            self.assertTrue(any(
+                "requested static revision" in item
+                for item in artifact_problems(record)
+            ))
+
+            transaction = release / "transactions" / "tx"
+            transaction.mkdir(parents=True)
+            (release / "manifest.json").write_text(
+                json.dumps({"resources": {"template:t@2005": entry}}),
+                encoding="utf-8",
+            )
+            (transaction / "closure.json").write_text(json.dumps({
+                "complete": True,
+                "crawl_complete": True,
+                "build_ready": False,
+                "readiness_errors": [
+                    "required artifact unavailable: template:t@2005"
+                ],
+                "build_resources": ["template:t@2005"],
+                "resource_roles": {"template:t@2005": ["structure"]},
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not build-ready"):
+                closure_records(release, transaction)
+
+            (transaction / "closure.json").write_text(json.dumps({
+                "complete": True,
+                "build_resources": [],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "predates build-readiness"):
+                closure_records(release, transaction)
+
+    def test_dynamic_and_exact_requests_share_one_canonical_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release = Path(tmp)
+            transaction = release / "transactions" / "tx"
+            transaction.mkdir(parents=True)
+            artifact = release / "valuesets" / "vs.xml"
+            artifact.parent.mkdir()
+            artifact.write_text(
+                '<valueSet id="vs" effectiveDate="2025"/>', encoding="utf-8"
+            )
+            base = {
+                "status": "ok", "file": "valuesets/vs.xml",
+                "resolved_effective_date": "2025",
+                "identity": {
+                    "type": "valueset", "id": "vs",
+                    "effective_date": "2025", "project": "term-",
+                },
+            }
+            dynamic = {**base, "requested_effective_date": "dynamic"}
+            exact = {**base, "requested_effective_date": "2025"}
+            (release / "manifest.json").write_text(json.dumps({
+                "resources": {"valueset:vs": dynamic, "valueset:vs@2025": exact}
+            }), encoding="utf-8")
+            (transaction / "closure.json").write_text(json.dumps({
+                "crawl_complete": True, "build_ready": True,
+                "build_resources": ["valueset:vs", "valueset:vs@2025"],
+                "resource_roles": {
+                    "valueset:vs": ["formal-terminology"],
+                    "valueset:vs@2025": ["formal-terminology"],
+                },
+            }), encoding="utf-8")
+            records = closure_records(release, transaction)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(
+                records[0]["aliases"], ["valueset:vs", "valueset:vs@2025"]
+            )
 
     def test_cached_artifact_owner_precedes_repository_probe(self) -> None:
         want = {
@@ -1136,7 +1318,7 @@ class CoreTests(unittest.TestCase):
                 encoding="utf-8",
             )
             model = compile_model(tx, [d / "old.xml", d / "new.xml"])
-            self.assertEqual(set(model["fields"]["status"]["values"]), {"B"})
+            self.assertEqual(set(accepted_values(model["fields"]["status"])), {"B"})
             self.assertEqual(len(model["value_sets"]), 2)
 
     def test_explicit_implementation_xpath_maps_non_value_payload(self) -> None:
@@ -1184,7 +1366,7 @@ class CoreTests(unittest.TestCase):
               </conceptList></valueSet>
             </project>''', encoding="utf-8")
             model = compile_model(tx, [], [terminology])
-            values = model["fields"]["indicator"]["values"]
+            values = accepted_values(model["fields"]["indicator"])
             self.assertEqual(values["A-Problem"]["code"], "A")
             self.assertEqual(values["A-Untergruppe"]["code"], "A1")
             self.assertNotIn("rot", values)

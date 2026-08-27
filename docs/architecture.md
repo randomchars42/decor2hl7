@@ -17,13 +17,13 @@ XML.
                               spec/
                          ┌───────┴────────┐
                          ▼                ▼
-                   build/model.py   build/target.py
+               compile/transaction.py compile/cda.py
                          │                │
                          ▼                ▼
                      model.json        cda.json
                          └───────┬────────┘
                                  ▼
-                         build/mapping.py
+                       compile/mapping.py
                                  │
                          proposals + reports
 
@@ -38,15 +38,22 @@ external INPUT/ CSV → data.py → validate.py → cda.py → transport.py
 src/decor2hl7/
     cli.py
     workspace.py
-    decor/
+    retrieval/
         client.py       IPv4-scoped HTTP client
         catalog.py      release/transaction discovery + keys
         fetch.py        recursive acquisition, manifest, closure
+        references.py   typed dependencies and dependency roles
+        resolution.py   link/prefix/owner inference and probe ordering
+        artifacts.py    identities, forms, dependency roles
         xml.py          XML repair/helpers
-    build/
-        model.py        transaction/datasets → model.json
-        target.py       templates/SPEC → compiled cda.json
-        mapping.py      proposals + detailed evidence reports
+    compile/
+        artifacts.py    build-ready compiler inputs
+        transaction.py source + analysis → model.json
+        terminology.py logical/formal domain accessors
+        cda.py          exact templates/SPEC → cda.json
+        mapping.py      decisions → audit + proposal
+        reports.py      readable effective CDA
+    build/              compatibility imports for one release
     data.py             CSV joining/normalization
     validate.py         config + record/source-constraint validation
     transforms.py       small declarative mapping transforms
@@ -82,15 +89,16 @@ Release-wide downloads are shared; transaction-specific products are isolated.
 
 ## Fetch closure
 
-`fetch.py` uses typed references (`dataset`, `template`, `valueset`, `concept`)
-and iterates until closure or the request cap.
+`fetch.py` uses typed references (`dataset`, `template`, `valueset`,
+`codesystem`, `concept`) and iterates until closure or the request cap.
 
 Important rules retained from the prototype:
 
 1. Prefer containing datasets over individual concepts.
 2. Distinguish template `include` from value-set `include` by XML context.
 3. Follow `include`, `contains`, and template `SPEC`/`VERSION`/`COPY` links.
-4. Use ProjectIndex ownership by longest OID prefix before guessing a repository.
+4. Use longest OID ownership, explicit reference links and the exact artifact
+   owner cache, in that order, before probing repositories.
 5. Treat empty successful XML responses as not-found; do not confuse parse
    failure with absence.
 6. Cache both successes and settled failures.
@@ -100,9 +108,33 @@ Important rules retained from the prototype:
    evidence relevant to the selected transaction closure.
 9. Freeze dynamically resolved external revisions in the manifest.
 10. Count the fetch safety cap in actual recursive HTTP attempts.
+11. Record extensional CodeSystems as display evidence without requesting them;
+    fetch a CodeSystem as required only for intensional expansion.
+12. Fetch the representing template explicitly even if it appears in live
+    project evidence.
 
 `manifest.json` answers “what is cached for this release?”; transaction
-`closure.json` answers “which cached resources belong to this transaction?”
+`closure.json` answers “which cached resources belong to this transaction?” It
+also separates crawler settlement (`crawl_complete`) from permission to compile
+(`build_ready`).
+
+## Artifact and terminology contracts
+
+Every compiler artifact retains requested and resolved identity, dependency
+role, resolution provenance and all available source/analysis/expansion forms.
+A static identity mismatch is an error. Optional usable forms remain accessible
+even when another optional representation is unavailable.
+
+The transaction source defines selected concepts, transaction cardinality
+overrides and direct terminology associations. The analysis form supplies
+resolved definitions and containment. The compiler validates the pair and
+records contained additions separately.
+
+`logical_domain` records dataset choices, `formal_terminology` records the exact
+transaction ValueSet binding and members, and `terminology_associations` retains
+direct links with their source concept IDs. `accepted_values` is the executable
+domain and prefers formal membership, preventing logical-only options from being
+silently treated as formal codes.
 
 ## CDA compilation
 
@@ -123,13 +155,14 @@ resolve to exactly one physical node; ambiguity is retained as provenance but is
 a configuration/runtime error when selected. `validate.verify_compiled_cda()`
 checks these invariants before transformation.
 
-Pinned/downloaded template definitions are primary. Historical definitions from
-`project-evidence.xml` are fallback-only and are ignored when newer than the
-selected release date.
+Only fetched build-template forms participate in compilation. Live project
+evidence cannot fill a missing dependency. Static flexibility is exact; dynamic
+references resolve to a frozen manifest identity.
 
 ## Mapping evidence
 
-Editable JSON stores only selections; rich evidence stays in Markdown.
+Editable JSON stores only selections. `mapping-audit.json` stores the structured
+decision record, and both Markdown views are produced from the same analysis.
 Evidence includes:
 
 - direct/lineage-mediated `templateAssociation` (`TA`)

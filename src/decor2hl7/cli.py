@@ -197,63 +197,66 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     )
     if closure.get("truncated"):
         _say("warning: closure stopped at --max-requests; increase the limit and rerun fetch")
+    if closure.get("crawl_complete", closure.get("complete")) and not closure.get("build_ready", True):
+        for error in closure.get("readiness_errors", []):
+            _say(f"error: {error}")
     if closure.get("errors"):
         for error in closure.get("errors", []):
             _say(f"error: {error}")
-    return 0 if not closure.get("errors") and not closure.get("truncated") else 2
+    return 0 if (
+        not closure.get("errors")
+        and not closure.get("truncated")
+        and closure.get("build_ready", True)
+    ) else 2
 
 
 def _build_inputs(root: Path) -> tuple[Path, list[Path], list[Path], list[Path], list[Path]]:
-    from .retrieval.fetch import closure_paths
+    """Compatibility tuple backed by the typed compiler input contract."""
+    inputs = _compiler_inputs(root)
+    return (
+        inputs["transaction_analysis"],
+        inputs["model_resources"],
+        inputs["templates"],
+        [],
+        inputs["mapping_evidence"],
+    )
+
+
+def _compiler_inputs(root: Path) -> dict[str, Any]:
+    from .compile.artifacts import compiler_inputs
 
     release = selected_release(root)
     transaction = selected_transaction(root)
     release_dir = release_spec_dir(root, release)
     tx_dir = transaction_spec_dir(root, release, transaction)
-    transaction_xml = _require(tx_dir / "transaction.xml", "run `decor2hl7 fetch` first")
-    build_resources = closure_paths(release_dir, tx_dir, "build")
-    evidence_resources = closure_paths(release_dir, tx_dir, "evidence")
-    model_resources = [
-        path for path in build_resources
-        if path.parent.name in {"datasets", "valuesets", "codesystems", "concepts"}
-    ]
-    templates = [path for path in build_resources if path.parent.name == "templates"]
-    evidence = release_dir / "project-evidence.xml"
-    fallback_templates = [path for path in evidence_resources if path.parent.name == "templates"]
-    if evidence.exists():
-        fallback_templates.insert(0, evidence)
-    mapping = [transaction_xml]
-    if evidence.exists():
-        mapping.append(evidence)
-    mapping.extend(evidence_resources)
-    return (
-        transaction_xml, model_resources, templates,
-        list(dict.fromkeys(fallback_templates)),
-        list(dict.fromkeys(mapping)),
-    )
+    _require(tx_dir / "transaction.xml", "run `decor2hl7 fetch` first")
+    return dict(compiler_inputs(release_dir, tx_dir))
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    from .build.mapping import write_cda_mapping, write_code_mapping
-    from .build.model import write_model
-    from .build.target import write_cda
+    from .compile.mapping import write_code_mapping
+    from .compile.cda import write_cda_model
+    from .compile.mapping import write_mapping_model
+    from .compile.transaction import write_transaction_model
 
     root = _root(args)
     release = selected_release(root)
     transaction = selected_transaction(root)
-    transaction_xml, model_resources, templates, fallback_templates, mapping_xml = _build_inputs(root)
+    inputs = _compiler_inputs(root)
     model_dir = transaction_model_dir(root, release, transaction)
     model_dir.mkdir(parents=True, exist_ok=True)
-    model = write_model(
-        transaction_xml, model_resources, model_dir,
-        terminology_paths=model_resources,
+    model = write_transaction_model(
+        inputs["transaction_source"],
+        inputs["transaction_analysis"],
+        inputs["model_resources"],
+        inputs["terminology_resources"],
+        model_dir,
     )
     code_mapping = write_code_mapping(model_dir, model)
-    cda = write_cda(
-        templates, model_dir, model, fallback_templates,
-        cutoff=str(release.get("date") or "") or None,
+    cda = write_cda_model(inputs["templates"], model_dir, model)
+    cda_mapping = write_mapping_model(
+        inputs["mapping_evidence"], model_dir, model, cda
     )
-    cda_mapping = write_cda_mapping(mapping_xml, model_dir, model, cda)
     _say(f"model: {len(model['fields'])} datapoints, {len(model['groups'])} groups")
     _say(f"code mapping defaults: {sum(len(values) for values in code_mapping['fields'].values())} aliases across {len(code_mapping['fields'])} coded fields")
     _say(
@@ -265,7 +268,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 
 def cmd_propose_input(args: argparse.Namespace) -> int:
-    from .build.mapping import write_input_mappings
+    from .compile.mapping import write_input_mappings
 
     root = _root(args)
     release = selected_release(root)
@@ -410,8 +413,10 @@ def cmd_check(args: argparse.Namespace) -> int:
     errors.extend(validate.verify_compiled_cda(cda))
     errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
     try:
-        _, _, templates, fallback_templates, _ = _build_inputs(root)
-        errors.extend(validate.verify_compiled_against_artdecor(cda, templates + fallback_templates))
+        inputs = _compiler_inputs(root)
+        errors.extend(
+            validate.verify_compiled_against_artdecor(cda, inputs["templates"])
+        )
     except ValueError as error:
         errors.append(str(error))
     print(f"model datapoints: {len(model.get('fields', {}))}")

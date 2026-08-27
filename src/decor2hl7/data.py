@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from .semantics import accepted_values
+
 _MISSING = object()
 from zoneinfo import ZoneInfo
 
@@ -83,7 +85,7 @@ def _canonical_code(
     translations: Mapping[str, Any],
     site: Mapping[str, Any],
 ) -> Any:
-    values = field.get("values", {})
+    values = accepted_values(field)
     canonical = translations.get(raw)
     if canonical is None:
         # Raw data that already uses a canonical dataset label or code does not
@@ -128,7 +130,7 @@ def _canonical_ordinal(
     payload expected by numeric CDA value targets.  Coded ordinal value sets
     continue through the ordinary canonical-code path.
     """
-    values = field.get("values", {})
+    values = accepted_values(field)
     if any(isinstance(info, Mapping) and info.get("code") for info in values.values()):
         return _canonical_code(raw, field, translations, site)
     canonical = translations.get(raw, raw)
