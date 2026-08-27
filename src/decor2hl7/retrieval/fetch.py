@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, TypedDict
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .api import (
     artifact_representations,
@@ -162,6 +163,39 @@ def _parse(path: Path) -> ET.Element | None:
         return None
 
 
+def _project_from_link(value: str | None) -> str:
+    """Return an ART-DECOR project prefix carried by a link, if present."""
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    for query in (parsed.query, urlsplit(parsed.fragment).query):
+        values = parse_qs(query)
+        for name in ("project", "prefix"):
+            if values.get(name):
+                return values[name][0]
+    path = unquote("/".join(filter(None, (parsed.path, parsed.fragment))))
+    match = re.search(r"(?:^|/)project/([^/?#]+-)(?:/|$)", path)
+    return match.group(1) if match else ""
+
+
+def _reference_project(node: ET.Element) -> str:
+    """Prefer an explicit prefix, then derive project context from links."""
+    if node.get("prefix"):
+        return node.get("prefix") or ""
+    preferred = ("href", "url", "link", "source", "canonicalUri")
+    for name in preferred:
+        project = _project_from_link(node.get(name))
+        if project:
+            return project
+    for name, value in node.attrib.items():
+        lowered = local(name).lower()
+        if lowered.endswith(("href", "url", "link", "uri")):
+            project = _project_from_link(value)
+            if project:
+                return project
+    return ""
+
+
 def _collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
     """Extract either recursive build dependencies or direct evidence refs.
 
@@ -172,6 +206,7 @@ def _collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
     recursively expanded by the fetcher.
     """
     found: dict[tuple[str, str, str, str, str, str], Want] = {}
+    reference_project = ""
 
     def add(kind: str, ident: str | None, effective: str | None = None,
             project: str | None = None, dataset: str | None = None,
@@ -182,7 +217,7 @@ def _collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
             "kind": kind,
             "id": ident,
             "effective_date": "" if effective in (None, "dynamic") else str(effective),
-            "project": project or "",
+            "project": project or reference_project,
         }
         if dataset:
             want["dataset"] = dataset
@@ -198,6 +233,7 @@ def _collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
         node, ancestors = stack.pop()
         tag = local(node.tag)
         parent_tag = ancestors[-1] if ancestors else ""
+        reference_project = _reference_project(node)
         for child in node:
             stack.append((child, ancestors + (tag,)))
 
@@ -509,29 +545,174 @@ def _owner(identifier: str, directory: Mapping[str, str]) -> str:
     return directory.get(best, "") if best else ""
 
 
+def _artifact_owner_key(
+    kind: str, identifier: str, effective_date: str = "",
+) -> str:
+    effective = effective_date or "dynamic"
+    return f"{kind}:{identifier}@{effective}"
+
+
+def _indexed_artifact_owner(
+    artifact_owners: Mapping[str, str],
+    want: Mapping[str, str],
+) -> str:
+    return artifact_owners.get(
+        _artifact_owner_key(
+            want.get("kind", ""),
+            want.get("id", ""),
+            want.get("effective_date", ""),
+        ),
+        "",
+    )
+
+
+def _remember_artifact_owner(
+    artifact_owners: dict[str, str],
+    want: Mapping[str, str],
+    project: str,
+    *,
+    replace: bool = False,
+) -> bool:
+    if not project:
+        return False
+    key = _artifact_owner_key(
+        want.get("kind", ""),
+        want.get("id", ""),
+        want.get("effective_date", ""),
+    )
+    current = artifact_owners.get(key) or ""
+    if key == ":" or current == project or (current and not replace):
+        return False
+    artifact_owners[key] = project
+    return True
+
+
+def _seed_artifact_owners(
+    artifact_owners: dict[str, str],
+    *roots: ET.Element | None,
+) -> bool:
+    """Learn artifact owners from explicit prefixes/links already in local XML."""
+    changed = False
+    for root in roots:
+        if root is None:
+            continue
+        for want in hard_references(root) + soft_references(root):
+            project = want.get("project") or ""
+            if project:
+                changed = _remember_artifact_owner(
+                    artifact_owners, want, project
+                ) or changed
+    return changed
+
+
+def _seed_manifest_artifact_owners(
+    artifact_owners: dict[str, str],
+    manifest: Mapping[str, Any],
+) -> bool:
+    changed = False
+    resources = manifest.get("resources", {})
+    if not isinstance(resources, Mapping):
+        return False
+    for entry in resources.values():
+        if not isinstance(entry, Mapping) or entry.get("status") != "ok":
+            continue
+        identity = entry.get("identity", {})
+        if not isinstance(identity, Mapping):
+            continue
+        kind = str(identity.get("type") or "")
+        ident = str(identity.get("id") or "")
+        effective = str(identity.get("effective_date") or "")
+        if effective == "dynamic":
+            effective = ""
+        project = str(identity.get("project") or entry.get("project") or "")
+        if kind in KINDS and ident and project:
+            changed = _remember_artifact_owner(
+                artifact_owners,
+                {"kind": kind, "id": ident, "effective_date": effective},
+                project,
+                replace=True,
+            ) or changed
+    return changed
+
+
+def _payload_artifact_owner(payload: bytes, want: Mapping[str, str]) -> str:
+    """Read repository context from an API response/reference stub."""
+    try:
+        root, _ = parse_text(payload.decode("utf-8", "replace"))
+    except (ET.ParseError, ValueError):
+        return ""
+    ident = want.get("id") or ""
+    reference_names = {
+        "id", "ref", "template", "valueSet", "codeSystem", "datasetId",
+        "sourceDataset",
+    }
+    for node in root.iter():
+        if ident and not any(node.get(name) == ident for name in reference_names):
+            continue
+        project = _reference_project(node)
+        if project:
+            return project
+    return ""
+
+
+def _load_artifact_owners(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    data = load_json(path)
+    # Format 1 used unversioned kind:OID keys. Do not import it: an owner
+    # learned for one revision must not influence another historical revision.
+    if not isinstance(data, Mapping) or data.get("format") != 2:
+        return {}
+    owners = data.get("owners", {})
+    if not isinstance(owners, Mapping):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in owners.items()
+        if key and value
+    }
+
+
+def _write_artifact_owners(path: Path, artifact_owners: Mapping[str, str]) -> None:
+    write_json(path, {
+        "format": 2,
+        "owners": dict(sorted(artifact_owners.items())),
+    })
+
+
 def _candidate_projects(
     want: Mapping[str, str],
     owners: Mapping[str, str],
     repositories: Iterable[str],
+    artifact_owners: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Return project candidates without probing the whole ecosystem blindly.
 
-    A project-directory owner is authoritative enough to stop broad repository
-    probing. A differing declared project is retained as one historical fallback
-    because old references can contain stale project metadata. Only when owner
-    inference fails do building-block repositories become search candidates.
+    OID/project-directory ownership retains the original crawler semantics and
+    stops broad repository probing. For otherwise ownerless external artifacts,
+    explicit reference context and the version-aware artifact-owner index are
+    tried before the configured BBR list.
     """
     owner = _owner(want["id"], owners)
     declared = want.get("project") or ""
+    indexed = _indexed_artifact_owner(artifact_owners or {}, want)
     result: list[str] = []
+
+    # Preserve the old crawler's scope rule: an OID/project-directory owner is
+    # authoritative. Explicit reference context is retained only as the same
+    # historical fallback the crawler already had; neither cached BBR ownership
+    # nor broad repository probing may supersede it.
     if owner:
         result.append(owner)
         if declared and declared != owner:
             result.append(declared)
         return result
 
-    if declared:
-        result.append(declared)
+    # For ownerless/external identifiers, use the strongest local evidence
+    # before probing every configured BBR.
+    for value in (declared, indexed):
+        if value and value not in result:
+            result.append(value)
     for value in repositories:
         if value and value not in result:
             result.append(value)
@@ -738,6 +919,8 @@ def _fetch_want(
     release: str = "",
     api_base: str = DEFAULT_API_BASE,
     source_hints: Mapping[str, Mapping[str, str]] | None = None,
+    artifact_owners: dict[str, str] | None = None,
+    save_artifact_owners: Callable[[], None] | None = None,
 ) -> Path | None:
     requested_want = dict(want)
     resolved_want = apply_source_hint(want, source_hints or {})
@@ -894,7 +1077,15 @@ def _fetch_want(
         }
         return path
 
-    for project in _candidate_projects(request_want, owners, repositories):
+    candidates = deque(_candidate_projects(
+        request_want, owners, repositories, artifact_owners
+    ))
+    attempted_candidates: set[str] = set()
+    while candidates:
+        project = candidates.popleft()
+        if project in attempted_candidates:
+            continue
+        attempted_candidates.add(project)
         forms = _requests(
             request_want,
             project,
@@ -906,6 +1097,7 @@ def _fetch_want(
         source_payload: bytes | None = None
         analysis_payload: bytes | None = existing
         analysis_url = str(old.get("url") or "") if existing is not None else ""
+        redirected = False
         for item in forms:
             form, url = item["form"], item["url"]
             if form == "source" and cached_source is not None:
@@ -918,6 +1110,24 @@ def _fetch_want(
                 payload = request(project, form, url)
             if payload is None:
                 continue
+            if form == "source" and artifact_owners is not None:
+                linked_project = _payload_artifact_owner(payload, request_want)
+                oid_owner = _owner(request_want["id"], owners)
+                if not oid_owner and linked_project and linked_project != project:
+                    changed = _remember_artifact_owner(
+                        artifact_owners, request_want, linked_project,
+                        replace=True,
+                    )
+                    if changed and save_artifact_owners is not None:
+                        save_artifact_owners()
+                    candidates.appendleft(linked_project)
+                    _emit(
+                        progress,
+                        f"fetch: {display}: source points to {linked_project}; "
+                        f"retrying there",
+                    )
+                    redirected = True
+                    break
             if form not in saved_representations:
                 store(form, payload, url)
             if form == "source":
@@ -929,6 +1139,9 @@ def _fetch_want(
             elif form == "analysis":
                 analysis_payload = payload
                 analysis_url = url
+
+        if redirected:
+            continue
 
         # Dataset/concept latest routes only provide a source representation.
         # Resolve the date from it, then request the exact analysis extract.
@@ -1013,6 +1226,18 @@ def _fetch_want(
             ),
             **({"expansion_warning": expansion_error} if expansion_error else {}),
         }
+        if artifact_owners is not None:
+            changed = _remember_artifact_owner(
+                artifact_owners, request_want, project, replace=True
+            )
+            if resolved_date:
+                exact_want = dict(request_want)
+                exact_want["effective_date"] = resolved_date
+                changed = _remember_artifact_owner(
+                    artifact_owners, exact_want, project, replace=True
+                ) or changed
+            if changed and save_artifact_owners is not None:
+                save_artifact_owners()
         resolved_note = (
             f", resolved {resolved_date}"
             if not requested_want.get("effective_date") and resolved_date
@@ -1137,6 +1362,7 @@ def fetch_spec(
     release_dir.mkdir(parents=True, exist_ok=True)
     transaction_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = release_dir / "manifest.json"
+    artifact_owners_path = release_dir / "artifact-owners.json"
     closure_path = transaction_dir / "closure.json"
     manifest = load_json(manifest_path) if manifest_path.exists() else {
         "format": 2,
@@ -1149,6 +1375,8 @@ def fetch_spec(
     manifest["release"] = dict(release)
     manifest["project"] = prefix
     manifest["api_base"] = api_base
+    artifact_owners = _load_artifact_owners(artifact_owners_path)
+    _seed_manifest_artifact_owners(artifact_owners, manifest)
 
     release_date = release.get("date") or ""
     tx_id = transaction.get("id") or ""
@@ -1346,6 +1574,12 @@ def fetch_spec(
             *(build_roots + evidence_roots),
             own=prefix,
         )
+        if _seed_artifact_owners(
+            artifact_owners,
+            _parse(project_config) if project_config else None,
+            *(build_roots + evidence_roots),
+        ) or artifact_owners:
+            _write_artifact_owners(artifact_owners_path, artifact_owners)
 
         tx_root = _parse(tx_path) if tx_path else None
         if tx_root is not None:
@@ -1367,6 +1601,9 @@ def fetch_spec(
 
         def save_manifest() -> None:
             write_json(manifest_path, manifest)
+
+        def save_artifact_owners() -> None:
+            _write_artifact_owners(artifact_owners_path, artifact_owners)
 
         def crawl_build(queue: deque[Want], embedded_roots: list[ET.Element | None]) -> None:
             nonlocal resources_considered, budget_exhausted, phase
@@ -1424,6 +1661,8 @@ def fetch_spec(
                             save_manifest=save_manifest,
                             main_project=prefix, release=release_date,
                             api_base=api_base, source_hints=source_hints,
+                            artifact_owners=artifact_owners,
+                            save_artifact_owners=save_artifact_owners,
                         )
                     except RequestBudgetExceeded:
                         for pending in reversed(rows[row_index:]):
@@ -1438,6 +1677,8 @@ def fetch_spec(
                         continue
                     root = _parse(path)
                     if root is not None:
+                        if _seed_artifact_owners(artifact_owners, root):
+                            save_artifact_owners()
                         inventory = _inventory(root)
                         have_by_role["build"].update(inventory)
                         have_by_role["evidence"].update(inventory)
@@ -1486,6 +1727,8 @@ def fetch_spec(
                         save_manifest=save_manifest,
                         main_project=prefix, release=release_date,
                         api_base=api_base, source_hints=source_hints,
+                        artifact_owners=artifact_owners,
+                        save_artifact_owners=save_artifact_owners,
                     )
                 except RequestBudgetExceeded:
                     for pending in reversed(rows[row_index:]):
@@ -1499,6 +1742,8 @@ def fetch_spec(
                 if path is not None:
                     root = _parse(path)
                     if root is not None:
+                        if _seed_artifact_owners(artifact_owners, root):
+                            save_artifact_owners()
                         have_by_role["evidence"].update(_inventory(root))
                 # Crucially: no references(root) here. Soft evidence stops at the
                 # directly resolved resource and cannot turn into another crawl.

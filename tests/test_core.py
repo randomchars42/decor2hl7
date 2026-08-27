@@ -156,6 +156,19 @@ class CoreTests(unittest.TestCase):
         self.assertIn("datasetOrTransactionId=9", rows[1]["url"])
         self.assertNotIn("release=", rows[1]["url"])
 
+    def test_reference_project_is_inferred_from_art_decor_link(self) -> None:
+        root = ET.fromstring('''<template>
+          <include ref="1.2.3" flexibility="dynamic"
+            href="https://art-decor.org/exist/apps/api/project/ad1bbr-/template/1.2.3"/>
+          <vocabulary codeSystem="2.16.840.1.113883.5.25"
+            url="https://art-decor.org/exist/apps/api/codesystem/2.16.840.1.113883.5.25?project=ad1bbr-"/>
+        </template>''')
+        rows = hard_references(root)
+        template = next(row for row in rows if row["kind"] == "template")
+        codesystem = next(row for row in rows if row["kind"] == "codesystem")
+        self.assertEqual(template["project"], "ad1bbr-")
+        self.assertEqual(codesystem["project"], "ad1bbr-")
+
 
     def test_model_separates_groups_and_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -697,6 +710,161 @@ class CoreTests(unittest.TestCase):
             _candidate_projects(stale, {"1.2.3": "aktin-"}, ["aktin-", "pmp-"]),
             ["aktin-", "old-"],
         )
+
+    def test_cached_artifact_owner_precedes_repository_probe(self) -> None:
+        want = {
+            "kind": "codesystem",
+            "id": "2.16.840.1.113883.5.25",
+            "effective_date": "",
+            "project": "",
+        }
+        self.assertEqual(
+            _candidate_projects(
+                want, {}, ["aktin-", "pmp-", "ad1bbr-"],
+                {"codesystem:2.16.840.1.113883.5.25@dynamic": "ad1bbr-"},
+            ),
+            ["ad1bbr-", "aktin-", "pmp-"],
+        )
+
+    def test_cached_owner_never_overrides_oid_owner(self) -> None:
+        want = {
+            "kind": "codesystem",
+            "id": "1.2.3.4",
+            "effective_date": "2020-01-01",
+            "project": "",
+        }
+        self.assertEqual(
+            _candidate_projects(
+                want, {"1.2.3": "aktin-"}, ["aktin-", "ad1bbr-"],
+                {"codesystem:1.2.3.4@2020-01-01": "ad1bbr-"},
+            ),
+            ["aktin-"],
+        )
+
+    def test_cached_owner_is_effective_date_specific(self) -> None:
+        owners = {
+            "codesystem:2.16.840.1.113883.5.25@2019-12-30": "ad1bbr-",
+        }
+        historical = {
+            "kind": "codesystem",
+            "id": "2.16.840.1.113883.5.25",
+            "effective_date": "2019-12-30",
+            "project": "",
+        }
+        current = {**historical, "effective_date": "2024-01-01"}
+        repositories = ["aktin-", "pmp-", "ad1bbr-"]
+        self.assertEqual(
+            _candidate_projects(historical, {}, repositories, owners),
+            ["ad1bbr-", "aktin-", "pmp-"],
+        )
+        self.assertEqual(
+            _candidate_projects(current, {}, repositories, owners),
+            repositories,
+        )
+
+    def test_format_one_owner_cache_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact-owners.json"
+            path.write_text(
+                '{"format":1,"owners":{"codesystem:1.2.3":"wrong-"}}',
+                encoding="utf-8",
+            )
+            from decor2hl7.retrieval.fetch import _load_artifact_owners
+            self.assertEqual(_load_artifact_owners(path), {})
+
+    def test_source_reference_redirects_before_wrong_project_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            manifest = {"resources": {}}
+            owners: dict[str, str] = {}
+            calls: list[str] = []
+            want = {
+                "kind": "codesystem",
+                "id": "2.16.840.1.113883.5.25",
+                "effective_date": "",
+                "project": "aktin-",
+            }
+
+            def fake_get(url: str, **_: object) -> bytes:
+                calls.append(url)
+                path = api_path(url)
+                if "$extract" not in path and "prefix=aktin-" in url:
+                    return (
+                        b'<return><codeSystem id="2.16.840.1.113883.5.25" '
+                        b'href="https://art-decor.org/exist/apps/api/project/ad1bbr-/codesystem/'
+                        b'2.16.840.1.113883.5.25"/></return>'
+                    )
+                if "$extract" in path and "project=aktin-" in url:
+                    raise AssertionError("wrong-project analysis must be skipped")
+                return (
+                    b'<return><codeSystem id="2.16.840.1.113883.5.25" '
+                    b'effectiveDate="2020-01-01T00:00:00"><concept code="N"/></codeSystem></return>'
+                )
+
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
+                path = _fetch_want(
+                    release_dir, manifest, want,
+                    owners={}, repositories=["aktin-", "pmp-", "ad1bbr-"],
+                    language="de-DE", ipv4=True, retry_missing=False,
+                    artifact_owners=owners,
+                )
+
+            self.assertIsNotNone(path)
+            self.assertEqual(
+                owners["codesystem:2.16.840.1.113883.5.25@dynamic"], "ad1bbr-"
+            )
+            self.assertFalse(any(
+                "$extract" in api_path(url) and "project=aktin-" in url
+                for url in calls
+            ))
+
+    def test_source_link_does_not_redirect_known_oid_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            manifest = {"resources": {}}
+            owner_index: dict[str, str] = {}
+            calls: list[str] = []
+            want = {
+                "kind": "codesystem",
+                "id": "1.2.3.4",
+                "effective_date": "",
+                "project": "",
+            }
+
+            def fake_get(url: str, **_: object) -> bytes:
+                calls.append(url)
+                path = api_path(url)
+                if "$extract" not in path:
+                    return (
+                        b'<return><codeSystem id="1.2.3.4" '
+                        b'href="https://art-decor.org/exist/apps/api/project/ad1bbr-/codesystem/1.2.3.4" '
+                        b'effectiveDate="2020-01-01T00:00:00"/></return>'
+                    )
+                if "project=aktin-" in url:
+                    return (
+                        b'<return><codeSystem id="1.2.3.4" '
+                        b'effectiveDate="2020-01-01T00:00:00"><concept code="A"/></codeSystem></return>'
+                    )
+                raise AssertionError("known OID owner must not redirect to BBR")
+
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
+                path = _fetch_want(
+                    release_dir, manifest, want,
+                    owners={"1.2.3": "aktin-"},
+                    repositories=["aktin-", "ad1bbr-"],
+                    language="de-DE", ipv4=True, retry_missing=False,
+                    artifact_owners=owner_index,
+                )
+
+            self.assertIsNotNone(path)
+            self.assertTrue(any(
+                "$extract" in api_path(url) and "project=aktin-" in url
+                for url in calls
+            ))
+            self.assertFalse(any(
+                "$extract" in api_path(url) and "project=ad1bbr-" in url
+                for url in calls
+            ))
 
     def test_soft_evidence_resolution_is_non_recursive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
