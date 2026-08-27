@@ -55,12 +55,15 @@ def _safe_key(value: str) -> str:
     return f"{base}--{digest}"
 
 
-def _network(root: Path, ipv6_override: bool = False) -> tuple[str, str, bool]:
+def _network(root: Path, ipv6_override: bool = False) -> tuple[str, str, bool, str]:
+    from .retrieval.client import DEFAULT_API_BASE
+
     settings = load_settings(root)
     prefix = str(settings.get("prefix") or "aktin-")
     language = str(settings.get("language") or "de-DE")
     configured = bool((settings.get("network") or {}).get("ipv4", True))
-    return prefix, language, False if ipv6_override else configured
+    api_base = str((settings.get("api") or {}).get("base_url") or DEFAULT_API_BASE)
+    return prefix, language, False if ipv6_override else configured, api_base
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -88,11 +91,13 @@ def _print_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
 
 
 def cmd_list_versions(args: argparse.Namespace) -> int:
-    from .decor.catalog import releases
+    from .retrieval.catalog import releases
 
     root = _root(args)
-    prefix, _, ipv4 = _network(root, args.ipv6)
-    rows = _filter(releases(prefix, ipv4=ipv4), args.filter)
+    prefix, _, ipv4, api_base = _network(root, args.ipv6)
+    rows = _filter(
+        releases(prefix, ipv4=ipv4, base_url=api_base), args.filter
+    )
     selected = load_settings(root).get("release") or {}
     table = [
         (row["key"], "*" if row["key"] == selected.get("key") else "",
@@ -106,11 +111,13 @@ def cmd_list_versions(args: argparse.Namespace) -> int:
 
 
 def cmd_set_version(args: argparse.Namespace) -> int:
-    from .decor.catalog import releases, select_release
+    from .retrieval.catalog import releases, select_release
 
     root = _root(args)
-    prefix, _, ipv4 = _network(root, args.ipv6)
-    row = select_release(releases(prefix, ipv4=ipv4), args.identifier)
+    prefix, _, ipv4, api_base = _network(root, args.ipv6)
+    row = select_release(
+        releases(prefix, ipv4=ipv4, base_url=api_base), args.identifier
+    )
     set_release(root, row)
     _say(f"selected release: {row['key']} ({row['date']})")
     _say("transaction selection cleared; run `decor2hl7 list-transactions`")
@@ -118,11 +125,14 @@ def cmd_set_version(args: argparse.Namespace) -> int:
 
 
 def _transaction_rows(root: Path, ipv6: bool = False) -> list[dict[str, str]]:
-    from .decor.catalog import transactions
+    from .retrieval.catalog import transactions
 
     release = selected_release(root)
-    prefix, language, ipv4 = _network(root, ipv6)
-    return transactions(prefix, str(release["date"]), language=language, ipv4=ipv4)
+    prefix, language, ipv4, api_base = _network(root, ipv6)
+    return transactions(
+        prefix, str(release["date"]), language=language, ipv4=ipv4,
+        base_url=api_base,
+    )
 
 
 def cmd_list_transactions(args: argparse.Namespace) -> int:
@@ -141,7 +151,7 @@ def cmd_list_transactions(args: argparse.Namespace) -> int:
 
 
 def cmd_set_transaction(args: argparse.Namespace) -> int:
-    from .decor.catalog import select_transaction
+    from .retrieval.catalog import select_transaction
 
     root = _root(args)
     row = select_transaction(_transaction_rows(root, args.ipv6), args.identifier)
@@ -154,12 +164,13 @@ def cmd_set_transaction(args: argparse.Namespace) -> int:
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
-    from .decor.fetch import fetch_spec
+    from .retrieval.fetch import fetch_spec
+    from .retrieval.sources import load_source_hints
 
     root = _root(args)
     release = selected_release(root)
     transaction = selected_transaction(root)
-    prefix, language, ipv4 = _network(root, args.ipv6)
+    prefix, language, ipv4, api_base = _network(root, args.ipv6)
     result = fetch_spec(
         release_spec_dir(root, release),
         transaction_spec_dir(root, release, transaction),
@@ -171,6 +182,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         retry_missing=args.retry_missing,
         max_requests=args.max_requests,
         progress=_say,
+        api_base=api_base,
+        source_hints=load_source_hints(root / "config" / "sources.json"),
     )
     closure = result["closure"]
     summary = closure.get("summary", {})
@@ -191,26 +204,25 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
 
 def _build_inputs(root: Path) -> tuple[Path, list[Path], list[Path], list[Path], list[Path]]:
-    from .decor.fetch import closure_paths
+    from .retrieval.fetch import closure_paths
 
     release = selected_release(root)
     transaction = selected_transaction(root)
     release_dir = release_spec_dir(root, release)
     tx_dir = transaction_spec_dir(root, release, transaction)
     transaction_xml = _require(tx_dir / "transaction.xml", "run `decor2hl7 fetch` first")
-    project = _require(release_dir / "project.xml", "run `decor2hl7 fetch` first")
     build_resources = closure_paths(release_dir, tx_dir, "build")
     evidence_resources = closure_paths(release_dir, tx_dir, "evidence")
     model_resources = [
         path for path in build_resources
-        if path.parent.name in {"datasets", "valuesets", "concepts"}
+        if path.parent.name in {"datasets", "valuesets", "codesystems", "concepts"}
     ]
-    templates = [project] + [path for path in build_resources if path.parent.name == "templates"]
+    templates = [path for path in build_resources if path.parent.name == "templates"]
     evidence = release_dir / "project-evidence.xml"
     fallback_templates = [path for path in evidence_resources if path.parent.name == "templates"]
     if evidence.exists():
         fallback_templates.insert(0, evidence)
-    mapping = [transaction_xml, project]
+    mapping = [transaction_xml]
     if evidence.exists():
         mapping.append(evidence)
     mapping.extend(evidence_resources)
@@ -232,7 +244,10 @@ def cmd_build(args: argparse.Namespace) -> int:
     transaction_xml, model_resources, templates, fallback_templates, mapping_xml = _build_inputs(root)
     model_dir = transaction_model_dir(root, release, transaction)
     model_dir.mkdir(parents=True, exist_ok=True)
-    model = write_model(transaction_xml, model_resources, model_dir, terminology_paths=[templates[0]])
+    model = write_model(
+        transaction_xml, model_resources, model_dir,
+        terminology_paths=model_resources,
+    )
     code_mapping = write_code_mapping(model_dir, model)
     cda = write_cda(
         templates, model_dir, model, fallback_templates,
@@ -386,7 +401,7 @@ def _runtime_files(root: Path) -> tuple[
 
 def cmd_check(args: argparse.Namespace) -> int:
     from . import validate
-    from .decor.fetch import verify_manifest
+    from .retrieval.fetch import verify_manifest
 
     root = _root(args)
     release = selected_release(root)

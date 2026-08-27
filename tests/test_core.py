@@ -3,7 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+import json
 from pathlib import Path
+from urllib.parse import urlsplit
 from unittest.mock import patch
 
 from decor2hl7 import assertions, cda, data, state, validate
@@ -11,11 +13,13 @@ from decor2hl7.build import mapping
 from decor2hl7.build.mapping import cda_mapping_proposal
 from decor2hl7.build.model import compile_model
 from decor2hl7.build.target import compile_cda
-from decor2hl7.decor.catalog import parse_releases, parse_transactions, transactions
-from decor2hl7.decor.fetch import (
-    RequestBudgetExceeded, _candidate_prefixes, _evidence_references, _fetch_want,
+from decor2hl7.retrieval.catalog import parse_releases, parse_transactions, transactions
+from decor2hl7.retrieval.fetch import (
+    RequestBudgetExceeded, _candidate_projects, _evidence_references, _fetch_want,
     _inventory, fetch_spec, hard_references, soft_references,
 )
+from decor2hl7.retrieval.api import REQUIRED_PATHS, artifact_representations
+from decor2hl7.retrieval.sources import apply_source_hint, load_source_hints
 from decor2hl7.workspace import load_json
 from decor2hl7.workspace import (
     init_workspace, input_dir, load_json, release_spec_dir, set_release, set_transaction,
@@ -32,6 +36,17 @@ TRANSACTION = {
     "status": "active",
     "name": "Notaufnahmeregister Transitionsversion",
 }
+
+
+API_CONTRACT = json.dumps({
+    "openapi": "3.0.3",
+    "info": {"title": "Test API", "version": "3.10.2"},
+    "paths": {path: {} for path in REQUIRED_PATHS},
+}).encode()
+
+
+def api_path(url: str) -> str:
+    return urlsplit(url).path
 
 
 class CoreTests(unittest.TestCase):
@@ -74,17 +89,72 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(rows[0]["key"], "notaufnahmeregister--60")
         self.assertEqual(transaction_key(rows[0]["name"], rows[0]["id"]), rows[0]["key"])
 
-    def test_transaction_catalog_prefers_project_index_transaction_view(self) -> None:
+    def test_transaction_catalog_uses_current_api_transaction_view(self) -> None:
         calls: list[str] = []
         def fake_get(url: str, **_: object) -> bytes:
             calls.append(url)
             return b'<return><transaction id="1.2.3" effectiveDate="2026-01-01T00:00:00" versionLabel="2026"><name>Example</name></transaction></return>'
-        with patch("decor2hl7.decor.catalog.get", side_effect=fake_get):
+        with patch("decor2hl7.retrieval.catalog.get", side_effect=fake_get):
             rows = transactions("aktin-", "2026-04-27T18:50:33", ipv4=True)
         self.assertEqual(rows[0]["id"], "1.2.3")
         self.assertEqual(len(calls), 1)
-        self.assertIn("ProjectIndex", calls[0])
-        self.assertIn("view=t", calls[0])
+        self.assertTrue(api_path(calls[0]).endswith("/transaction"))
+        self.assertIn("project=aktin-", calls[0])
+        self.assertIn("release=2026-04-27T18%3A50%3A33", calls[0])
+
+    def test_template_api_retains_source_and_expanded_analysis_forms(self) -> None:
+        rows = artifact_representations(
+            {
+                "kind": "template", "id": "1.2.3",
+                "effective_date": "2025-05-01T00:00:00",
+            },
+            project="aktin-", main_project="aktin-", release=RELEASE["date"],
+            language="de-DE",
+        )
+        self.assertEqual([row["form"] for row in rows], ["source", "analysis"])
+        self.assertIn("/template/1.2.3/2025-05-01T00%3A00%3A00/$extract", rows[0]["url"])
+        self.assertNotIn("tree=expand", rows[0]["url"])
+        self.assertIn("tree=expand", rows[1]["url"])
+        self.assertFalse(any("/decor/services/" in row["url"] for row in rows))
+        self.assertFalse(any("expandedxml" in row["url"] for row in rows))
+
+    def test_external_source_hint_supplies_exact_repository_identity(self) -> None:
+        resolved = apply_source_hint(
+            {
+                "kind": "template",
+                "id": "1.3.6.1.4.1.19376.1.9.1.3.1",
+                "effective_date": "",
+                "project": "",
+            },
+            load_source_hints(),
+        )
+        self.assertEqual(resolved["project"], "ch-pharm-")
+        self.assertEqual(resolved["effective_date"], "2019-08-27T16:13:43")
+        self.assertTrue(resolved["api_base"].endswith("/exist/apps/api"))
+
+    def test_codesystem_and_concept_context_references_are_typed(self) -> None:
+        root = ET.fromstring('''<valueSet id="vs">
+          <sourceCodeSystem id="1.2.3" effectiveDate="2020-01-01" prefix="term-"/>
+          <concept code="A" codeSystem="1.2.3" prefix="term-"/>
+          <concept id="c"><inherit ref="9.1" effectiveDate="2021-01-01"
+            datasetId="9" datasetEffectiveDate="2021-01-01" prefix="ext-"/></concept>
+        </valueSet>''')
+        hard = hard_references(root)
+        code_systems = [row for row in hard if row["kind"] == "codesystem"]
+        self.assertEqual(len(code_systems), 1)
+        code_system = code_systems[0]
+        self.assertEqual(
+            (code_system["id"], code_system["effective_date"], code_system["project"]),
+            ("1.2.3", "2020-01-01", "term-"),
+        )
+        concept = next(row for row in soft_references(root) if row["kind"] == "concept")
+        rows = artifact_representations(
+            concept, project="ext-", main_project="aktin-", release=RELEASE["date"],
+            language="de-DE",
+        )
+        self.assertIn("transactionId=9", rows[0]["url"])
+        self.assertIn("datasetOrTransactionId=9", rows[1]["url"])
+        self.assertNotIn("release=", rows[1]["url"])
 
 
     def test_model_separates_groups_and_fields(self) -> None:
@@ -182,20 +252,25 @@ class CoreTests(unittest.TestCase):
 
             def fake_get(url: str, **_: object) -> bytes:
                 calls.append(url)
-                if "ProjectIndex" in url:
+                path = api_path(url)
+                if path.endswith("/modules/library/api.json"):
+                    return API_CONTRACT
+                if path.endswith("/project"):
                     return b'<return><project id="9.9" prefix="ext-"/></return>'
-                if "RetrieveTransaction" in url:
+                if "/transaction/t/" in path:
                     return b'<dataset id="d" transactionId="t" templateId="doc"><concept id="c" shortName="x" type="group"><name>X</name><contains ref="old" datasetId="9.9.1" datasetEffectiveDate="2020-01-01" prefix="ext-"/></concept></dataset>'
-                if "RetrieveProject" in url:
+                if path.endswith("/project/aktin-/$extract"):
                     return b'<project><transaction id="t"><representingTemplate ref="doc"/></transaction><dataset id="9.9.1" effectiveDate="2020-01-01"><concept id="old" shortName="old" type="item"><name>Old embedded</name></concept></dataset></project>'
-                if "RetrieveDataSet" in url:
+                if path.endswith("/project/aktin-"):
+                    return b'<project><buildingBlockRepository ident="ext-"/></project>'
+                if "/dataset/9.9.1/" in path:
                     return b'<dataset id="9.9.1" effectiveDate="2020-01-01"><concept id="old" shortName="old" type="item"><name>Old</name></concept></dataset>'
-                if "RetrieveTemplate" in url:
+                if "/template/doc/" in path:
                     return b'<return><template id="doc" effectiveDate="2026-01-01" name="Doc"><element name="hl7:ClinicalDocument" id="root"/></template></return>'
                 raise AssertionError(url)
 
             progress: list[str] = []
-            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
                 result = fetch_spec(
                     release_dir, tx_dir, prefix="aktin-",
                     release=RELEASE, transaction={**TRANSACTION, "id": "t"},
@@ -205,15 +280,15 @@ class CoreTests(unittest.TestCase):
             self.assertTrue((tx_dir / "transaction.xml").exists())
             self.assertTrue((tx_dir / "closure.json").exists())
             self.assertTrue(any(path.parent.name == "datasets" for path in release_dir.rglob("*.xml")))
-            self.assertTrue(any("RetrieveDataSet" in url for url in calls))
+            self.assertTrue(any("/dataset/9.9.1/" in api_path(url) for url in calls))
             self.assertTrue(any(path.parent.name == "templates" for path in release_dir.rglob("*.xml")))
             self.assertFalse(result["closure"]["truncated"])
-            self.assertTrue(any("release project" in line and "requesting" in line for line in progress))
+            self.assertTrue(any("API contract" in line and "requesting" in line for line in progress))
             self.assertTrue(any("dataset 9.9.1 @ 2020-01-01" in line for line in progress))
             self.assertTrue(any(line.startswith("fetch: complete:") for line in progress))
 
             before = len(calls)
-            with patch("decor2hl7.decor.fetch.get", side_effect=AssertionError("cache miss")):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=AssertionError("cache miss")):
                 fetch_spec(
                     release_dir, tx_dir, prefix="aktin-",
                     release=RELEASE, transaction={**TRANSACTION, "id": "t"},
@@ -229,27 +304,30 @@ class CoreTests(unittest.TestCase):
 
             def fake_get(url: str, **_: object) -> bytes:
                 calls.append(url)
-                if "ProjectIndex" in url:
+                path = api_path(url)
+                if path.endswith("/modules/library/api.json"):
+                    return API_CONTRACT
+                if path.endswith("/project"):
                     return b"<return/>"
-                if "RetrieveTransaction" in url:
+                if "/transaction/t/" in path:
                     return b'<transaction id="t"><representingTemplate ref="doc" flexibility="2026-01-15T00:00:00"/></transaction>'
-                if "RetrieveProject" in url and "version=" in url:
-                    return b'<project><transaction id="t"><representingTemplate ref="doc" flexibility="2026-01-15T00:00:00"/></transaction></project>'
-                if "RetrieveProject" in url:
+                if path.endswith("/project/aktin-/$extract"):
                     return b'<project><template id="doc" effectiveDate="2026-01-15T00:00:00" name="Doc"><element name="hl7:ClinicalDocument" id="root"/></template></project>'
-                if "RetrieveTemplate" in url:
+                if path.endswith("/project/aktin-"):
+                    return b'<project/>'
+                if "/template/doc/" in path:
                     raise AssertionError(f"template should have been satisfied by project-evidence.xml: {url}")
                 raise AssertionError(url)
 
             progress: list[str] = []
-            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
                 result = fetch_spec(
                     release_dir, tx_dir, prefix="aktin-",
                     release=RELEASE, transaction={**TRANSACTION, "id": "t", "key": "tx"},
                     max_requests=20, progress=progress.append,
                 )
 
-            self.assertFalse(any("RetrieveTemplate" in url for url in calls))
+            self.assertFalse(any("/template/doc/" in api_path(url) for url in calls))
             self.assertFalse(result["closure"]["errors"])
             self.assertTrue(any(
                 "template doc @ 2026-01-15T00:00:00" in line
@@ -265,32 +343,35 @@ class CoreTests(unittest.TestCase):
 
             def fake_get(url: str, **_: object) -> bytes:
                 calls.append(url)
-                if "ProjectIndex" in url:
+                path = api_path(url)
+                if path.endswith("/modules/library/api.json"):
+                    return API_CONTRACT
+                if path.endswith("/project"):
                     return b"<return/>"
-                if "RetrieveTransaction" in url:
+                if "/transaction/t/" in path:
                     return b'<transaction id="t"><representingTemplate ref="doc" flexibility="dynamic"/></transaction>'
-                if "RetrieveProject" in url and "version=" in url:
-                    return b'<project><transaction id="t"><representingTemplate ref="doc" flexibility="dynamic"/></transaction></project>'
-                if "RetrieveProject" in url:
+                if path.endswith("/project/aktin-/$extract"):
                     return (
                         b'<project>'
                         b'<template id="doc" effectiveDate="2026-02-01T00:00:00" name="ReleasedDoc"><element name="hl7:ClinicalDocument" id="released"/></template>'
                         b'<template id="doc" effectiveDate="2026-05-01T00:00:00" name="FutureDraft"><element name="hl7:ClinicalDocument" id="future"/></template>'
                         b'</project>'
                     )
-                if "RetrieveTemplate" in url:
+                if path.endswith("/project/aktin-"):
+                    return b'<project/>'
+                if "/template/doc" in path:
                     raise AssertionError(f"template should have been satisfied by project-evidence.xml: {url}")
                 raise AssertionError(url)
 
             progress: list[str] = []
-            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
                 result = fetch_spec(
                     release_dir, tx_dir, prefix="aktin-",
                     release=RELEASE, transaction={**TRANSACTION, "id": "t", "key": "tx"},
                     max_requests=20, progress=progress.append,
                 )
 
-            self.assertFalse(any("RetrieveTemplate" in url for url in calls))
+            self.assertFalse(any("/template/doc" in api_path(url) for url in calls))
             self.assertFalse(result["closure"]["errors"])
             evidence_lines = [line for line in progress if "available in main project evidence" in line]
             self.assertTrue(any("2026-02-01T00:00:00" in line for line in evidence_lines))
@@ -302,18 +383,21 @@ class CoreTests(unittest.TestCase):
             tx_dir = release_dir / "transactions" / "tx"
 
             def fake_get(url: str, **_: object) -> bytes:
-                if "ProjectIndex" in url:
+                path = api_path(url)
+                if path.endswith("/modules/library/api.json"):
+                    return API_CONTRACT
+                if path.endswith("/project"):
                     return b"<return/>"
-                if "RetrieveTransaction" in url:
+                if "/transaction/t/" in path:
                     return b'<dataset id="d"><concept id="c"><contains ref="old" datasetId="9.9.1" datasetEffectiveDate="2020-01-01" prefix="ext-"/></concept></dataset>'
-                if "RetrieveProject" in url:
+                if path.endswith("/project/aktin-/$extract") or path.endswith("/project/aktin-"):
                     return b'<project><transaction id="t"/></project>'
-                if "RetrieveDataSet" in url:
+                if "/dataset/9.9.1/" in path:
                     raise KeyboardInterrupt
                 raise AssertionError(url)
 
             progress: list[str] = []
-            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
                 with self.assertRaises(KeyboardInterrupt):
                     fetch_spec(
                         release_dir, tx_dir, prefix="aktin-",
@@ -329,18 +413,18 @@ class CoreTests(unittest.TestCase):
             self.assertTrue((release_dir / "manifest.json").exists())
             self.assertTrue(any("checkpoint saved" in line for line in progress))
             with self.assertRaisesRegex(ValueError, "closure is incomplete"):
-                from decor2hl7.decor.fetch import closure_paths
+                from decor2hl7.retrieval.fetch import closure_paths
                 closure_paths(release_dir, tx_dir)
 
     def test_recursive_request_budget_counts_actual_http_attempts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = {"resources": {}}
-            want = {"kind": "template", "id": "1.2.3", "effective_date": "", "prefix": "first-"}
+            want = {"kind": "template", "id": "1.2.3", "effective_date": "", "project": "first-"}
             budget = {"made": 0, "max": 1}
             def missing(_url: str, **_: object) -> bytes:
                 from urllib.error import HTTPError
                 raise HTTPError(_url, 404, "missing", None, None)
-            with patch("decor2hl7.decor.fetch.get", side_effect=missing):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=missing):
                 with self.assertRaises(RequestBudgetExceeded):
                     _fetch_want(
                         Path(tmp), manifest, want, owners={}, repositories=["first-", "second-"],
@@ -522,9 +606,12 @@ class CoreTests(unittest.TestCase):
                 encoding="utf-8",
             )
             manifest = {"resources": {}}
-            want = {"kind": "template", "id": "1.2.3", "effective_date": "2025-05-01", "prefix": "aktin-"}
+            want = {"kind": "template", "id": "1.2.3", "effective_date": "2025-05-01", "project": "aktin-"}
             progress: list[str] = []
-            with patch("decor2hl7.decor.fetch.get", side_effect=AssertionError("must not download")):
+            with patch(
+                "decor2hl7.retrieval.fetch.get",
+                return_value=target.read_bytes(),
+            ) as mocked:
                 path = _fetch_want(
                     release_dir, manifest, want, owners={}, repositories=["aktin-"],
                     language="de-DE", ipv4=True, retry_missing=False, progress=progress.append,
@@ -534,7 +621,8 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(entry["status"], "ok")
             self.assertEqual(entry["file"], "templates/1.2.3_2025-05-01.xml")
             self.assertTrue(entry["sha256"])
-            self.assertTrue(any("manifest repaired" in line for line in progress))
+            self.assertIn("source", entry["representations"])
+            self.assertEqual(mocked.call_count, 1)
 
     def test_fetch_want_redownloads_checksum_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -552,9 +640,9 @@ class CoreTests(unittest.TestCase):
                     "sha256": "not-the-current-digest",
                 }
             }}
-            want = {"kind": "template", "id": "1.2.3", "effective_date": "2025-05-01", "prefix": "aktin-"}
+            want = {"kind": "template", "id": "1.2.3", "effective_date": "2025-05-01", "project": "aktin-"}
             downloaded = b'<return><template id="1.2.3" effectiveDate="2025-05-01" name="Fresh"/></return>'
-            with patch("decor2hl7.decor.fetch.get", return_value=downloaded) as mocked:
+            with patch("decor2hl7.retrieval.fetch.get", return_value=downloaded) as mocked:
                 path = _fetch_want(
                     release_dir, manifest, want, owners={}, repositories=["aktin-"],
                     language="de-DE", ipv4=True, retry_missing=False,
@@ -567,12 +655,12 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
             manifest = {"resources": {}}
-            want = {"kind": "template", "id": "1.2.3", "effective_date": "", "prefix": "aktin-"}
+            want = {"kind": "template", "id": "1.2.3", "effective_date": "", "project": "aktin-"}
             calls: list[str] = []
             def fake_get(url: str, **_: object) -> bytes:
                 calls.append(url)
                 return b'<return><template id="1.2.3" effectiveDate="2025-05-01T00:00:00" name="T"><element name="hl7:observation"/></template></return>'
-            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
                 path = _fetch_want(release_dir, manifest, want, owners={}, repositories=["aktin-"], language="de-DE", ipv4=True, retry_missing=False)
             entry = manifest["resources"]["template:1.2.3"]
             self.assertEqual(entry["requested_effective_date"], "dynamic")
@@ -580,9 +668,9 @@ class CoreTests(unittest.TestCase):
             assert path is not None
             path.unlink()
             calls.clear()
-            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
                 _fetch_want(release_dir, manifest, want, owners={}, repositories=["aktin-"], language="de-DE", ipv4=True, retry_missing=False)
-            self.assertTrue(any("effectiveDate=2025-05-01" in url for url in calls))
+            self.assertTrue(any("/2025-05-01T00%3A00%3A00/" in url for url in calls))
 
     def test_hard_and_soft_reference_scopes_are_distinct(self) -> None:
         root = ET.fromstring('''<dataset id="current" templateId="doc">
@@ -599,14 +687,14 @@ class CoreTests(unittest.TestCase):
         self.assertEqual({row["id"] for row in soft if row["kind"] == "concept"}, {"old-concept"})
 
     def test_known_owner_stops_broad_repository_probe(self) -> None:
-        want = {"kind": "dataset", "id": "1.2.3.4", "effective_date": "2020-01-01", "prefix": "aktin-"}
+        want = {"kind": "dataset", "id": "1.2.3.4", "effective_date": "2020-01-01", "project": "aktin-"}
         self.assertEqual(
-            _candidate_prefixes(want, {"1.2.3": "aktin-"}, ["aktin-", "pmp-", "hl7de-"]),
+            _candidate_projects(want, {"1.2.3": "aktin-"}, ["aktin-", "pmp-", "hl7de-"]),
             ["aktin-"],
         )
-        stale = {**want, "prefix": "old-"}
+        stale = {**want, "project": "old-"}
         self.assertEqual(
-            _candidate_prefixes(stale, {"1.2.3": "aktin-"}, ["aktin-", "pmp-"]),
+            _candidate_projects(stale, {"1.2.3": "aktin-"}, ["aktin-", "pmp-"]),
             ["aktin-", "old-"],
         )
 
@@ -618,26 +706,29 @@ class CoreTests(unittest.TestCase):
 
             def fake_get(url: str, **_: object) -> bytes:
                 calls.append(url)
-                if "ProjectIndex" in url:
+                path = api_path(url)
+                if path.endswith("/modules/library/api.json"):
+                    return API_CONTRACT
+                if path.endswith("/project"):
                     return b'<return><project id="9" prefix="ext-"/></return>'
-                if "RetrieveTransaction" in url:
+                if "/transaction/t/" in path:
                     return b'<dataset id="d" transactionId="t"><concept id="current"><inherit ref="9.1" effectiveDate="2020-01-01" prefix="ext-"/></concept></dataset>'
-                if "RetrieveProject" in url:
+                if path.endswith("/project/aktin-/$extract") or path.endswith("/project/aktin-"):
                     return b'<project><transaction id="t"/></project>'
-                if "RetrieveConcept" in url and "conceptId=9.1" in url:
+                if "/concept/9.1/" in path:
                     return b'<return><concept id="9.1" effectiveDate="2020-01-01"><inherit ref="9.2" effectiveDate="2019-01-01" prefix="ext-"/></concept></return>'
-                if "RetrieveConcept" in url and "conceptId=9.2" in url:
+                if "/concept/9.2/" in path:
                     raise AssertionError("soft evidence must not recurse")
                 raise AssertionError(url)
 
-            with patch("decor2hl7.decor.fetch.get", side_effect=fake_get):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
                 result = fetch_spec(
                     release_dir, tx_dir, prefix="aktin-",
                     release=RELEASE, transaction={**TRANSACTION, "id": "t", "key": "tx"},
                     max_requests=20,
                 )
-            self.assertTrue(any("RetrieveConcept" in url and "conceptId=9.1" in url for url in calls))
-            self.assertFalse(any("conceptId=9.2" in url for url in calls))
+            self.assertTrue(any("/concept/9.1/" in api_path(url) for url in calls))
+            self.assertFalse(any("/concept/9.2/" in api_path(url) for url in calls))
             self.assertIn("concept:9.1@2020-01-01", result["closure"]["evidence_resources"])
 
 
@@ -645,42 +736,42 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
             manifest = {"resources": {}}
-            want = {"kind": "concept", "id": "1.2.3.4", "effective_date": "2020-01-01", "prefix": "pmp-"}
+            want = {"kind": "concept", "id": "1.2.3.4", "effective_date": "2020-01-01", "project": "pmp-"}
             progress: list[str] = []
 
             def missing(url: str, **_: object) -> bytes:
                 from urllib.error import HTTPError
                 raise HTTPError(url, 404, "missing", None, None)
 
-            with patch("decor2hl7.decor.fetch.get", side_effect=missing):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=missing):
                 self.assertIsNone(_fetch_want(
                     release_dir, manifest, want, owners={"1.2.3": "pmp-"}, repositories=["pmp-", "hl7de-"],
                     language="de-DE", ipv4=True, retry_missing=False, progress=progress.append,
                 ))
             failure = next(line for line in progress if "HTTP 404" in line)
-            self.assertEqual(failure, "fetch: concept 1.2.3.4 @ 2020-01-01: HTTP 404 via pmp-")
+            self.assertEqual(failure, "fetch: concept 1.2.3.4 @ 2020-01-01: source HTTP 404 via pmp-")
             self.assertFalse(any("trying next source" in line for line in progress))
 
     def test_settled_missing_is_persisted_and_reused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
             manifest = {"resources": {}}
-            want = {"kind": "dataset", "id": "1.2.3.4", "effective_date": "2020-01-01", "prefix": "aktin-"}
+            want = {"kind": "dataset", "id": "1.2.3.4", "effective_date": "2020-01-01", "project": "aktin-"}
             persisted: list[dict[str, object]] = []
             def save() -> None:
                 persisted.append(dict(manifest["resources"]["dataset:1.2.3.4@2020-01-01"]))
             def missing(url: str, **_: object) -> bytes:
                 from urllib.error import HTTPError
                 raise HTTPError(url, 404, "missing", None, None)
-            with patch("decor2hl7.decor.fetch.get", side_effect=missing) as mocked:
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=missing) as mocked:
                 self.assertIsNone(_fetch_want(
                     release_dir, manifest, want, owners={"1.2.3": "aktin-"}, repositories=["aktin-", "pmp-"],
                     language="de-DE", ipv4=True, retry_missing=False, save_manifest=save,
                 ))
-            self.assertEqual(mocked.call_count, 1)
+            self.assertEqual(mocked.call_count, 2)
             self.assertTrue(persisted)
             self.assertTrue(manifest["resources"]["dataset:1.2.3.4@2020-01-01"]["settled"])
-            with patch("decor2hl7.decor.fetch.get", side_effect=AssertionError("known missing must not retry")):
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=AssertionError("known missing must not retry")):
                 self.assertIsNone(_fetch_want(
                     release_dir, manifest, want, owners={"1.2.3": "aktin-"}, repositories=["aktin-", "pmp-"],
                     language="de-DE", ipv4=True, retry_missing=False,

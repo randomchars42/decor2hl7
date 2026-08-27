@@ -68,16 +68,19 @@ state/
 
 spec/
 └── 2026.1.2/
+    ├── api.json
     ├── manifest.json
-    ├── project.xml
-    ├── project-evidence.xml
-    ├── project-index.xml
+    ├── project.xml                 # project configuration
+    ├── project-evidence.xml        # live analysis evidence only
+    ├── project-directory.xml
     ├── datasets/
     ├── concepts/
     ├── templates/
     ├── valuesets/
+    ├── codesystems/
     └── transactions/
         └── notaufnahmeregister--60/
+            ├── transaction.source.xml
             ├── transaction.xml
             └── closure.json
 
@@ -90,6 +93,7 @@ model/
         └── *.md
 
 config/
+├── sources.json                    # optional repository-hint overrides
 └── 2026.1.2/
     ├── site.json
     └── notaufnahmeregister--60/
@@ -111,8 +115,8 @@ The input root is passed to data-consuming commands with `--input PATH`, or set 
 
 Relative source filenames in `site.json` are resolved below that root. The input path is diagnostic provenance only and is never part of sent-state fingerprints. `init` does not create or own a `raw/` directory.
 
-The **release is the acquisition/cache scope**. Shared datasets/templates/value
-sets/concepts are downloaded once per release. The **transaction is the
+The **release is the acquisition/cache scope**. Shared datasets, templates,
+value sets, code systems, and concepts are downloaded once per release. The **transaction is the
 model/config/output scope**. `closure.json` records which shared resources a
 transaction actually uses.
 
@@ -126,35 +130,44 @@ still detects unchanged/corrected data.
 `fetch` consumes the already selected release and transaction; it contains no
 selection logic.
 
-It downloads the pinned project, selected transaction, a global project index,
-and one unpinned snapshot of the **selected/main project only** (normally
-`aktin-`) used **only as mapping evidence**. Whole unpinned external building-
-block projects are never downloaded. It then recursively follows typed
-references to:
+It validates the server capabilities from its OpenAPI description and uses only
+the current API below `/exist/apps/api`; the sunsetted Release-2 `Retrieve*`
+services are not retained as fallbacks. It downloads the selected transaction,
+project configuration, global project directory, and one live extract of the
+**selected/main project only** (normally `aktin-`) used **only as mapping
+evidence**. Whole external building-block projects are never downloaded. It
+then recursively follows typed references to datasets, templates, value sets,
+code systems, and (where needed) individual concepts.
 
-- datasets (`RetrieveDataSet`)
-- templates (`RetrieveTemplate`, `expandedxml`)
-- value sets (`RetrieveValueSet`)
-- individual concepts (`RetrieveConcept`) only when no containing dataset is
-  available
+The selected transaction and exact recursively resolved artifact revisions are
+build truth. For templates, value sets, and code systems, both a source form and
+an analysis form are retained. Template analysis uses the API's expanded tree
+(`$extract?tree=expand`); intensional value sets also request `$expand` when
+available. Source files remain provenance/debugging material, while analysis
+files are compiler input. The global project directory is used to resolve the
+owning project for OIDs when possible, avoiding repeated guessing and handling
+stale project metadata in historical links.
 
-Whole datasets are preferred over individual concept requests. A global
-`ProjectIndex` is used to resolve the owning prefix for OIDs when possible,
-which avoids repeated guessing and handles stale prefixes in historical links.
 HTTP 200 responses containing an empty `<return/>` are treated as not-found.
 Known terminal failures are recorded in `manifest.json` and skipped on later
 runs unless `--retry-missing` is given.
 
-The pinned project/transaction define build truth. The live main-project file is
-read directly for local history and associations, while external evidence is
-recursively fetched only for concepts/templates already relevant to the selected
-transaction. `project-evidence.xml` may supply a missing historical template
-definition only as a fallback: primary pinned/downloaded definitions always win,
-and fallback definitions newer than the selected release are ignored.
+The live main-project file is read directly for local history and associations,
+while external evidence is fetched only for concepts/templates already relevant
+to the selected transaction. `project-evidence.xml` may supply a missing
+historical template definition only as a fallback: exact downloaded definitions
+always win, and fallback definitions newer than the selected release are ignored.
+
+Known cross-project references are data-driven. The bundled source catalog, plus
+an optional `config/sources.json` override with the same shape, can supply an API
+base, project, and exact effective date that an XML reference omits. Once the
+source is resolved, recursive template analysis is identical for local and
+external artifacts; no template-specific special case exists in the compiler.
 
 Dynamic external references are frozen after their first resolution: the
 manifest records both the requested `dynamic` binding and the resolved
-`effectiveDate`, and a missing cache file is refetched using that resolved date.
+`effectiveDate`, project, API base, source and expanded representation URLs, and
+checksums. A missing cache file is refetched using that exact resolved date.
 `--max-requests` limits actual recursive HTTP attempts rather than merely logical
 resource count.
 

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "artifacts": {
+    "template:1.3.6.1.4.1.19376.1.9.1.3.1": {
+      "api_base": "https://art-decor.org/exist/apps/api",
+      "project": "ch-pharm-",
+      "effective_date": "2019-08-27T16:13:43",
+      "publication_url": "https://ehealthsuisse.art-decor.org/cdachemed-html-20220705T094514/tmp-1.3.6.1.4.1.19376.1.9.1.3.1-2019-08-27T161343.html"
+    }
+  }
+}

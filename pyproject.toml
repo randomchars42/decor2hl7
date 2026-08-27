@@ -19,4 +19,4 @@ where = ["src"]
 include = ["decor2hl7*"]
 
 [tool.setuptools.package-data]
-decor2hl7 = ["py.typed"]
+decor2hl7 = ["py.typed", "retrieval/*.json"]

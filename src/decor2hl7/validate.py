@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import xml.etree.ElementTree as ET
 
 from .assertions import evaluate as evaluate_assertion
-from .decor.xml import local, parse_file
+from .retrieval.xml import local, parse_file
 from .semantics import direct_compatibility, transformed_compatibility, identifier_root_for_target, valid_oid
 from .transforms import mapping_rules, selected_targets, validate_transform
 

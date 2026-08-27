@@ -1,4 +1,4 @@
-"""HTTP access to ART-DECOR.
+"""Small HTTP client used while acquiring specification artifacts.
 
 ART-DECOR is intentionally accessed through IPv4 by default.  The IPv6 route
 used during development was dramatically slower.  The override is scoped to
@@ -18,14 +18,26 @@ import urllib.request
 from .. import __version__
 from typing import Any
 
-SERVER = "https://art-decor.org/decor/services"
+DEFAULT_API_BASE = "https://art-decor.org/exist/apps/api"
 RETRY_STATUS = {429, 500, 502, 503, 504}
 FINAL_STATUS = {400, 401, 403, 404, 405, 410}
 
 
-def build_url(action: str, **params: str | None) -> str:
+def build_url(
+    path: str,
+    *,
+    base_url: str = DEFAULT_API_BASE,
+    **params: str | bool | int | None,
+) -> str:
+    """Build a URL below a current API base.
+
+    Path segments containing artifact identifiers or effective dates are
+    quoted by :mod:`decor2hl7.retrieval.api`; this function deliberately only
+    owns base/path joining and query encoding.
+    """
     query = urllib.parse.urlencode({key: value for key, value in params.items() if value})
-    return f"{SERVER}/{action}?{query}"
+    url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+    return f"{url}?{query}" if query else url
 
 
 def _connect_ipv4(
@@ -89,13 +101,14 @@ def get(
     retries: int = 3,
     delay: float = 0.5,
     ipv4: bool = True,
+    accept: str = "application/xml",
 ) -> bytes:
     agent = f"decor2hl7/{__version__}"
     contact = os.environ.get("DECOR2HL7_CONTACT")
     if contact:
         agent += f" contact:{contact}"
     request = urllib.request.Request(
-        url, headers={"User-Agent": agent, "Accept": "application/xml"}
+        url, headers={"User-Agent": agent, "Accept": accept}
     )
     transport = opener(ipv4)
     last: Exception | None = None

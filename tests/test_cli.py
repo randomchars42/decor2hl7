@@ -23,12 +23,12 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.assertEqual(main(["--root", str(root), "init"]), 0)
-            with patch("decor2hl7.decor.catalog.releases", return_value=RELEASES):
+            with patch("decor2hl7.retrieval.catalog.releases", return_value=RELEASES):
                 self.assertEqual(main(["--root", str(root), "set-version", "2026.1.2"]), 0)
             settings = load_json(root / "aktin.json")
             self.assertEqual(settings["release"]["key"], "2026.1.2")
             self.assertIsNone(settings["transaction"])
-            with patch("decor2hl7.decor.catalog.transactions", return_value=TRANSACTIONS):
+            with patch("decor2hl7.retrieval.catalog.transactions", return_value=TRANSACTIONS):
                 self.assertEqual(main(["--root", str(root), "set-transaction", "notaufnahmeregister--60"]), 0)
             settings = load_json(root / "aktin.json")
             self.assertEqual(settings["transaction"]["key"], "notaufnahmeregister--60")
@@ -41,16 +41,16 @@ class CliTests(unittest.TestCase):
             root = Path(tmp)
             self.assertEqual(main(["--root", str(root), "init"]), 0)
             out = StringIO()
-            with patch("decor2hl7.decor.catalog.releases", return_value=RELEASES), redirect_stdout(out):
+            with patch("decor2hl7.retrieval.catalog.releases", return_value=RELEASES), redirect_stdout(out):
                 self.assertEqual(main(["--root", str(root), "list-versions"]), 0)
             lines = out.getvalue().splitlines()
             self.assertTrue(lines[0].startswith("KEY"))
             self.assertTrue(lines[1].startswith("2026.1.2"))
 
-            with patch("decor2hl7.decor.catalog.releases", return_value=RELEASES):
+            with patch("decor2hl7.retrieval.catalog.releases", return_value=RELEASES):
                 self.assertEqual(main(["--root", str(root), "set-version", "2026.1.2"]), 0)
             out = StringIO()
-            with patch("decor2hl7.decor.catalog.transactions", return_value=TRANSACTIONS), redirect_stdout(out):
+            with patch("decor2hl7.retrieval.catalog.transactions", return_value=TRANSACTIONS), redirect_stdout(out):
                 self.assertEqual(main(["--root", str(root), "list-transactions"]), 0)
             lines = out.getvalue().splitlines()
             self.assertTrue(lines[0].startswith("KEY"))

@@ -1,4 +1,4 @@
-"""ART-DECOR release and transaction discovery.
+"""Specification release and transaction discovery.
 
 Discovery/selection is intentionally separate from specification fetching.
 Users choose a release and transaction first; ``fetch`` only consumes that
@@ -10,7 +10,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Iterable
 
-from .client import build_url, get
+from .api import publications_url, transactions_url
+from .client import DEFAULT_API_BASE, get
 from .xml import child_text, local, parse_text
 from ..workspace import release_key, transaction_key
 
@@ -19,7 +20,7 @@ def parse_releases(xml_text: str) -> list[dict[str, str]]:
     root, _ = parse_text(xml_text)
     rows: list[dict[str, str]] = []
     for node in root.iter():
-        if local(node.tag) != "release":
+        if local(node.tag) not in {"release", "version"}:
             continue
         rows.append({
             "date": node.get("date") or "",
@@ -62,24 +63,16 @@ def parse_transactions(xml_text: str) -> list[dict[str, str]]:
     return rows
 
 
-def releases(prefix: str, *, ipv4: bool = True) -> list[dict[str, str]]:
-    attempts = (
-        build_url("ProjectIndex", prefix=prefix, format="xml"),
-        build_url("RetrieveProject", prefix=prefix, mode="verbatim", format="xml"),
+def releases(
+    prefix: str,
+    *,
+    ipv4: bool = True,
+    base_url: str = DEFAULT_API_BASE,
+) -> list[dict[str, str]]:
+    text = get(publications_url(prefix, base_url=base_url), ipv4=ipv4).decode(
+        "utf-8", "replace"
     )
-    last_error: Exception | None = None
-    for url in attempts:
-        try:
-            text = get(url, ipv4=ipv4).decode("utf-8", "replace")
-        except OSError as error:
-            last_error = error
-            continue
-        rows = parse_releases(text)
-        if rows:
-            return rows
-    if last_error:
-        raise last_error
-    return []
+    return parse_releases(text)
 
 
 def transactions(
@@ -88,33 +81,15 @@ def transactions(
     *,
     language: str = "de-DE",
     ipv4: bool = True,
+    base_url: str = DEFAULT_API_BASE,
 ) -> list[dict[str, str]]:
-    # ProjectIndex view=t is the lightweight transaction catalog and accepts a
-    # pinned project release.  Fall back to RetrieveProject only for deployments
-    # whose index XML omits transaction details needed for a stable selection.
-    attempts = (
-        build_url(
-            "ProjectIndex", prefix=prefix, version=release_date,
-            language=language, view="t", format="xml",
+    text = get(
+        transactions_url(
+            prefix, release_date, language=language, base_url=base_url
         ),
-        build_url(
-            "RetrieveProject", prefix=prefix, version=release_date,
-            language=language, mode="verbatim", format="xml",
-        ),
-    )
-    last_error: Exception | None = None
-    for url in attempts:
-        try:
-            text = get(url, ipv4=ipv4).decode("utf-8", "replace")
-        except OSError as error:
-            last_error = error
-            continue
-        rows = parse_transactions(text)
-        if rows:
-            return rows
-    if last_error:
-        raise last_error
-    return []
+        ipv4=ipv4,
+    ).decode("utf-8", "replace")
+    return parse_transactions(text)
 
 
 def _match(rows: Iterable[dict[str, str]], identifier: str, fields: tuple[str, ...]) -> dict[str, str]:

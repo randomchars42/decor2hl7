@@ -6,7 +6,7 @@ Selection is deliberately independent from filesystem creation:
 * ``set-version KEY`` and ``set-transaction KEY`` only update selection state.
 * commands that create artifacts create the directories they own lazily.
 
-ART-DECOR releases are the acquisition/cache scope. Transactions are the
+Specification releases are the acquisition/cache scope. Transactions are the
 model/config/output scope within a release.
 """
 
@@ -68,6 +68,7 @@ def init_workspace(root: Path, prefix: str = "aktin-", language: str = "de-DE") 
         current.setdefault("prefix", prefix)
         current.setdefault("language", language)
         current.setdefault("network", {"ipv4": True})
+        current.setdefault("api", {"base_url": "https://art-decor.org/exist/apps/api"})
         current.setdefault("release", None)
         current.setdefault("transaction", None)
         current.setdefault("input", {"directory": None})
@@ -76,6 +77,7 @@ def init_workspace(root: Path, prefix: str = "aktin-", language: str = "de-DE") 
             "prefix": prefix,
             "language": language,
             "network": {"ipv4": True},
+            "api": {"base_url": "https://art-decor.org/exist/apps/api"},
             "release": None,
             "transaction": None,
             "input": {"directory": None},

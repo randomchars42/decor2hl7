@@ -1,19 +1,20 @@
-"""Fetch a recursively closed ART-DECOR specification.
+"""Fetch a recursively closed specification through the current API.
 
 The release is the cache scope; a transaction owns only ``transaction.xml``
 and ``closure.json``. Shared datasets/templates/value sets/concepts are stored
 once below ``spec/<release>/`` and may be reused by other transactions in the
 same release.
 
-The pinned project + transaction define build truth. An unpinned project
-snapshot is fetched once as *evidence only*: it may provide historical
-associations/lineage for mapping analysis but never changes model/template
-selection.
+The selected transaction and its exact artifact dependencies define build
+truth. A live project extract is fetched once as *evidence only*: it may
+provide historical associations/lineage for mapping analysis but never changes
+model/template selection.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import urllib.error
 import xml.etree.ElementTree as ET
@@ -21,7 +22,18 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, TypedDict
 
-from .client import FINAL_STATUS, build_url, get
+from .api import (
+    artifact_representations,
+    openapi_url,
+    project_extract_url,
+    project_url,
+    projects_url,
+    transaction_representations,
+    validate_openapi,
+    valueset_expansion_url,
+)
+from .client import DEFAULT_API_BASE, FINAL_STATUS, get
+from .sources import apply_source_hint
 from .xml import local, parse_text
 from ..workspace import load_json, write_json
 
@@ -30,17 +42,22 @@ class Want(TypedDict, total=False):
     kind: str
     id: str
     effective_date: str
-    prefix: str
+    project: str
+    api_base: str
+    publication_url: str
+    source_hint: str
     dataset: str
+    dataset_effective_date: str
 
 
-SERVICES: dict[str, tuple[str, str, str]] = {
-    "dataset": ("RetrieveDataSet", "id", "effectiveDate"),
-    "concept": ("RetrieveConcept", "conceptId", "conceptEffectiveDate"),
-    "template": ("RetrieveTemplate", "id", "effectiveDate"),
-    "valueset": ("RetrieveValueSet", "id", "effectiveDate"),
+KINDS = {"dataset", "concept", "template", "valueset", "codesystem"}
+KIND_ORDER = {
+    "dataset": 0,
+    "template": 1,
+    "valueset": 2,
+    "codesystem": 3,
+    "concept": 4,
 }
-KIND_ORDER = {"dataset": 0, "template": 1, "valueset": 2, "concept": 3}
 
 
 class RequestBudgetExceeded(RuntimeError):
@@ -76,13 +93,40 @@ def _digest(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _identity(
+    want: Mapping[str, str],
+    *,
+    project: str = "",
+    effective_date: str = "",
+    api_base: str = "",
+) -> dict[str, str]:
+    """Return the complete retrieval identity recorded with cached artifacts."""
+    return {
+        "type": want.get("kind", ""),
+        "id": want.get("id", ""),
+        "effective_date": effective_date or want.get("effective_date", "") or "dynamic",
+        "project": project or want.get("project", ""),
+        "api_base": api_base or want.get("api_base", "") or DEFAULT_API_BASE,
+        **({"context_id": want["dataset"]} if want.get("dataset") else {}),
+        **(
+            {"context_effective_date": want["dataset_effective_date"]}
+            if want.get("dataset_effective_date") else {}
+        ),
+    }
+
+
 def _key(want: Mapping[str, str]) -> str:
     effective = want.get("effective_date") or ""
     suffix = f"@{effective}" if effective else ""
-    return f"{want['kind']}:{want['id']}{suffix}"
+    key = f"{want['kind']}:{want['id']}{suffix}"
+    dataset = want.get("dataset") or ""
+    if dataset:
+        dataset_date = want.get("dataset_effective_date") or ""
+        key += f"|context={dataset}{('@' + dataset_date) if dataset_date else ''}"
+    return key
 
 
-def _filename(want: Mapping[str, str]) -> str:
+def _filename(want: Mapping[str, str], form: str = "analysis") -> str:
     stamp = _safe(want.get("effective_date") or "")
     name = _safe(want["id"])
     if stamp:
@@ -91,9 +135,11 @@ def _filename(want: Mapping[str, str]) -> str:
         "dataset": "datasets",
         "template": "templates",
         "valueset": "valuesets",
+        "codesystem": "codesystems",
         "concept": "concepts",
     }[want["kind"]]
-    return f"{directory}/{name}.xml"
+    suffix = "" if form == "analysis" else f".{form}"
+    return f"{directory}/{name}{suffix}.xml"
 
 
 def classify_payload(payload: bytes) -> tuple[str, str]:
@@ -125,21 +171,27 @@ def _collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
     they are resolved as the smallest directly referenced resource and are never
     recursively expanded by the fetcher.
     """
-    found: dict[tuple[str, str, str, str], Want] = {}
+    found: dict[tuple[str, str, str, str, str, str], Want] = {}
 
     def add(kind: str, ident: str | None, effective: str | None = None,
-            prefix: str | None = None, dataset: str | None = None) -> None:
-        if not ident or kind not in SERVICES:
+            project: str | None = None, dataset: str | None = None,
+            dataset_effective_date: str | None = None) -> None:
+        if not ident or kind not in KINDS:
             return
         want: Want = {
             "kind": kind,
             "id": ident,
             "effective_date": "" if effective in (None, "dynamic") else str(effective),
-            "prefix": prefix or "",
+            "project": project or "",
         }
         if dataset:
             want["dataset"] = dataset
-        found[(kind, ident, want["effective_date"], want["prefix"])] = want
+        if dataset_effective_date:
+            want["dataset_effective_date"] = dataset_effective_date
+        found[(
+            kind, ident, want["effective_date"], want["project"],
+            want.get("dataset", ""), want.get("dataset_effective_date", ""),
+        )] = want
 
     stack: list[tuple[ET.Element, tuple[str, ...]]] = [(root, ())]
     while stack:
@@ -201,6 +253,27 @@ def _collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
                     add("valueset", node.get("id"), node.get("effectiveDate"))
             elif tag == "vocabulary":
                 add("valueset", node.get("valueSet"), node.get("flexibility"))
+                add(
+                    "codesystem", node.get("codeSystem"),
+                    node.get("codeSystemEffectiveDate"), node.get("prefix"),
+                )
+            elif tag == "sourceCodeSystem":
+                add(
+                    "codesystem", node.get("id"),
+                    node.get("effectiveDate") or node.get("flexibility"),
+                    node.get("prefix"),
+                )
+            elif tag == "include" and node.get("codeSystem"):
+                add(
+                    "codesystem", node.get("codeSystem"),
+                    node.get("effectiveDate") or node.get("flexibility"),
+                    node.get("prefix"),
+                )
+            elif tag in {"concept", "exception"} and node.get("codeSystem"):
+                add(
+                    "codesystem", node.get("codeSystem"),
+                    node.get("codeSystemEffectiveDate"), node.get("prefix"),
+                )
             if node.get("templateId") and tag in {"dataset", "transaction"}:
                 add("template", node.get("templateId"), node.get("templateEffectiveDate"))
             continue
@@ -213,6 +286,7 @@ def _collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
                 "concept", node.get("ref"),
                 node.get("effectiveDate") or node.get("flexibility"),
                 node.get("prefix"), node.get("datasetId"),
+                node.get("datasetEffectiveDate"),
             )
             add(
                 "concept", node.get("originalId"), node.get("originalEffectiveDate"),
@@ -224,13 +298,27 @@ def _collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
                     "concept", node.get("ref"),
                     node.get("effectiveDate") or node.get("flexibility"),
                     node.get("prefix"), node.get("datasetId"),
+                    node.get("datasetEffectiveDate"),
                 )
             if node.get("template") and (node.get("type") or "") not in {"SPEC", "VERSION", "COPY"}:
                 add(
                     "template", node.get("template"),
                     node.get("flexibility"), node.get("prefix"),
                 )
-    return list(found.values())
+    rows = list(found.values())
+    dated_code_systems = {
+        (item["id"], item.get("project", ""))
+        for item in rows
+        if item["kind"] == "codesystem" and item.get("effective_date")
+    }
+    return [
+        item for item in rows
+        if not (
+            item["kind"] == "codesystem"
+            and not item.get("effective_date")
+            and (item["id"], item.get("project", "")) in dated_code_systems
+        )
+    ]
 
 
 def hard_references(root: ET.Element) -> list[Want]:
@@ -261,7 +349,13 @@ def _inventory(root: ET.Element | None) -> set[tuple[str, str, str]]:
     result: set[tuple[str, str, str]] = set()
     if root is None:
         return result
-    tags = {"dataset": "dataset", "concept": "concept", "template": "template", "valueSet": "valueset"}
+    tags = {
+        "dataset": "dataset",
+        "concept": "concept",
+        "template": "template",
+        "valueSet": "valueset",
+        "codeSystem": "codesystem",
+    }
     for node in root.iter():
         kind = tags.get(local(node.tag))
         ident = node.get("id")
@@ -289,13 +383,19 @@ def _matching_embedded(
 ) -> list[ET.Element]:
     """Return the embedded resource revision that satisfies *want*.
 
-    ``not_after`` is used for the unpinned main-project snapshot: a live
+    ``not_after`` is used for the live main-project snapshot: a live
     project may contain draft template revisions newer than the selected
     release, and those must never become part of a released build merely
     because they are locally available.  For a dynamic reference the newest
     eligible revision is returned.
     """
-    tag_for = {"dataset": "dataset", "concept": "concept", "template": "template", "valueset": "valueSet"}
+    tag_for = {
+        "dataset": "dataset",
+        "concept": "concept",
+        "template": "template",
+        "valueset": "valueSet",
+        "codesystem": "codeSystem",
+    }
     wanted_tag = tag_for.get(want.get("kind", ""))
     if not wanted_tag:
         return []
@@ -357,7 +457,13 @@ def _resolved_effective_date(payload: bytes, want: Mapping[str, str]) -> str:
         root, _ = parse_text(payload.decode("utf-8", "replace"))
     except (ET.ParseError, ValueError):
         return ""
-    tag_for = {"dataset": "dataset", "concept": "concept", "template": "template", "valueset": "valueSet"}
+    tag_for = {
+        "dataset": "dataset",
+        "concept": "concept",
+        "template": "template",
+        "valueset": "valueSet",
+        "codesystem": "codeSystem",
+    }
     wanted_tag = tag_for.get(want.get("kind", ""))
     rows: list[str] = []
     for node in root.iter():
@@ -403,16 +509,20 @@ def _owner(identifier: str, directory: Mapping[str, str]) -> str:
     return directory.get(best, "") if best else ""
 
 
-def _candidate_prefixes(want: Mapping[str, str], owners: Mapping[str, str], repositories: Iterable[str]) -> list[str]:
-    """Return repository candidates without probing the whole ecosystem blindly.
+def _candidate_projects(
+    want: Mapping[str, str],
+    owners: Mapping[str, str],
+    repositories: Iterable[str],
+) -> list[str]:
+    """Return project candidates without probing the whole ecosystem blindly.
 
-    A ProjectIndex owner is authoritative enough to stop broad repository
-    probing. A differing declared prefix is retained as one historical fallback
+    A project-directory owner is authoritative enough to stop broad repository
+    probing. A differing declared project is retained as one historical fallback
     because old references can contain stale project metadata. Only when owner
     inference fails do building-block repositories become search candidates.
     """
     owner = _owner(want["id"], owners)
-    declared = want.get("prefix") or ""
+    declared = want.get("project") or ""
     result: list[str] = []
     if owner:
         result.append(owner)
@@ -428,24 +538,29 @@ def _candidate_prefixes(want: Mapping[str, str], owners: Mapping[str, str], repo
     return result or [""]
 
 
-def _urls(want: Mapping[str, str], prefix: str, language: str) -> list[str]:
-    service, id_param, date_param = SERVICES[want["kind"]]
-    params = {
-        id_param: want["id"],
-        date_param: want.get("effective_date") or None,
-        "prefix": prefix or None,
-        "language": language,
-        "format": "expandedxml" if want["kind"] == "template" else "xml",
-    }
-    urls = [build_url(service, **params)]
-    # Compatibility fallback for older ART-DECOR deployments that accepted the
-    # historical templateId parameter while examples/documentation use id.
-    if want["kind"] == "template":
-        compat = dict(params)
-        compat.pop("id", None)
-        compat["templateId"] = want["id"]
-        urls.append(build_url(service, **compat))
-    return urls
+def _requests(
+    want: Mapping[str, str],
+    project: str,
+    *,
+    main_project: str,
+    release: str,
+    language: str,
+    default_api_base: str,
+) -> list[dict[str, str]]:
+    resolved = dict(want)
+    resolved["project"] = project
+    base_url = want.get("api_base") or default_api_base
+    return [
+        {"project": project, "api_base": base_url, **item}
+        for item in artifact_representations(
+            resolved,
+            project=project,
+            main_project=main_project,
+            release=release,
+            language=language,
+            base_url=base_url,
+        )
+    ]
 
 
 def _existing_cache_payload(target: Path, old: Mapping[str, Any]) -> bytes | None:
@@ -482,6 +597,7 @@ def _fetch_direct(
     retry_missing: bool,
     progress: Progress | None = None,
     label: str | None = None,
+    identity: Mapping[str, str] | None = None,
 ) -> Path | None:
     resources = manifest.setdefault("resources", {})
     old = resources.get(key, {})
@@ -496,6 +612,7 @@ def _fetch_direct(
             "url": old.get("url") or url,
             "bytes": len(existing),
             "sha256": _digest(existing),
+            **({"identity": dict(identity)} if identity else {}),
         }
         repaired = old.get("status") != "ok" or old.get("file") != relative_file
         suffix = " (manifest repaired)" if repaired else ""
@@ -514,16 +631,23 @@ def _fetch_direct(
             "status": status_name,
             "url": url,
             "http_status": error.code,
+            **({"identity": dict(identity)} if identity else {}),
         }
         _emit(progress, f"fetch: {display}: {status_name} (HTTP {error.code})")
         return None
     except OSError as error:
-        resources[key] = {"status": "error", "url": url, "error": str(error)}
+        resources[key] = {
+            "status": "error", "url": url, "error": str(error),
+            **({"identity": dict(identity)} if identity else {}),
+        }
         _emit(progress, f"fetch: {display}: error ({error})")
         return None
     status, detail = classify_payload(payload)
     if status == "empty":
-        resources[key] = {"status": "missing", "url": url, "detail": detail}
+        resources[key] = {
+            "status": "missing", "url": url, "detail": detail,
+            **({"identity": dict(identity)} if identity else {}),
+        }
         _emit(progress, f"fetch: {display}: missing ({detail})")
         return None
     target.write_bytes(payload)
@@ -534,9 +658,66 @@ def _fetch_direct(
         "url": url,
         "bytes": len(payload),
         "sha256": _digest(payload),
+        **({"identity": dict(identity)} if identity else {}),
         **({"detail": detail} if detail else {}),
     }
     _emit(progress, f"fetch: {display}: {stored_status} ({_size_text(len(payload))})")
+    return target
+
+
+def _fetch_openapi(
+    release_dir: Path,
+    manifest: dict[str, Any],
+    *,
+    api_base: str,
+    ipv4: bool,
+    retry_missing: bool,
+    progress: Progress | None = None,
+) -> Path | None:
+    """Cache and capability-check the server's OpenAPI description."""
+    key = "api-contract"
+    relative = "api.json"
+    target = release_dir / relative
+    old = manifest.setdefault("resources", {}).get(key, {})
+    payload: bytes | None = None
+    if target.is_file():
+        try:
+            candidate = target.read_bytes()
+            expected = str(old.get("sha256") or "")
+            if not expected or _digest(candidate) == expected:
+                validate_openapi(candidate)
+                payload = candidate
+        except (OSError, ValueError, json.JSONDecodeError):
+            payload = None
+    if payload is None and old.get("status") == "missing" and not retry_missing:
+        _emit(progress, "fetch: API contract: known missing")
+        return None
+    url = openapi_url(api_base)
+    if payload is None:
+        _emit(progress, "fetch: API contract: requesting")
+        try:
+            payload = get(url, ipv4=ipv4, accept="application/json")
+            metadata = validate_openapi(payload)
+        except (urllib.error.HTTPError, OSError, ValueError, json.JSONDecodeError) as error:
+            manifest["resources"][key] = {
+                "status": "error",
+                "url": url,
+                "error": str(error),
+            }
+            _emit(progress, f"fetch: API contract: error ({error})")
+            return None
+        target.write_bytes(payload)
+    else:
+        metadata = validate_openapi(payload)
+        _emit(progress, "fetch: API contract: cached")
+    manifest["resources"][key] = {
+        "status": "ok",
+        "file": relative,
+        "url": url,
+        "bytes": len(payload),
+        "sha256": _digest(payload),
+        **metadata,
+    }
     return target
 
 
@@ -553,20 +734,41 @@ def _fetch_want(
     request_budget: dict[str, int] | None = None,
     progress: Progress | None = None,
     save_manifest: Callable[[], None] | None = None,
+    main_project: str = "aktin-",
+    release: str = "",
+    api_base: str = DEFAULT_API_BASE,
+    source_hints: Mapping[str, Mapping[str, str]] | None = None,
 ) -> Path | None:
-    key = _key(want)
+    requested_want = dict(want)
+    resolved_want = apply_source_hint(want, source_hints or {})
+    key = _key(resolved_want)
     old = manifest.setdefault("resources", {}).get(key, {})
-    relative = str(old.get("file") or _filename(want))
+    relative = str(old.get("file") or _filename(resolved_want))
     target = release_dir / relative
-    display = _resource_label(want)
+    display = _resource_label(resolved_want)
     existing = _existing_cache_payload(target, old)
-    if existing is not None:
-        resolved_date = _resolved_effective_date(existing, want)
-        requested_date = want.get("effective_date") or ""
+    old_representations = (
+        old.get("representations", {})
+        if isinstance(old.get("representations"), Mapping) else {}
+    )
+
+    def cached_representation(form: str) -> tuple[bytes | None, dict[str, Any]]:
+        entry = old_representations.get(form, {})
+        if not isinstance(entry, Mapping) or not entry.get("file"):
+            return None, {}
+        path = release_dir / str(entry["file"])
+        payload = _existing_cache_payload(path, entry)
+        return payload, dict(entry) if payload is not None else {}
+
+    cached_source, cached_source_entry = cached_representation("source")
+    if existing is not None and cached_source is not None:
+        resolved_date = _resolved_effective_date(existing, resolved_want)
+        requested_date = requested_want.get("effective_date") or ""
         # A static dependency must not accidentally adopt another revision that
         # happens to have the expected filename. Dynamic dependencies may adopt
         # whatever revision the valid cached response actually contains.
-        if not requested_date or not resolved_date or resolved_date == requested_date:
+        expected_date = resolved_want.get("effective_date") or ""
+        if not expected_date or not resolved_date or resolved_date == expected_date:
             manifest["resources"][key] = {
                 **old,
                 "status": "ok",
@@ -575,6 +777,24 @@ def _fetch_want(
                 "sha256": _digest(existing),
                 "requested_effective_date": requested_date or "dynamic",
                 "resolved_effective_date": resolved_date or old.get("resolved_effective_date", ""),
+                "representations": {
+                    **dict(old_representations),
+                    "analysis": {
+                        "status": "ok",
+                        "file": relative,
+                        "url": old.get("url") or "",
+                        "bytes": len(existing),
+                        "sha256": _digest(existing),
+                    },
+                    "source": cached_source_entry,
+                },
+                "identity": _identity(
+                    resolved_want,
+                    project=str(old.get("project") or ""),
+                    effective_date=resolved_date or str(old.get("resolved_effective_date") or ""),
+                    api_base=str(old.get("api_base") or api_base),
+                ),
+                **({"source_hint": resolved_want["source_hint"]} if resolved_want.get("source_hint") else {}),
             }
             repaired = old.get("status") != "ok" or old.get("file") != relative
             suffix = " (manifest repaired)" if repaired else ""
@@ -586,26 +806,28 @@ def _fetch_want(
         _emit(progress, f"fetch: {display}: known missing")
         return None
 
-    request_want: Want = dict(want)
+    request_want: Want = dict(resolved_want)
     if not request_want.get("effective_date") and old.get("resolved_effective_date"):
         request_want["effective_date"] = str(old["resolved_effective_date"])
 
     attempts: list[dict[str, Any]] = []
-    request_plan: list[tuple[str, str]] = []
-    for prefix in _candidate_prefixes(request_want, owners, repositories):
-        resolved = dict(request_want)
-        resolved["prefix"] = prefix
-        request_plan.extend((prefix, url) for url in _urls(resolved, prefix, language))
+    saved_representations: dict[str, dict[str, Any]] = {
+        **({"source": cached_source_entry} if cached_source is not None else {}),
+        **(
+            {
+                "analysis": {
+                    "status": "ok",
+                    "file": relative,
+                    "url": old.get("url") or "",
+                    "bytes": len(existing),
+                    "sha256": _digest(existing),
+                }
+            }
+            if existing is not None else {}
+        ),
+    }
 
-    def retry_note(index: int, prefix: str) -> str:
-        if index + 1 >= len(request_plan):
-            return ""
-        next_prefix = request_plan[index + 1][0]
-        if next_prefix == prefix:
-            return f"; trying compatibility request via {prefix or '?'}"
-        return f"; trying next source {next_prefix or '?'}"
-
-    for request_index, (prefix, url) in enumerate(request_plan):
+    def request(project: str, form: str, url: str) -> bytes | None:
         if request_budget is not None:
             if request_budget.get("made", 0) >= request_budget.get("max", 0):
                 raise RequestBudgetExceeded
@@ -613,57 +835,225 @@ def _fetch_want(
         count = request_budget.get("made", 0) if request_budget is not None else 0
         maximum = request_budget.get("max", 0) if request_budget is not None else 0
         budget = f" [{count}/{maximum}]" if maximum else ""
-        _emit(progress, f"fetch: {display}: requesting via {prefix or '?'}{budget}")
+        _emit(
+            progress,
+            f"fetch: {display}: requesting {form} via {project or 'global'}{budget}",
+        )
         try:
             payload = get(url, ipv4=ipv4)
         except urllib.error.HTTPError as error:
-            attempts.append({"prefix": prefix, "url": url, "http_status": error.code})
-            _emit(progress, f"fetch: {display}: HTTP {error.code} via {prefix or '?'}{retry_note(request_index, prefix)}")
-            continue
+            attempts.append({
+                "project": project,
+                "form": form,
+                "url": url,
+                "http_status": error.code,
+            })
+            _emit(
+                progress,
+                f"fetch: {display}: {form} HTTP {error.code} via {project or 'global'}",
+            )
+            return None
         except OSError as error:
-            attempts.append({"prefix": prefix, "url": url, "error": str(error)})
-            _emit(progress, f"fetch: {display}: {error} via {prefix or '?'}{retry_note(request_index, prefix)}")
-            continue
+            attempts.append({
+                "project": project,
+                "form": form,
+                "url": url,
+                "error": str(error),
+            })
+            _emit(
+                progress,
+                f"fetch: {display}: {form} {error} via {project or 'global'}",
+            )
+            return None
         status, detail = classify_payload(payload)
-        if status == "empty":
-            attempts.append({"prefix": prefix, "url": url, "error": detail})
-            _emit(progress, f"fetch: {display}: empty response via {prefix or '?'}{retry_note(request_index, prefix)}")
-            continue
-        target = release_dir / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(payload)
-        stored_status = "ok" if status == "ok" else "error"
-        resolved_date = _resolved_effective_date(payload, want)
-        manifest["resources"][key] = {
-            "status": stored_status,
-            "file": relative,
+        if status != "ok":
+            attempts.append({
+                "project": project,
+                "form": form,
+                "url": url,
+                "error": detail,
+            })
+            _emit(
+                progress,
+                f"fetch: {display}: {form} {status} via {project or 'global'}",
+            )
+            return None
+        return payload
+
+    def store(form: str, payload: bytes, url: str) -> Path:
+        form_relative = relative if form == "analysis" else _filename(request_want, form)
+        path = release_dir / form_relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        saved_representations[form] = {
+            "status": "ok",
+            "file": form_relative,
             "url": url,
-            "repository": prefix,
             "bytes": len(payload),
             "sha256": _digest(payload),
-            "requested_effective_date": want.get("effective_date") or "dynamic",
-            "resolved_effective_date": resolved_date,
-            **({"detail": detail} if detail else {}),
         }
-        resolved_note = f", resolved {resolved_date}" if not want.get("effective_date") and resolved_date else ""
-        _emit(progress, f"fetch: {display}: {stored_status} via {prefix or '?'} ({_size_text(len(payload))}{resolved_note})")
+        return path
+
+    for project in _candidate_projects(request_want, owners, repositories):
+        forms = _requests(
+            request_want,
+            project,
+            main_project=main_project,
+            release=release,
+            language=language,
+            default_api_base=api_base,
+        )
+        source_payload: bytes | None = None
+        analysis_payload: bytes | None = existing
+        analysis_url = str(old.get("url") or "") if existing is not None else ""
+        for item in forms:
+            form, url = item["form"], item["url"]
+            if form == "source" and cached_source is not None:
+                payload = cached_source
+                source_payload = cached_source
+            elif form == "analysis" and existing is not None:
+                payload = existing
+                analysis_payload = existing
+            else:
+                payload = request(project, form, url)
+            if payload is None:
+                continue
+            if form not in saved_representations:
+                store(form, payload, url)
+            if form == "source":
+                source_payload = payload
+                if not request_want.get("effective_date"):
+                    discovered = _resolved_effective_date(payload, request_want)
+                    if discovered:
+                        request_want["effective_date"] = discovered
+            elif form == "analysis":
+                analysis_payload = payload
+                analysis_url = url
+
+        # Dataset/concept latest routes only provide a source representation.
+        # Resolve the date from it, then request the exact analysis extract.
+        if analysis_payload is None and source_payload is not None and request_want.get("effective_date"):
+            exact_forms = _requests(
+                request_want,
+                project,
+                main_project=main_project,
+                release=release,
+                language=language,
+                default_api_base=api_base,
+            )
+            exact_analysis = next(
+                (item for item in exact_forms if item["form"] == "analysis"), None
+            )
+            if exact_analysis is not None:
+                analysis_url = exact_analysis["url"]
+                analysis_payload = request(project, "analysis", analysis_url)
+                if analysis_payload is not None:
+                    store("analysis", analysis_payload, analysis_url)
+
+        if analysis_payload is None:
+            continue
+
+        resolved_date = _resolved_effective_date(analysis_payload, request_want)
+        analysis_path = release_dir / relative
+        representation = saved_representations.get("analysis", {})
+
+        # Expansion sets are additional frozen evidence for intensional value
+        # sets; failure does not invalidate the extracted definition.
+        expansion_error = ""
+        if request_want["kind"] == "valueset" and resolved_date:
+            try:
+                root, _ = parse_text(analysis_payload.decode("utf-8", "replace"))
+                intensional = any(
+                    local(node.tag) == "include" for node in root.iter()
+                )
+            except (ET.ParseError, ValueError):
+                intensional = False
+            if intensional:
+                expansion_url = valueset_expansion_url(
+                    request_want["id"], resolved_date,
+                    project=project, language=language,
+                    base_url=request_want.get("api_base") or api_base,
+                )
+                budget_full = (
+                    request_budget is not None
+                    and request_budget.get("made", 0) >= request_budget.get("max", 0)
+                )
+                expansion_payload = (
+                    None if budget_full
+                    else request(project, "expansion", expansion_url)
+                )
+                if expansion_payload is not None:
+                    store("expansion", expansion_payload, expansion_url)
+                else:
+                    expansion_error = (
+                        "value-set expansion deferred by request budget"
+                        if budget_full else "value-set expansion unavailable"
+                    )
+
+        manifest["resources"][key] = {
+            "status": "ok",
+            "file": relative,
+            "url": analysis_url,
+            "project": project,
+            "api_base": request_want.get("api_base") or api_base,
+            "bytes": representation.get("bytes", len(analysis_payload)),
+            "sha256": representation.get("sha256", _digest(analysis_payload)),
+            "requested_effective_date": requested_want.get("effective_date") or "dynamic",
+            "resolved_effective_date": resolved_date,
+            "identity": _identity(
+                request_want, project=project, effective_date=resolved_date,
+                api_base=request_want.get("api_base") or api_base,
+            ),
+            "representations": saved_representations,
+            **({"source_hint": request_want["source_hint"]} if request_want.get("source_hint") else {}),
+            **({"publication_url": request_want["publication_url"]} if request_want.get("publication_url") else {}),
+            **(
+                {"source_warning": "source representation unavailable"}
+                if "source" not in saved_representations else {}
+            ),
+            **({"expansion_warning": expansion_error} if expansion_error else {}),
+        }
+        resolved_note = (
+            f", resolved {resolved_date}"
+            if not requested_want.get("effective_date") and resolved_date
+            else ""
+        )
+        _emit(
+            progress,
+            f"fetch: {display}: ok via {project or 'global'} "
+            f"({_size_text(len(analysis_payload))}{resolved_note})",
+        )
         if save_manifest is not None:
             save_manifest()
-        return target
-    settled = bool(attempts) and all(
-        item.get("http_status") in FINAL_STATUS or item.get("error", "").startswith("<")
-        for item in attempts
+        return analysis_path
+
+    relevant_attempts = [item for item in attempts if item.get("form") == "analysis"]
+    if not relevant_attempts:
+        relevant_attempts = attempts
+    settled = bool(relevant_attempts) and all(
+        item.get("http_status") in FINAL_STATUS
+        or str(item.get("error") or "").startswith("<")
+        for item in relevant_attempts
     )
     final_status = "missing" if settled else "error"
-    owner = _owner(want["id"], owners)
-    attempted_prefixes = list(dict.fromkeys(str(item.get("prefix") or "") for item in attempts))
+    owner = _owner(resolved_want["id"], owners)
+    attempted_projects = list(dict.fromkeys(
+        str(item.get("project") or "") for item in attempts
+    ))
     manifest["resources"][key] = {
         "status": final_status,
         "settled": settled,
         "owner": owner,
-        "declared_prefix": want.get("prefix") or "",
-        "attempted_prefixes": attempted_prefixes,
+        "declared_project": resolved_want.get("project") or "",
+        "attempted_projects": attempted_projects,
         "attempts": attempts,
+        "representations": saved_representations,
+        "identity": _identity(
+            resolved_want,
+            project=attempted_projects[-1] if attempted_projects else "",
+            api_base=resolved_want.get("api_base") or api_base,
+        ),
+        **({"source_hint": resolved_want["source_hint"]} if resolved_want.get("source_hint") else {}),
     }
     if save_manifest is not None:
         save_manifest()
@@ -677,14 +1067,31 @@ def verify_manifest(release_dir: Path) -> list[str]:
         return [f"missing {manifest_path}"]
     manifest = load_json(manifest_path)
     errors: list[str] = []
-    for key, entry in manifest.get("resources", {}).items():
-        if entry.get("status") != "ok" or not entry.get("file"):
-            continue
-        path = release_dir / str(entry["file"])
+    checked: set[tuple[str, str]] = set()
+
+    def verify_entry(label: str, entry: Mapping[str, Any]) -> None:
+        relative = str(entry.get("file") or "")
+        if entry.get("status") != "ok" or not relative:
+            return
+        marker = (relative, str(entry.get("sha256") or ""))
+        if marker in checked:
+            return
+        checked.add(marker)
+        path = release_dir / relative
         if not path.exists():
-            errors.append(f"{key}: missing downloaded file {entry['file']}")
+            errors.append(f"{label}: missing downloaded file {relative}")
         elif entry.get("sha256") and _digest(path.read_bytes()) != entry["sha256"]:
-            errors.append(f"{key}: checksum mismatch for {entry['file']}")
+            errors.append(f"{label}: checksum mismatch for {relative}")
+
+    for key, entry in manifest.get("resources", {}).items():
+        if not isinstance(entry, Mapping):
+            continue
+        verify_entry(key, entry)
+        representations = entry.get("representations", {})
+        if isinstance(representations, Mapping):
+            for form, representation in representations.items():
+                if isinstance(representation, Mapping):
+                    verify_entry(f"{key}[{form}]", representation)
     return errors
 
 
@@ -717,6 +1124,8 @@ def fetch_spec(
     retry_missing: bool = False,
     max_requests: int = 1500,
     progress: Progress | None = None,
+    api_base: str = DEFAULT_API_BASE,
+    source_hints: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Fetch the selected transaction and recursively close its dependencies.
 
@@ -730,13 +1139,16 @@ def fetch_spec(
     manifest_path = release_dir / "manifest.json"
     closure_path = transaction_dir / "closure.json"
     manifest = load_json(manifest_path) if manifest_path.exists() else {
-        "format": 1,
+        "format": 2,
         "release": dict(release),
-        "prefix": prefix,
+        "project": prefix,
+        "api_base": api_base,
         "resources": {},
     }
+    manifest["format"] = 2
     manifest["release"] = dict(release)
-    manifest["prefix"] = prefix
+    manifest["project"] = prefix
+    manifest["api_base"] = api_base
 
     release_date = release.get("date") or ""
     tx_id = transaction.get("id") or ""
@@ -753,15 +1165,18 @@ def fetch_spec(
     phase = "roots"
     root_errors: list[str] = []
     root_status = {
-        "project": "pending",
+        "api_contract": "pending",
+        "project_config": "pending",
         "transaction": "pending",
+        "transaction_source": "pending",
         "project_evidence": "pending",
-        "project_index": "pending",
+        "project_directory": "pending",
     }
 
-    pinned: Path | None = None
+    project_config: Path | None = None
     evidence: Path | None = None
-    project_index: Path | None = None
+    project_directory: Path | None = None
+    tx_source: Path | None = None
     tx_path: Path | None = None
 
     def pending_keys(role: str) -> list[str]:
@@ -790,7 +1205,7 @@ def fetch_spec(
         build_pending = pending_keys("build")
         evidence_pending = pending_keys("evidence")
         closure = {
-            "format": 1,
+            "format": 2,
             "release": dict(release),
             "transaction": dict(transaction),
             "complete": complete,
@@ -809,7 +1224,7 @@ def fetch_spec(
                 "ok": sum(
                     manifest.get("resources", {}).get(key, {}).get("status") == "ok"
                     for key in current_keys
-                ) + int(root_status["project"] == "ok") + int(root_status["transaction"] == "ok"),
+                ) + int(root_status["project_config"] == "ok") + int(root_status["transaction"] == "ok"),
                 "missing": len(current_missing),
                 "error": len(current_errors) + len(root_errors),
             },
@@ -830,84 +1245,118 @@ def fetch_spec(
         return closure
 
     try:
-        project_url = build_url(
-            "RetrieveProject", prefix=prefix, version=release_date,
-            language=language, mode="verbatim", format="xml"
-        )
-        pinned = _fetch_direct(
-            release_dir, manifest, key=f"project:{prefix}@{release_date}",
-            relative_file="project.xml", url=project_url, ipv4=ipv4,
+        contract = _fetch_openapi(
+            release_dir, manifest, api_base=api_base, ipv4=ipv4,
             retry_missing=retry_missing, progress=progress,
-            label=f"release project {release.get('key') or release_date or '?'}",
         )
-        root_status["project"] = "ok" if pinned is not None else "missing"
+        root_status["api_contract"] = "ok" if contract is not None else "error"
 
-        evidence_url = build_url(
-            "RetrieveProject", prefix=prefix, language=language,
-            mode="verbatim", format="xml"
+        project_config = _fetch_direct(
+            release_dir, manifest, key=f"project-config:{prefix}",
+            relative_file="project.xml",
+            url=project_url(prefix, base_url=api_base), ipv4=ipv4,
+            retry_missing=retry_missing, progress=progress,
+            label=f"project configuration {prefix}",
+            identity={
+                "type": "project", "id": prefix, "effective_date": "live",
+                "project": prefix, "api_base": api_base,
+            },
         )
+        root_status["project_config"] = "ok" if project_config is not None else "missing"
+
         evidence = _fetch_direct(
             release_dir, manifest, key=f"project-evidence:{prefix}",
-            relative_file="project-evidence.xml", url=evidence_url, ipv4=ipv4,
+            relative_file="project-evidence.xml",
+            url=project_extract_url(
+                prefix, language=language, mode="verbatim", base_url=api_base
+            ),
+            ipv4=ipv4,
             retry_missing=retry_missing, progress=progress,
             label=f"live evidence project {prefix}",
+            identity={
+                "type": "project-evidence", "id": prefix,
+                "effective_date": "live", "project": prefix,
+                "api_base": api_base,
+            },
         )
         root_status["project_evidence"] = "ok" if evidence is not None else "missing"
 
-        index_url = build_url("ProjectIndex", format="xml", language=language)
-        project_index = _fetch_direct(
-            release_dir, manifest, key="project-index", relative_file="project-index.xml",
-            url=index_url, ipv4=ipv4, retry_missing=retry_missing, progress=progress,
-            label="global project index",
+        project_directory = _fetch_direct(
+            release_dir, manifest, key="project-directory",
+            relative_file="project-directory.xml",
+            url=projects_url(base_url=api_base), ipv4=ipv4,
+            retry_missing=retry_missing, progress=progress,
+            label="global project directory",
+            identity={
+                "type": "project-directory", "id": "project",
+                "effective_date": "live", "project": "", "api_base": api_base,
+            },
         )
-        root_status["project_index"] = "ok" if project_index is not None else "missing"
+        root_status["project_directory"] = "ok" if project_directory is not None else "missing"
 
-        tx_url = build_url(
-            "RetrieveTransaction", id=tx_id, effectiveDate=tx_effective or None,
-            prefix=prefix, version=release_date, language=language, format="xml"
+        tx_forms = transaction_representations(
+            tx_id, tx_effective, project=prefix, release=release_date,
+            language=language, base_url=api_base,
         )
+        source_url = next(item["url"] for item in tx_forms if item["form"] == "source")
+        analysis_url = next(item["url"] for item in tx_forms if item["form"] == "analysis")
+        tx_source = _fetch_direct(
+            release_dir, manifest,
+            key=f"transaction-source:{tx_id}@{tx_effective}",
+            relative_file=str(
+                (transaction_dir / "transaction.source.xml").relative_to(release_dir)
+            ),
+            url=source_url, ipv4=ipv4, retry_missing=retry_missing,
+            progress=progress,
+            label=f"transaction source {transaction.get('key') or tx_id or '?'}",
+            identity={
+                "type": "transaction", "id": tx_id,
+                "effective_date": tx_effective, "project": prefix,
+                "api_base": api_base, "form": "source",
+            },
+        )
+        root_status["transaction_source"] = "ok" if tx_source is not None else "missing"
+
         tx_path = _fetch_direct(
             release_dir, manifest,
             key=f"transaction:{tx_id}@{tx_effective}",
             relative_file=str((transaction_dir / "transaction.xml").relative_to(release_dir)),
-            url=tx_url, ipv4=ipv4, retry_missing=retry_missing, progress=progress,
+            url=analysis_url, ipv4=ipv4, retry_missing=retry_missing, progress=progress,
             label=f"transaction {transaction.get('key') or tx_id or '?'}",
+            identity={
+                "type": "transaction", "id": tx_id,
+                "effective_date": tx_effective, "project": prefix,
+                "api_base": api_base, "form": "analysis",
+            },
         )
         root_status["transaction"] = "ok" if tx_path is not None else "missing"
 
-        if pinned is None:
-            root_errors.append("selected release project could not be fetched")
+        if contract is None:
+            root_errors.append("current API contract could not be validated")
         if tx_path is None:
             root_errors.append("selected transaction could not be fetched")
 
-        build_roots = [_parse(path) for path in (pinned, tx_path) if path]
+        build_roots = [_parse(tx_path)] if tx_path else []
         evidence_roots = [_parse(evidence)] if evidence else []
-        owners = _project_directory(_parse(project_index) if project_index else None)
-        repositories = _repositories(*(build_roots + evidence_roots), own=prefix)
+        owners = _project_directory(
+            _parse(project_directory) if project_directory else None
+        )
+        repositories = _repositories(
+            _parse(project_config) if project_config else None,
+            *(build_roots + evidence_roots),
+            own=prefix,
+        )
 
         tx_root = _parse(tx_path) if tx_path else None
         if tx_root is not None:
             build_queue.extend(hard_references(tx_root))
             evidence_queue.extend(soft_references(tx_root))
-        # Some deployments expose representingTemplate metadata only on the
-        # transaction object inside RetrieveProject. Seed only that transaction,
-        # never the whole pinned project.
-        pinned_root = _parse(pinned) if pinned else None
-        if pinned_root is not None:
-            for node in pinned_root.iter():
-                if local(node.tag) == "transaction" and node.get("id") == tx_id:
-                    build_queue.extend(hard_references(node))
-                    evidence_queue.extend(soft_references(node))
 
         # Only count embedded resources as "already available" when the later
         # compiler actually receives the container that holds them.
         build_have: set[tuple[str, str, str]] = set()
         if tx_root is not None:
             build_have.update(_inventory(tx_root))
-        if pinned_root is not None:
-            build_have.update(
-                item for item in _inventory(pinned_root) if item[0] == "template"
-            )
         evidence_have = set(build_have)
         for root in evidence_roots:
             evidence_have.update(_inventory(root))
@@ -924,9 +1373,16 @@ def fetch_spec(
             phase = "build"
             _emit(progress, f"fetch: resolving build dependency closure ({len(queue)} initial reference(s))")
             while queue and not budget_exhausted:
-                rows = list(queue)
+                rows = [
+                    Want(**apply_source_hint(item, source_hints or {}))
+                    for item in queue
+                ]
                 queue.clear()
-                rows.sort(key=lambda item: (KIND_ORDER.get(item["kind"], 9), item.get("prefix", ""), item["id"]))
+                rows.sort(key=lambda item: (
+                    KIND_ORDER.get(item["kind"], 9),
+                    item.get("project", ""),
+                    item["id"],
+                ))
                 pending_batch["build"] = list(rows)
                 for row_index, want in enumerate(rows):
                     pending_batch["build"] = rows[row_index:]
@@ -966,6 +1422,8 @@ def fetch_spec(
                             ipv4=ipv4, retry_missing=retry_missing,
                             request_budget=request_budget, progress=progress,
                             save_manifest=save_manifest,
+                            main_project=prefix, release=release_date,
+                            api_base=api_base, source_hints=source_hints,
                         )
                     except RequestBudgetExceeded:
                         for pending in reversed(rows[row_index:]):
@@ -992,9 +1450,16 @@ def fetch_spec(
             """Resolve soft dependencies directly and deliberately stop there."""
             nonlocal resources_considered, budget_exhausted, phase
             phase = "evidence"
-            rows = list(queue)
+            rows = [
+                Want(**apply_source_hint(item, source_hints or {}))
+                for item in queue
+            ]
             queue.clear()
-            rows.sort(key=lambda item: (KIND_ORDER.get(item["kind"], 9), item.get("prefix", ""), item["id"]))
+            rows.sort(key=lambda item: (
+                KIND_ORDER.get(item["kind"], 9),
+                item.get("project", ""),
+                item["id"],
+            ))
             _emit(progress, f"fetch: resolving direct evidence ({len(rows)} reference(s), non-recursive)")
             pending_batch["evidence"] = list(rows)
             for row_index, want in enumerate(rows):
@@ -1019,6 +1484,8 @@ def fetch_spec(
                         ipv4=ipv4, retry_missing=retry_missing,
                         request_budget=request_budget, progress=progress,
                         save_manifest=save_manifest,
+                        main_project=prefix, release=release_date,
+                        api_base=api_base, source_hints=source_hints,
                     )
                 except RequestBudgetExceeded:
                     for pending in reversed(rows[row_index:]):
