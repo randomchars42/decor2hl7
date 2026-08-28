@@ -249,6 +249,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     if closure.get("crawl_complete", closure.get("complete")) and not closure.get("build_ready", True):
         for error in closure.get("readiness_errors", []):
             _say(f"error: {error}")
+    for warning in closure.get("degradation_warnings", []):
+        _say(f"warning: {warning}")
     if closure.get("errors"):
         for error in closure.get("errors", []):
             _say(f"error: {error}")
@@ -283,6 +285,7 @@ def _compiler_inputs(root: Path) -> dict[str, Any]:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
+    from .compile.artifacts import write_build_diagnostics
     from .compile.mapping import write_code_mapping
     from .compile.cda import write_cda_model
     from .compile.mapping import write_mapping_model
@@ -301,18 +304,36 @@ def cmd_build(args: argparse.Namespace) -> int:
         inputs["terminology_resources"],
         model_dir,
     )
+    unavailable = list(inputs.get("unavailable_artifacts", []))
+    model.setdefault("meta", {})["artifact_closure"] = {
+        "degraded": bool(unavailable),
+        "unavailable_artifacts": [
+            str(item.get("request_key") or "artifact") for item in unavailable
+        ],
+    }
+    write_json(model_dir / "model.json", model)
     code_mapping = write_code_mapping(model_dir, model)
     cda = write_cda_model(inputs["templates"], model_dir, model)
     cda_mapping = write_mapping_model(
         inputs["mapping_evidence"], model_dir, model, cda
     )
+    diagnostics = write_build_diagnostics(model_dir, inputs, cda)
     _say(f"model: {len(model['fields'])} datapoints, {len(model['groups'])} groups")
     _say(f"code mapping defaults: {sum(len(values) for values in code_mapping['fields'].values())} aliases across {len(code_mapping['fields'])} coded fields")
     _say(
         f"CDA: {cda['stats']['reachable_templates']} reachable templates, "
-        f"{cda['stats']['targets']} named targets"
+        f"{cda['stats']['targets']} physical named targets, "
+        f"{cda['stats'].get('datapoints', 0)} logical mapped datapoints"
     )
     _say(f"CDA mapped proposal: {sum(value is not None for value in cda_mapping['fields'].values())}/{len(model['fields'])}")
+    if diagnostics["status"] == "degraded":
+        summary = diagnostics["summary"]
+        _say(
+            "warning: degraded build: "
+            f"{summary['unavailable_artifacts']} unavailable artifacts, "
+            f"{summary['unresolved_templates']} unresolved CDA references; "
+            f"see {model_dir / 'build-diagnostics.md'}"
+        )
     return 0
 
 
@@ -525,6 +546,7 @@ def _runtime_files(
 
 def cmd_check(args: argparse.Namespace) -> int:
     from . import validate
+    from .bindings import required_unmapped_null_flavor
     from .retrieval.fetch import verify_manifest
 
     root = _root(args)
@@ -545,7 +567,17 @@ def cmd_check(args: argparse.Namespace) -> int:
     print(f"model datapoints: {len(model.get('fields', {}))}")
     print(f"CSV mapped: {sum(value is not None for value in csv_mapping.get('fields', {}).values())}")
     print(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
+    print(f"CDA target defaults: {len(cda_mapping.get('target_defaults', {}))}")
+    try:
+        completion_flavor = required_unmapped_null_flavor(cda_mapping)
+    except ValueError:
+        completion_flavor = "invalid"
+    print(f"required unmapped CDA leaves: nullFlavor={completion_flavor}")
     print(f"CDA unresolved templates: {len(cda.get('unresolved_templates', []))}")
+    closure = model.get("meta", {}).get("artifact_closure", {})
+    unavailable = closure.get("unavailable_artifacts", []) if isinstance(closure, Mapping) else []
+    if unavailable:
+        print(f"build warning: {len(unavailable)} unavailable dependency artifacts")
     if errors:
         print("configuration errors:")
         for error in errors:
@@ -558,6 +590,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
     """Validate the shareable dataset-to-CDA bundle without site CSV input."""
     from . import validate
+    from .bindings import required_unmapped_null_flavor
     from .compile.mapping import code_mapping_defaults
     from .testing import synthetic_site
 
@@ -597,6 +630,12 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
     else:
         errors.append("mapping-lock.json is missing beside cda-mapping.json")
     print(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
+    print(f"CDA target defaults: {len(cda_mapping.get('target_defaults', {}))}")
+    try:
+        completion_flavor = required_unmapped_null_flavor(cda_mapping)
+    except ValueError:
+        completion_flavor = "invalid"
+    print(f"required unmapped CDA leaves: nullFlavor={completion_flavor}")
     print(f"mapping: {mapping_path}")
     if errors:
         print("CDA mapping errors:")

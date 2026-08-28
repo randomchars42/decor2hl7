@@ -10,7 +10,18 @@ from typing import Any, Mapping
 
 from .data import field_value
 from .semantics import identifier_root_for_target
-from .transforms import OMIT, apply_transform, mapping_rules, validate_transform
+from .transforms import (
+    OMIT,
+    apply_transform,
+    cda_target_name,
+    mapping_rules,
+    validate_transform,
+)
+
+NULL_FLAVORS = frozenset({
+    "NI", "INV", "DER", "OTH", "NINF", "PINF", "UNC", "MSK", "NA",
+    "UNK", "ASKU", "NAV", "NASK", "TRC",
+})
 
 
 def structure_rules(mapping: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -25,8 +36,159 @@ def structure_rules(mapping: Mapping[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def required_unmapped_null_flavor(mapping: Mapping[str, Any]) -> str:
+    """Return the mapping-owned completion policy for empty required leaves."""
+    defaults = mapping.get("defaults", {})
+    if defaults is None:
+        defaults = {}
+    if not isinstance(defaults, Mapping):
+        raise ValueError("cda-mapping: defaults must be an object")
+    rule = defaults.get("required_unmapped", {"nullFlavor": "NI"})
+    if isinstance(rule, str):
+        flavor = rule
+    elif isinstance(rule, Mapping):
+        flavor = str(rule.get("nullFlavor") or "")
+    else:
+        raise ValueError(
+            "cda-mapping: defaults.required_unmapped must be a nullFlavor object"
+        )
+    if flavor not in NULL_FLAVORS:
+        raise ValueError(
+            "cda-mapping: defaults.required_unmapped has invalid nullFlavor "
+            f"{flavor!r}"
+        )
+    return flavor
+
+
+def _physical_default_target(cda: Mapping[str, Any], configured: str) -> str:
+    datapoint = cda.get("datapoints", {}).get(configured, {})
+    if isinstance(datapoint, Mapping) and datapoint.get("cda_target"):
+        return str(datapoint["cda_target"])
+    return configured
+
+
+def target_default_values(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any]
+) -> dict[str, dict[str, str]]:
+    """Resolve reviewed per-target null-flavor defaults to physical targets."""
+    errors = validate_target_defaults(cda, mapping)
+    if errors:
+        raise ValueError("invalid CDA target defaults:\n" + "\n".join(errors))
+    raw = mapping.get("target_defaults", {})
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("cda-mapping: target_defaults must be an object")
+    result: dict[str, dict[str, str]] = {}
+    owners: dict[str, str] = {}
+    for configured, rule in raw.items():
+        name = str(configured)
+        if not isinstance(rule, Mapping):
+            raise ValueError(
+                f"cda-mapping: target_defaults[{name!r}] must be an object"
+            )
+        flavor = str(rule.get("nullFlavor") or "")
+        if flavor not in NULL_FLAVORS:
+            raise ValueError(
+                f"cda-mapping: target_defaults[{name!r}] has invalid "
+                f"nullFlavor {flavor!r}"
+            )
+        physical = _physical_default_target(cda, name)
+        value = {"nullFlavor": flavor}
+        if physical in result and result[physical] != value:
+            raise ValueError(
+                f"cda-mapping: target defaults {owners[physical]!r} and {name!r} "
+                f"resolve to {physical!r} with different values"
+            )
+        result[physical] = value
+        owners[physical] = name
+    return result
+
+
+def validate_target_defaults(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any]
+) -> list[str]:
+    """Validate mapping completion rules without requiring runtime input."""
+    errors: list[str] = []
+    try:
+        required_unmapped_null_flavor(mapping)
+    except ValueError as error:
+        errors.append(str(error))
+
+    raw = mapping.get("target_defaults", {})
+    if raw is None:
+        return errors
+    if not isinstance(raw, Mapping):
+        errors.append("cda-mapping: target_defaults must be an object")
+        return errors
+
+    targets = cda.get("targets", {})
+    resolved: dict[str, tuple[str, str]] = {}
+    for configured, rule in raw.items():
+        name = str(configured)
+        prefix = f"cda-mapping: target_defaults[{name!r}]"
+        if not isinstance(rule, Mapping):
+            errors.append(f"{prefix} must be an object")
+            continue
+        flavor = str(rule.get("nullFlavor") or "")
+        if flavor not in NULL_FLAVORS:
+            errors.append(f"{prefix} has invalid nullFlavor {flavor!r}")
+        reason = rule.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            errors.append(f"{prefix}.reason must be text")
+
+        physical = _physical_default_target(cda, name)
+        target = targets.get(physical)
+        if not isinstance(target, Mapping):
+            errors.append(f"{prefix} references unknown CDA target {physical!r}")
+            continue
+        previous = resolved.get(physical)
+        if previous and previous[1] != flavor:
+            errors.append(
+                f"{prefix} conflicts with target_defaults[{previous[0]!r}]; both "
+                f"resolve to {physical!r}"
+            )
+        resolved[physical] = (name, flavor)
+        if target.get("kind") != "element":
+            errors.append(f"{prefix} cannot apply nullFlavor to an attribute")
+        if target.get("prohibited") or not target.get("renderable"):
+            errors.append(f"{prefix} references a prohibited/non-renderable target")
+        if len(target.get("locations", [])) != 1:
+            errors.append(
+                f"{prefix} target {physical!r} has "
+                f"{len(target.get('locations', []))} physical locations"
+            )
+        required = bool(target.get("mandatory")) or int(target.get("min") or 0) >= 1
+        if not required:
+            errors.append(
+                f"{prefix} is optional; omit an unmapped optional element instead"
+            )
+        if target.get("mandatory") or str(target.get("conformance") or "").upper() == "M":
+            errors.append(f"{prefix} target does not permit a nullFlavor default")
+        if target.get("has_children"):
+            errors.append(
+                f"{prefix} targets a complex element; default its required leaf instead"
+            )
+    return errors
+
+
 def _base_datatype(value: Any) -> str:
     return str(value or "").upper().split(".", 1)[0]
+
+
+def _physical_target_name(
+    cda: Mapping[str, Any], rule: Mapping[str, Any]
+) -> str:
+    logical = str(rule.get("target") or "")
+    datapoint = cda.get("datapoints", {}).get(logical, {})
+    modeled = str(datapoint.get("cda_target") or "") if isinstance(datapoint, Mapping) else ""
+    configured = cda_target_name(rule)
+    if modeled and configured and modeled != configured:
+        raise ValueError(
+            f"logical CDA datapoint {logical!r} resolves to {modeled!r}, "
+            f"but the mapping specifies {configured!r}"
+        )
+    return modeled or configured
 
 
 def _prepare_identifier(
@@ -184,10 +346,14 @@ def build_assignments(
         if not _present(value):
             continue
         for rule in mapping_rules(selected):
-            name = str(rule["target"])
+            logical_name = str(rule["target"])
+            name = _physical_target_name(cda, rule)
             target = targets.get(name)
             if not target or not target.get("renderable") or target.get("prohibited"):
-                problems.append(f"unknown, prohibited or non-renderable CDA target {name!r} for {path}")
+                problems.append(
+                    f"unknown, prohibited or non-renderable CDA target {name!r} "
+                    f"for {path} via logical datapoint {logical_name!r}"
+                )
                 continue
             if len(target.get("locations", [])) != 1:
                 raise ValueError(
@@ -221,9 +387,9 @@ def build_assignments(
             branches = [branch for branch in structure.get("branches", []) if isinstance(branch, Mapping)]
             if not branches:
                 continue
-            target_names = {str(branch.get("target") or "") for branch in branches}
+            target_names = {_physical_target_name(cda, branch) for branch in branches}
             if len(target_names) != 1:
-                raise ValueError(f"fan_out rule {rule_id!r} must use one shared value target")
+                raise ValueError(f"fan_out rule {rule_id!r} must use one shared CDA target")
             target_name = next(iter(target_names))
             branch_values: list[tuple[Any, Mapping[str, Any]]] = []
             depths: set[int] = set()
@@ -259,7 +425,7 @@ def covered_shared_claims(mapping: Mapping[str, Any]) -> dict[str, set[str]]:
         elif kind == "fan_out":
             for branch in rule.get("branches", []):
                 if isinstance(branch, Mapping) and branch.get("target") and branch.get("source"):
-                    covered.setdefault(str(branch["target"]), set()).add(str(branch["source"]))
+                    covered.setdefault(cda_target_name(branch), set()).add(str(branch["source"]))
     return covered
 
 
@@ -310,9 +476,12 @@ def validate_structures(
         branches = [branch for branch in rule.get("branches", []) if isinstance(branch, Mapping)]
         if len(branches) < 2:
             errors.append(f"{prefix} requires at least two branches")
-        value_targets = {str(branch.get("target") or "") for branch in branches}
+        logical_targets = {str(branch.get("target") or "") for branch in branches}
+        if len(logical_targets) != len(branches):
+            errors.append(f"{prefix} branches must have distinct logical targets")
+        value_targets = {cda_target_name(branch) for branch in branches}
         if len(value_targets) != 1:
-            errors.append(f"{prefix} branches must share one value target")
+            errors.append(f"{prefix} branches must share one physical CDA target")
             continue
         target_name = next(iter(value_targets))
         target = targets.get(target_name)

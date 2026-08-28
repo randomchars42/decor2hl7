@@ -8,7 +8,7 @@ needed; they are not silent runtime fallbacks.
 
 ## Transform vocabulary
 
-`cda-mapping.json` version 3 accepts direct target names, small declarative
+`cda-mapping.json` version 5 accepts direct target names, small declarative
 rules, and explicit structural bindings. The built-in scalar transform vocabulary is deliberately limited to `identity`,
 `enum`, `ordinal`, and `not`. The generated proposal uses it for the currently
 proven AKTIN semantics for Tetanusschutz, Isolation, modified Rankin, and
@@ -20,6 +20,26 @@ A future concept whose ART-DECOR representation needs a different structural or
 computed transformation remains evidence-linked but non-executable until an
 explicit transform is added. `ADAPT` remains usable mapping evidence but is not
 automatic dataset identity inheritance.
+
+## Diagnosis time and certainty
+
+The compiler no longer derives a diagnosis end from certainty `Z`. The
+transaction web view contains no diagnosis timepoint, and `Zustand nach` is a
+certainty/clinical-status qualifier rather than a timestamp. V/A/Z/G therefore
+maps only to the formal certainty qualifier; `A` additionally controls exclusion
+negation. `effectiveTime/high` remains absent unless a real source mapping or an
+explicitly reviewed mapping rule supplies it.
+
+The CDA template does require `effectiveTime/low` for each active diagnosis
+occurrence. Because this transaction contains no diagnosis-onset datapoint, the
+generated CDA mapping declares a target-specific `nullFlavor="UNK"` default for
+that required leaf. This states that the onset value is unknown; it does not
+invent a date. If a future transaction supplies a real onset and maps it to the
+same target, that value wins for its occurrence.
+
+More generally, an otherwise empty required nullable CDA leaf receives the
+mapping-wide `nullFlavor="NI"` completion default. Optional unmapped leaves are
+omitted, and mandatory/non-nullable targets remain validation errors.
 
 ## Secondary ICD-10 diagnoses (concept 29508)
 
@@ -55,9 +75,10 @@ Schematron validation are still useful additional deployment gates.
 ## Exact/static historical template resolution
 
 Static template and terminology references are exact identities. An unavailable
-revision is a fetch/readiness error and is never replaced with an older or newer
-revision. Dynamic references remain explicitly dynamic and resolve to a frozen
-identity recorded in the manifest.
+auxiliary revision is reported as a degraded-build omission and is never replaced
+with an older or newer revision. The representing document template itself is
+still mandatory. Dynamic references remain explicitly dynamic and resolve to a
+frozen identity recorded in the manifest.
 
 ## Repetition identifiers
 

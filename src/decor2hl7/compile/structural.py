@@ -9,7 +9,7 @@ from typing import Any, Iterable, Mapping
 import xml.etree.ElementTree as ET
 
 from ..retrieval.xml import child_text, local, parse_file
-from ..transforms import selected_targets
+from ..transforms import selected_cda_targets
 
 
 def value_set_members(xml_paths: Iterable[Path]) -> dict[str, list[dict[str, str]]]:
@@ -69,6 +69,13 @@ def rule_id(prefix: str, target: str) -> str:
     return f"{prefix}-{slug}"[:120]
 
 
+def occurrence_target(target: str, branch: str) -> str:
+    """Name one logical occurrence of a repeatable CDA schema target."""
+    head, separator, tail = target.partition(".")
+    label = re.sub(r"[^a-z0-9]+", "_", branch.casefold()).strip("_")
+    return f"{head}_{label}{separator}{tail}" if separator else f"{target}_{label}"
+
+
 def fanout_rule(
     paths: list[str],
     target_name: str,
@@ -111,7 +118,8 @@ def fanout_rule(
         path = next(path for path, value in sides.items() if value == side)
         branches.append({
             "source": path,
-            "target": target_name,
+            "target": occurrence_target(target_name, side),
+            "cda_target": target_name,
             "branch": side,
             "constants": {discriminator_name: right if side == "right" else left},
         })
@@ -173,7 +181,7 @@ def for_each_rules(
         source_depth = depths[0]
         repeat_locations: set[str] = set()
         for path in members:
-            selected = selected_targets(fields[path])
+            selected = selected_cda_targets(fields[path])
             if not selected:
                 continue
             ancestors = targets.get(selected[0], {}).get("repeat_ancestors", [])

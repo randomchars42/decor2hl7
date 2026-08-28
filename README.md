@@ -216,11 +216,15 @@ checksums. A missing cache file is refetched using that exact resolved date.
 `--max-requests` limits actual recursive HTTP attempts rather than merely logical
 resource count.
 
-`closure.json` separates `crawl_complete` from `build_ready`. A crawl may settle
-all requests while a required artifact is unavailable; `build` rejects that
-state and reports the exact identities. Missing optional display or mapping
-evidence does not block compilation. Closures written before this distinction
-are rejected conservatively and must be refreshed with `decor2hl7 fetch`.
+`closure.json` separates crawler settlement from compiler readiness. A settled
+crawl can contain unavailable recursive dependencies. `build` uses the exact
+artifacts that are present and writes `build-diagnostics.json` plus a concise
+`build-diagnostics.md` describing every omission. It never substitutes another
+revision. The selected transaction source/analysis pair, the representing CDA
+document template, identity mismatches, and corrupt successful downloads remain
+fatal. Missing datasets, terminology, nested templates, display evidence, or
+mapping evidence produce a visibly degraded build instead of preventing all
+analysis.
 
 ## Generated models
 
@@ -230,7 +234,10 @@ are rejected conservatively and must be refreshed with `decor2hl7 fetch`.
 - `model.json`: groups plus value-bearing dataset fields. Logical dataset
   options, formal transaction terminology, direct terminology associations and
   executable accepted values are distinct; formal transaction membership wins
-  when both domains exist.
+  when both domains exist. An unavailable formal binding is marked incomplete;
+  logical labels are not promoted into formal codes.
+- `build-diagnostics.json` / `build-diagnostics.md`: unavailable dependency
+  identities, their expected build effect, and unresolved CDA template links.
 - `cda.json`: reachable CDA template constraints, compiled document structure,
   formal ART-DECOR assertions, and readable writable target names such as
   `PatientIdentifier.id` or `ersteinschatzung.effectiveTime`.
@@ -312,9 +319,13 @@ unmapped fields are recorded in `expected.json` and `results.md` rather than
 being silently treated as covered.
 
 `cda-mapping.md` is the working report for completing the mapping: it includes
-selected targets, reasons, alternatives, and suggested actions, but omits long
-provenance chains. `cda-mapping-details.md` adds the build summary, evidence
-chains, scores, template/element identifiers, and structural group context.
+the target-document outline and directly aligns human dataset names,
+`model.json` datapoints, editable `cda-mapping.json` targets, and human CDA
+template names. JSON configuration excerpts precede read-only XML previews.
+`cda-mapping-details.md` adds the build summary, evidence chains, scores,
+template/element identifiers, and structural group context. The reusable,
+target-neutral format is specified in
+[`docs/mapping-documentation-format.md`](docs/mapping-documentation-format.md).
 
 ### CSV → model
 
@@ -359,7 +370,7 @@ Unmapped raw codes become `nullFlavor="OTH"` by default.
 
 ```json
 {
-  "version": 3,
+  "version": 5,
   "fields": {
     "patient.identifikatoren.patienten_id": "PatientIdentifier.id",
     "ersteinschatzung.parameter_der_ersteinschatzung.zeitpunkt_der_ersteinschatzung": "ersteinschatzung.effectiveTime",
@@ -375,6 +386,15 @@ Unmapped raw codes become `nullFlavor="OTH"` by default.
       "sources": ["administrative_aufnahmeinformationen.aufnahmezeitpunkt", "dokumentationsinformationen.beginn_patientenbezogene_dokumentation.zeitpunkt_beginn_patientenbezogene_dokumentation"],
       "target": "CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.low@20160601",
       "policy": "equal_or_error"
+    }
+  },
+  "defaults": {
+    "required_unmapped": {"nullFlavor": "NI"}
+  },
+  "target_defaults": {
+    "Diagnosis.effectiveTime.low": {
+      "nullFlavor": "UNK",
+      "reason": "The transaction contains no diagnosis-onset datapoint."
     }
   }
 }
@@ -397,17 +417,26 @@ mapping or transform proves the runtime semantics.
 Direct `implementation/@xpath` declarations are treated as explicit technical
 mapping evidence when they uniquely resolve to a current writable CDA target.
 
-`cda-mapping.json` version 3 may also contain declarative scalar and structural
-rules. The generated
-proposal currently derives only semantics supported by the specification itself:
+`cda-mapping.json` version 5 may also contain declarative scalar, structural,
+and completion rules. The generated proposal currently derives only semantics
+supported by the specification itself:
 Tetanusschutz drives `negationInd` plus `nullFlavor=NI` for unknown status,
 Isolation drives `negationInd`, and modified Rankin labels map to their numeric
 `{score}` value. Diagnosis occurrences use `for_each`; V/A/Z/G certainty controls
-the qualifier, negation, and fallback end-time; left/right pupil fields use a
+the formal qualifier and exclusion negation; left/right pupil fields use a
 terminology-backed `fan_out`; equivalent encounter start fields use conservative
 `equal_or_error` coalescing. The transform vocabulary is intentionally small
 (`identity`, `enum`, `ordinal`, `not`) and remains data rather than clinical
 Python code.
+
+Completion belongs to the shareable CDA mapping rather than site configuration.
+`defaults.required_unmapped` supplies `nullFlavor="NI"` to an otherwise empty
+required leaf in an active CDA occurrence; optional unmapped elements are omitted.
+`target_defaults` records reviewed, more specific decisions such as
+`nullFlavor="UNK"` for a required diagnosis onset that the transaction does not
+provide. Actual mapped values always win in the same occurrence. Null defaults
+cannot be applied to attributes, optional targets, complex elements, or mandatory
+constraints that prohibit null flavors.
 
 ## Runtime
 
@@ -425,8 +454,10 @@ Runtime is intentionally boring:
 CSV → model paths → code normalization → validation → CDA targets → CDA
 ```
 
-Missing required values use configurable `nullFlavor="NI"` by default. Naive
-datetimes use the configured timezone. `1:n` CSV sources preserve source order
+Missing required dataset values use the site validation policy. Empty required
+CDA leaves in active template branches use the completion policy in
+`cda-mapping.json`, which defaults to `nullFlavor="NI"`. Naive datetimes use the
+configured timezone. `1:n` CSV sources preserve source order
 **and occurrence identity**: repeated groups are normalized as structured rows,
 so an absent value in occurrence 1 cannot shift occurrence 2 into its place. An
 optional primary flag can move one row first, and duplicate primary flags are

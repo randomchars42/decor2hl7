@@ -11,11 +11,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import xml.etree.ElementTree as ET
 
 from .assertions import evaluate as evaluate_assertion
-from .bindings import covered_shared_claims, structure_rules, validate_structures
+from .bindings import (
+    covered_shared_claims,
+    structure_rules,
+    validate_structures,
+    validate_target_defaults,
+)
 from .data import mapping_locator
 from .retrieval.xml import local, parse_file
 from .semantics import direct_compatibility, transformed_compatibility, identifier_root_for_target, valid_oid
-from .transforms import mapping_rules, selected_targets, validate_transform
+from .transforms import mapping_rules, validate_transform
 
 
 def check_site(site: Mapping[str, Any], cda: Mapping[str, Any] | None = None) -> list[str]:
@@ -119,6 +124,7 @@ def check_config(
         for extra in sorted(mapped - fields):
             errors.append(f"{name}: unknown model field {extra}")
     targets = cda.get("targets", {})
+    datapoints = cda.get("datapoints", {})
     structures_by_id = {
         str(rule.get("id") or ""): rule
         for rule in structure_rules(cda_mapping)
@@ -128,9 +134,28 @@ def check_config(
         field = model.get("fields", {}).get(path, {})
         for rule in mapping_rules(value):
             target_name = str(rule["target"])
-            target = targets.get(target_name)
+            cda_target_name = str(rule.get("cda_target") or target_name)
+            if isinstance(datapoints, Mapping) and datapoints:
+                datapoint = datapoints.get(target_name)
+                if not isinstance(datapoint, Mapping):
+                    errors.append(
+                        f"cda-mapping: {path} references unknown logical CDA "
+                        f"datapoint {target_name}"
+                    )
+                    continue
+                modeled_target = str(datapoint.get("cda_target") or "")
+                if modeled_target and modeled_target != cda_target_name:
+                    errors.append(
+                        f"cda-mapping: {path} logical datapoint {target_name} resolves "
+                        f"to {modeled_target}, not {cda_target_name}"
+                    )
+                    continue
+                cda_target_name = modeled_target or cda_target_name
+            target = targets.get(cda_target_name)
             if target is None:
-                errors.append(f"cda-mapping: {path} references unknown target {target_name}")
+                errors.append(
+                    f"cda-mapping: {path} references unknown CDA target {cda_target_name}"
+                )
                 continue
             if rule.get("mode") not in {None, "fallback"}:
                 errors.append(
@@ -138,12 +163,15 @@ def check_config(
                     f"{rule.get('mode')!r}"
                 )
             if rule.get("mode") != "fallback":
-                claims[target_name].append(path)
+                claims[cda_target_name].append(path)
             if target.get("prohibited") or not target.get("renderable"):
-                errors.append(f"cda-mapping: {path} references prohibited/non-renderable target {target_name}")
+                errors.append(
+                    f"cda-mapping: {path} references prohibited/non-renderable "
+                    f"target {cda_target_name}"
+                )
             locations = target.get("locations", [])
             if len(locations) != 1:
-                errors.append(f"cda-mapping: {path} target {target_name} has {len(locations)} physical locations")
+                errors.append(f"cda-mapping: {path} target {cda_target_name} has {len(locations)} physical locations")
             transform = rule.get("transform")
             for reason in validate_transform(transform):
                 errors.append(f"cda-mapping: {path} -> {target_name}: {reason}")
@@ -164,7 +192,7 @@ def check_config(
                 wording = "not directly executable" if not transform else "not executable with configured transform"
                 errors.append(f"cda-mapping: {path} -> {target_name} is {wording}: " + "; ".join(reasons))
             if str(target.get("datatype") or "").upper().startswith("II") and site is not None:
-                if not identifier_root_for_target(target_name, target, site):
+                if not identifier_root_for_target(cda_target_name, target, site):
                     errors.append(f"cda-mapping: {path} -> {target_name} is an II without a fixed/configured root")
     for target_name, paths in sorted(claims.items()):
         covered = covered_shared_claims(cda_mapping).get(target_name, set())
@@ -197,6 +225,7 @@ def check_config(
                     errors.append(f"codes-mapping: {path} maps {raw!r} to unknown canonical value {value!r}")
     if site is not None:
         errors.extend(check_site(site, cda))
+    errors.extend(validate_target_defaults(cda, cda_mapping))
     errors.extend(validate_structures(model, cda, cda_mapping))
     return errors
 

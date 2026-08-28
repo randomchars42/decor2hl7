@@ -725,6 +725,32 @@ def _formal_values(
     return values
 
 
+def _formal_domain_status(
+    field: Mapping[str, Any], value_sets: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    refs = list(field.get("value_set_refs", [])) or [
+        {"id": oid, "effective_date": ""} for oid in field.get("value_sets", [])
+    ]
+    missing: list[dict[str, str]] = []
+    unresolved: list[dict[str, str]] = []
+    for ref in refs:
+        oid = str(ref.get("id") or "")
+        effective = str(ref.get("effective_date") or "")
+        value_set = _resolve_value_set(oid, effective, value_sets)
+        if not value_set or not value_set.get("codes"):
+            missing.append({"id": oid, "effective_date": effective})
+        if value_set:
+            unresolved.extend(
+                dict(include) for include in value_set.get("unresolved_includes", [])
+            )
+    return {
+        "bound": bool(refs),
+        "complete": bool(refs) and not missing and not unresolved,
+        "missing_value_sets": missing,
+        "unresolved_includes": unresolved,
+    }
+
+
 def _logical_values(field: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     values: dict[str, dict[str, Any]] = {}
     option_details = (
@@ -860,6 +886,7 @@ def compile_model(
             if name in node:
                 field[name] = node[name]
         formal_values = _formal_values(node, value_sets)
+        formal_status = _formal_domain_status(node, value_sets)
         logical_values = _logical_values(node)
         field["logical_domain"] = {
             "options": logical_values,
@@ -869,11 +896,14 @@ def compile_model(
             "value_sets": list(node.get("value_set_refs", [])),
             "members": formal_values,
             "source": "transaction-binding",
+            "complete": formal_status["complete"],
+            "missing_value_sets": formal_status["missing_value_sets"],
+            "unresolved_includes": formal_status["unresolved_includes"],
         }
         # Runtime/configuration defaults use the formal transaction binding
         # whenever it is available. Dataset logical options remain reviewable
         # evidence and are not silently promoted to formal codes.
-        accepted_values = formal_values or logical_values
+        accepted_values = formal_values if formal_status["bound"] else logical_values
         if accepted_values:
             field["accepted_values"] = accepted_values
         fields[path] = field

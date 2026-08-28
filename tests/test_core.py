@@ -15,6 +15,11 @@ from decor2hl7.build.mapping import cda_mapping_proposal
 from decor2hl7.build.model import compile_model
 from decor2hl7.build.target import collect_templates, compile_cda, select_template
 from decor2hl7.compile import mapping as mapping_compiler
+from decor2hl7.compile.artifacts import compiler_inputs, write_build_diagnostics
+from decor2hl7.compile.cda import compile_cda_model
+from decor2hl7.compile.reports import (
+    _outline_datapoint_lines, render_cda_mapping_markdown,
+)
 from decor2hl7.compile.terminology import domain_difference
 from decor2hl7.retrieval.artifacts import artifact_problems, artifact_record, closure_records
 from decor2hl7.retrieval.catalog import parse_releases, parse_transactions, transactions
@@ -302,6 +307,51 @@ class CoreTests(unittest.TestCase):
             readable = (output / "cda-expanded-readable.xml").read_text(encoding="utf-8")
             self.assertIn("Mapped dataset path(s): foo", readable)
             self.assertTrue((output / "cda-expanded-readable.md").is_file())
+            guide = (output / "cda-mapping.md").read_text(encoding="utf-8")
+            self.assertIn(
+                "| Name in dataset | `model.json` datapoint | "
+                "`cda-mapping.json` target | Name in CDA template | Status |",
+                guide,
+            )
+            self.assertIn(
+                'setting `fields["foo"]` to `"ExampleDocument.value"`', guide
+            )
+            self.assertLess(
+                guide.index("Abridged configuration excerpt"),
+                guide.index("Resulting CDA placement"),
+            )
+            self.assertNotIn("Put the value", guide)
+
+    def test_mapping_outline_keeps_names_and_wraps_long_targets(self) -> None:
+        short = _outline_datapoint_lines(
+            "│   │   ",
+            {"dataset_name": "Patienten ID", "target": "PatientIdentifier.id"},
+            last=True,
+        )
+        self.assertEqual(
+            short,
+            ["│   │   └── Patienten ID → {PatientIdentifier.id}"],
+        )
+
+        long = _outline_datapoint_lines(
+            "│   │   ",
+            {
+                "dataset_name": "Aufnahmezeitpunkt",
+                "target": (
+                    "CDAEncompassingEncounter.componentOf.encompassingEncounter."
+                    "effectiveTime.low@20160601"
+                ),
+            },
+            last=False,
+        )
+        self.assertEqual(
+            long,
+            [
+                "│   │   ├── Aufnahmezeitpunkt",
+                "│   │   │   → {CDAEncompassingEncounter.componentOf."
+                "encompassingEncounter.effectiveTime.low@20160601}",
+            ],
+        )
 
     def test_code_normalization_and_unmapped_code(self) -> None:
         field = {"type": "code", "values": {"rot": {"code": "R", "code_system": "1.2.3", "display_name": "rot"}}}
@@ -635,16 +685,24 @@ class CoreTests(unittest.TestCase):
         }}
         mapping_cfg = {
             "fields": {
-                "pupil.right": {"target": "Pupil.value", "structure": "pupils", "branch": "right"},
-                "pupil.left": {"target": "Pupil.value", "structure": "pupils", "branch": "left"},
+                "pupil.right": {
+                    "target": "Pupil_right.value", "cda_target": "Pupil.value",
+                    "structure": "pupils", "branch": "right",
+                },
+                "pupil.left": {
+                    "target": "Pupil_left.value", "cda_target": "Pupil.value",
+                    "structure": "pupils", "branch": "left",
+                },
             },
             "structures": {"pupils": {
                 "type": "fan_out",
                 "branches": [
-                    {"source": "pupil.right", "target": "Pupil.value", "constants": {
+                    {"source": "pupil.right", "target": "Pupil_right.value",
+                     "cda_target": "Pupil.value", "constants": {
                         "Pupil.side": {"code": "R", "codeSystem": "1.2.276.0.76.3.1.195.5.48", "displayName": "Auge rechts"},
                     }},
-                    {"source": "pupil.left", "target": "Pupil.value", "constants": {
+                    {"source": "pupil.left", "target": "Pupil_left.value",
+                     "cda_target": "Pupil.value", "constants": {
                         "Pupil.side": {"code": "L", "codeSystem": "1.2.276.0.76.3.1.195.5.48", "displayName": "Auge links"},
                     }},
                 ],
@@ -657,6 +715,39 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(assignments["Pupil.value"], ["3", "2"])
         self.assertEqual([value["code"] for value in assignments["Pupil.side"]], ["R", "L"])
         self.assertFalse(problems)
+        datapoints = mapping_compiler.cda_datapoints(cda_model, mapping_cfg)
+        self.assertEqual(
+            set(datapoints), {"Pupil_right.value", "Pupil_left.value"}
+        )
+        self.assertEqual(
+            {value["cda_target"] for value in datapoints.values()},
+            {"Pupil.value"},
+        )
+        self.assertEqual(
+            datapoints["Pupil_right.value"]["occurrence"]["branch"], "right"
+        )
+        report_cda = {
+            **cda_model,
+            "document_template": {
+                "id": "1.2.3", "effective_date": "2026-01-01T00:00:00",
+                "name": "Document", "display_name": "Test document",
+            },
+            "document": [],
+            "datapoints": datapoints,
+        }
+        report = render_cda_mapping_markdown(
+            model, report_cda, mapping_cfg,
+            {"summary": {"field_coverage": {"NO": 0}}},
+        )
+        self.assertIn("{Pupil_right.value}", report)
+        self.assertIn("{Pupil_left.value}", report)
+        self.assertLess(
+            report.index("Abridged configuration excerpt"),
+            report.index("Resulting CDA placement"),
+        )
+        self.assertIn("do not edit the XML examples", report)
+        self.assertIn("review the rule stored at `fields[\"pupil.right\"]`", report)
+        self.assertIn("Text in `{braces}` names a generated CDA datapoint", report)
         self.assertEqual(
             validate.check_config(
                 model, cda_model,
@@ -699,6 +790,14 @@ class CoreTests(unittest.TestCase):
         self.assertIsNotNone(inferred)
         _, fanout = inferred
         self.assertEqual(
+            [branch["target"] for branch in fanout["branches"]],
+            ["Pupil_right.value", "Pupil_left.value"],
+        )
+        self.assertEqual(
+            {branch["cda_target"] for branch in fanout["branches"]},
+            {"Pupil.value"},
+        )
+        self.assertEqual(
             [branch["constants"]["Pupil.targetSiteCode"]["code"] for branch in fanout["branches"]],
             ["362502000", "362503005"],
         )
@@ -722,9 +821,12 @@ class CoreTests(unittest.TestCase):
                 "path": "hl7:observation/@negationInd", "renderable": True,
                 "locations": ["0.1"], "repeat_ancestors": ["0"],
             },
-            "Diagnosis.high": {
-                "path": "hl7:observation/hl7:effectiveTime/hl7:high", "renderable": True,
-                "locations": ["0.2"], "repeat_ancestors": ["0"],
+            "Diagnosis.low": {
+                "kind": "element", "datatype": "TS", "min": 1, "max": 1,
+                "mandatory": False, "has_children": False, "conformance": "R",
+                "path": "hl7:observation/hl7:effectiveTime/hl7:low",
+                "renderable": True, "locations": ["0.2"],
+                "repeat_ancestors": ["0"],
             },
         }}
         certainty = mapping_compiler._certainty_mapping(
@@ -735,9 +837,24 @@ class CoreTests(unittest.TestCase):
             ]},
         )
         self.assertIsNotNone(certainty)
-        selection, _ = certainty
+        selection, metadata = certainty
         self.assertIn("VS(certainty-vs)", selection["primary"]["chain"])
-        self.assertEqual(selection["mapping"][-1]["mode"], "fallback")
+        self.assertFalse(any(rule.get("mode") == "fallback" for rule in selection["mapping"]))
+        self.assertEqual(
+            metadata["target_defaults"]["Diagnosis.low"]["nullFlavor"], "UNK"
+        )
+        certainty_datapoints = mapping_compiler.cda_datapoints(
+            certainty_cda,
+            {
+                "fields": {"diagnoses.certainty": selection["mapping"]},
+                "target_defaults": metadata["target_defaults"],
+            },
+        )
+        self.assertEqual(
+            certainty_datapoints["Diagnosis.low"]["default"]["nullFlavor"],
+            "UNK",
+        )
+        self.assertEqual(certainty_datapoints["Diagnosis.low"]["dataset_fields"], [])
 
         coalesced = mapping_compiler._coalesce_rule(
             ["encounter.admission", "encounter.documentation"], "Encounter.low",
@@ -866,6 +983,203 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(assignments["Diagnosis.high"][0], None)
         self.assertEqual(assignments["Diagnosis.high"][1], {"nullFlavor": "UNK"})
         self.assertEqual(assignments["Diagnosis.high"][2], "2026-08-28T12:00:00+02:00")
+
+    def test_mapping_owned_defaults_complete_each_active_occurrence(self) -> None:
+        def target(location: str, datatype: str, minimum: int = 1) -> dict[str, object]:
+            return {
+                "kind": "element", "datatype": datatype, "min": minimum, "max": 1,
+                "mandatory": False, "has_children": False, "conformance": "R",
+                "renderable": True, "locations": [location],
+                "repeat_ancestors": ["0.0"], "fixed": {},
+                "template_name": "Diagnosis", "template_display_name": "Diagnosis",
+            }
+
+        compiled = {
+            "targets": {
+                "Diagnosis.value": {
+                    **target("0.0.0", "ST"),
+                    "path": "hl7:observation/hl7:value",
+                },
+                "Diagnosis.low": {
+                    **target("0.0.1", "TS"),
+                    "path": "hl7:observation/hl7:effectiveTime/hl7:low",
+                },
+                "Diagnosis.requiredNote": {
+                    **target("0.0.2", "ST"),
+                    "path": "hl7:observation/hl7:text",
+                },
+                "Diagnosis.optionalComment": {
+                    **target("0.0.3", "ST", 0),
+                    "path": "hl7:observation/hl7:comment",
+                },
+            },
+            "document_template": {
+                "id": "1.2.3", "effective_date": "2026-01-01",
+                "name": "Document", "display_name": "Test document",
+            },
+            "document": [{
+                "kind": "element", "name": "hl7:ClinicalDocument", "min": 1,
+                "max": 1, "mandatory": True, "attributes": [], "codes": [],
+                "fixed": {}, "targets": [], "children": [{
+                    "kind": "element", "name": "hl7:observation", "min": 0,
+                    "max": None, "mandatory": False, "attributes": [], "codes": [],
+                    "fixed": {}, "targets": [], "children": [
+                        {"kind": "element", "name": "hl7:value", "datatype": "ST",
+                         "min": 1, "max": 1, "mandatory": False, "attributes": [],
+                         "codes": [], "fixed": {}, "children": [],
+                         "targets": ["Diagnosis.value"], "target": "Diagnosis.value"},
+                        {"kind": "element", "name": "hl7:low", "datatype": "TS",
+                         "min": 1, "max": 1, "mandatory": False, "attributes": [],
+                         "codes": [], "fixed": {}, "children": [],
+                         "targets": ["Diagnosis.low"], "target": "Diagnosis.low"},
+                        {"kind": "element", "name": "hl7:text", "datatype": "ST",
+                         "min": 1, "max": 1, "mandatory": False, "attributes": [],
+                         "codes": [], "fixed": {}, "children": [],
+                         "targets": ["Diagnosis.requiredNote"],
+                         "target": "Diagnosis.requiredNote"},
+                        {"kind": "element", "name": "hl7:comment", "datatype": "ST",
+                         "min": 0, "max": 1, "mandatory": False, "attributes": [],
+                         "codes": [], "fixed": {}, "children": [],
+                         "targets": ["Diagnosis.optionalComment"],
+                         "target": "Diagnosis.optionalComment"},
+                    ],
+                }],
+            }],
+        }
+        model = {"fields": {
+            "diagnoses.value": {"type": "text", "repeat_chain": ["diagnoses"]},
+            "diagnoses.onset": {"type": "datetime", "repeat_chain": ["diagnoses"]},
+            "diagnoses.note": {"type": "text", "repeat_chain": ["diagnoses"]},
+        }}
+        mapping = {
+            "version": 5,
+            "fields": {
+                "diagnoses.value": "Diagnosis.value",
+                "diagnoses.onset": "Diagnosis.low",
+                "diagnoses.note": None,
+            },
+            "defaults": {"required_unmapped": {"nullFlavor": "NI"}},
+            "target_defaults": {
+                "Diagnosis.low": {
+                    "nullFlavor": "UNK",
+                    "reason": "No diagnosis-onset datapoint is available.",
+                },
+            },
+        }
+        record = {"key": "P1", "values": {}, "instances": {"diagnoses": [
+            {"values": {
+                "diagnoses.value": "A",
+                "diagnoses.onset": "2026-01-01",
+            }},
+            {"values": {"diagnoses.value": "B"}},
+        ]}}
+        errors = validate.check_config(
+            model, compiled,
+            {"fields": {
+                "diagnoses.value": None,
+                "diagnoses.onset": None,
+                "diagnoses.note": None,
+            }},
+            mapping,
+        )
+        self.assertEqual(errors, [])
+        payload, problems = cda.emit(
+            record, model, compiled, mapping,
+            {"null_flavor": {"missing_required": "UNK"}},
+        )
+        self.assertEqual(problems, [])
+        observations = list(ET.fromstring(payload))
+        self.assertEqual(len(observations), 2)
+        self.assertEqual(observations[0][1].get("value"), "20260101")
+        self.assertEqual(observations[1][1].get("nullFlavor"), "UNK")
+        self.assertEqual(observations[0][2].get("nullFlavor"), "NI")
+        self.assertEqual(observations[1][2].get("nullFlavor"), "NI")
+        self.assertEqual(len(observations[0]), 3)
+        self.assertEqual(len(observations[1]), 3)
+
+        report = render_cda_mapping_markdown(
+            model, compiled, mapping,
+            {"summary": {"field_coverage": {"NO": 0}}},
+        )
+        self.assertIn("## Required CDA completion", report)
+        self.assertIn('nullFlavor="NI"', report)
+        self.assertIn('nullFlavor="UNK"', report)
+        self.assertIn("No diagnosis-onset datapoint is available", report)
+        self.assertIn("## Review required", report)
+        self.assertIn("`diagnoses.note`", report)
+        self.assertIn("explicitly `null` in `cda-mapping.json`", report)
+
+    def test_target_default_validation_rejects_unsafe_nullification(self) -> None:
+        def target(**changes: object) -> dict[str, object]:
+            result: dict[str, object] = {
+                "kind": "element", "datatype": "ST", "min": 1, "max": 1,
+                "mandatory": False, "has_children": False, "conformance": "R",
+                "renderable": True, "locations": ["0.0"], "fixed": {},
+            }
+            result.update(changes)
+            return result
+
+        compiled = {"targets": {
+            "Optional.value": target(min=0),
+            "Required.attribute": target(kind="attribute"),
+            "Mandatory.value": target(mandatory=True),
+            "Complex.value": target(has_children=True),
+        }}
+        mapping = {
+            "fields": {},
+            "defaults": {"required_unmapped": {"nullFlavor": "BAD"}},
+            "target_defaults": {
+                name: {"nullFlavor": "NI"} for name in compiled["targets"]
+            },
+        }
+        errors = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}}, mapping
+        )
+        self.assertTrue(any("invalid nullFlavor 'BAD'" in error for error in errors))
+        self.assertTrue(any("Optional.value" in error and "optional" in error for error in errors))
+        self.assertTrue(any("Required.attribute" in error and "attribute" in error for error in errors))
+        self.assertTrue(any("Mandatory.value" in error and "does not permit" in error for error in errors))
+        self.assertTrue(any("Complex.value" in error and "complex" in error for error in errors))
+
+    def test_mapping_default_does_not_nullify_mandatory_or_complex_elements(self) -> None:
+        def document(child: dict[str, object]) -> dict[str, object]:
+            return {
+                "targets": {},
+                "document": [{
+                    "kind": "element", "name": "hl7:ClinicalDocument",
+                    "min": 1, "max": 1, "mandatory": True,
+                    "attributes": [], "fixed": {"classCode": "DOCCLIN"},
+                    "children": [child],
+                }],
+            }
+
+        mandatory = {
+            "kind": "element", "name": "hl7:value", "datatype": "ST",
+            "min": 1, "max": 1, "mandatory": True, "attributes": [],
+            "codes": [], "fixed": {}, "children": [], "targets": [],
+        }
+        complex_required = {
+            "kind": "element", "name": "hl7:component", "min": 1, "max": 1,
+            "mandatory": False, "attributes": [], "codes": [], "fixed": {},
+            "children": [{
+                "kind": "element", "name": "hl7:text", "datatype": "ST",
+                "min": 0, "max": 1, "mandatory": False, "attributes": [],
+                "codes": [], "fixed": {}, "children": [], "targets": [],
+            }], "targets": [],
+        }
+        mapping = {
+            "fields": {},
+            "defaults": {"required_unmapped": {"nullFlavor": "NI"}},
+        }
+        for compiled, message in (
+            (document(mandatory), "mandatory CDA element"),
+            (document(complex_required), "required complex CDA element"),
+        ):
+            with self.assertRaisesRegex(ValueError, message):
+                cda.emit(
+                    {"key": "1", "values": {}}, {"fields": {}}, compiled,
+                    mapping, {},
+                )
 
     def test_config_validation_requires_all_fields(self) -> None:
         errors = validate.check_config({"fields": {"a": {}, "b": {}}}, {"targets": {"T.value": {}}},
@@ -1145,7 +1459,7 @@ class CoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "fallback template inputs"):
                 collect_templates([], [source])
 
-    def test_artifact_identity_mismatch_and_readiness_are_independent(self) -> None:
+    def test_artifact_identity_mismatch_is_fatal_but_missing_dependency_is_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release = Path(tmp)
             analysis = release / "templates" / "t.xml"
@@ -1179,15 +1493,140 @@ class CoreTests(unittest.TestCase):
                 "build_resources": ["template:t@2005"],
                 "resource_roles": {"template:t@2005": ["structure"]},
             }), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "not build-ready"):
-                closure_records(release, transaction)
+            records = closure_records(release, transaction)
+            self.assertEqual(len(records), 1)
+            self.assertTrue(any(
+                "requested static revision" in item
+                for item in artifact_problems(records[0])
+            ))
 
             (transaction / "closure.json").write_text(json.dumps({
                 "complete": True,
                 "build_resources": [],
             }), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "predates build-readiness"):
-                closure_records(release, transaction)
+            self.assertEqual(closure_records(release, transaction), [])
+
+    def test_compiler_inputs_omit_and_report_missing_auxiliary_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release = Path(tmp)
+            transaction = release / "transactions" / "tx"
+            transaction.mkdir(parents=True)
+            source = transaction / "transaction.source.xml"
+            analysis = transaction / "transaction.xml"
+            template = release / "templates" / "doc.xml"
+            template.parent.mkdir()
+            source.write_text(
+                '<transaction id="tx" effectiveDate="2026"><representingTemplate ref="doc"/></transaction>',
+                encoding="utf-8",
+            )
+            analysis.write_text(
+                '<dataset transactionId="tx" transactionEffectiveDate="2026" templateId="doc"/>',
+                encoding="utf-8",
+            )
+            template.write_text(
+                '<template id="doc" effectiveDate="2026"><element name="hl7:ClinicalDocument"/></template>',
+                encoding="utf-8",
+            )
+            resources = {
+                "transaction-source:tx@2026": {
+                    "status": "ok",
+                    "file": str(source.relative_to(release)),
+                    "identity": {"type": "transaction", "id": "tx", "effective_date": "2026"},
+                    "requested_effective_date": "2026",
+                    "resolved_effective_date": "2026",
+                },
+                "transaction:tx@2026": {
+                    "status": "ok",
+                    "file": str(analysis.relative_to(release)),
+                    "identity": {"type": "transaction", "id": "tx", "effective_date": "2026"},
+                    "requested_effective_date": "2026",
+                    "resolved_effective_date": "2026",
+                },
+                "template:doc@2026": {
+                    "status": "ok",
+                    "file": str(template.relative_to(release)),
+                    "identity": {"type": "template", "id": "doc", "effective_date": "2026"},
+                    "requested_effective_date": "2026",
+                    "resolved_effective_date": "2026",
+                },
+                "dataset:missing@2020": {
+                    "status": "missing",
+                    "identity": {"type": "dataset", "id": "missing", "effective_date": "2020"},
+                    "requested_effective_date": "2020",
+                },
+            }
+            (release / "manifest.json").write_text(
+                json.dumps({"resources": resources}), encoding="utf-8"
+            )
+            (transaction / "closure.json").write_text(json.dumps({
+                "crawl_complete": True,
+                "build_ready": False,
+                "build_resources": ["template:doc@2026", "dataset:missing@2020"],
+                "evidence_resources": ["template:doc@2026", "dataset:missing@2020"],
+                "resource_roles": {
+                    "template:doc@2026": ["structure"],
+                    "dataset:missing@2020": ["structure"],
+                },
+            }), encoding="utf-8")
+
+            inputs = compiler_inputs(release, transaction)
+            self.assertEqual(inputs["templates"], [template])
+            self.assertEqual(
+                [item["request_key"] for item in inputs["unavailable_artifacts"]],
+                ["dataset:missing@2020"],
+            )
+            self.assertNotIn(release / "datasets" / "missing.xml", inputs["model_resources"])
+
+    def test_tolerant_cda_compile_reports_nested_gap_but_requires_document(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            document = directory / "doc.xml"
+            document.write_text('''<template id="doc" effectiveDate="2026" name="Doc">
+              <element name="hl7:ClinicalDocument"><include ref="missing" flexibility="2020"/></element>
+            </template>''', encoding="utf-8")
+            model = {"meta": {"template_id": "doc", "template_effective_date": "2026"}, "fields": {}, "groups": {}}
+            compiled = compile_cda_model([document], model)
+            self.assertEqual(len(compiled["unresolved_templates"]), 1)
+            self.assertEqual(compiled["unresolved_templates"][0]["template"], "missing")
+            with self.assertRaisesRegex(ValueError, "document template absent .*not fetched"):
+                compile_cda_model([], {"meta": {"template_id": "absent"}, "fields": {}, "groups": {}})
+
+    def test_build_diagnostics_describe_omissions_and_no_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp)
+            inputs = {"unavailable_artifacts": [{
+                "request_key": "valueset:vs@2020", "type": "valueset",
+                "status": "missing", "roles": ["formal-terminology"],
+                "reasons": ["valueset:vs@2020: artifact status is missing"],
+            }]}
+            cda_model = {"unresolved_templates": [{
+                "relation": "include", "template": "nested", "flexibility": "2019",
+            }]}
+            result = write_build_diagnostics(model_dir, inputs, cda_model)
+            self.assertEqual(result["status"], "degraded")
+            self.assertFalse(result["policy"]["substitute_revisions"])
+            report = (model_dir / "build-diagnostics.md").read_text(encoding="utf-8")
+            self.assertIn("valueset:vs@2020", report)
+            self.assertIn("nested", report)
+
+    def test_missing_formal_valueset_does_not_promote_logical_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transaction = Path(tmp) / "transaction.xml"
+            transaction.write_text('''<dataset>
+              <concept id="c" shortName="status" type="item">
+                <name>Status</name>
+                <valueDomain type="code"><conceptList><concept><name>Logical label</name></concept></conceptList></valueDomain>
+                <valueSet id="missing-vs" effectiveDate="2020"/>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            model = compile_model(transaction)
+            field = model["fields"]["status"]
+            self.assertEqual(accepted_values(field), {})
+            self.assertFalse(field["formal_terminology"]["complete"])
+            self.assertEqual(
+                field["formal_terminology"]["missing_value_sets"][0]["id"],
+                "missing-vs",
+            )
 
     def test_dynamic_and_exact_requests_share_one_canonical_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1926,7 +2365,8 @@ class CoreTests(unittest.TestCase):
             proposal["fields"]["triage.color"],
             {"rot": "rot", "orange": "orange", "gelb": "gelb"},
         )
-        self.assertIn("3 model defaults", report)
+        self.assertIn("3 canonical values accepted directly", report)
+        self.assertIn("No aliases require configuration", report)
 
     def test_codes_mapping_contains_model_codes_and_display_aliases_without_csv(self) -> None:
         model = {

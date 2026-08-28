@@ -973,14 +973,6 @@ def closure_paths(release_dir: Path, transaction_dir: Path, role: str = "build")
     crawl_complete = closure.get("crawl_complete", closure.get("complete"))
     if not crawl_complete or closure.get("interrupted") or closure.get("truncated"):
         raise ValueError("transaction crawl is incomplete; rerun `decor2hl7 fetch`")
-    if role == "build" and closure.get("build_ready") is not True:
-        reasons = closure.get("readiness_errors", [])
-        if "build_ready" not in closure:
-            reasons = [
-                "closure predates build-readiness validation; rerun `decor2hl7 fetch`"
-            ]
-        suffix = f": {'; '.join(map(str, reasons))}" if reasons else ""
-        raise ValueError(f"transaction specification is not build-ready{suffix}")
     manifest = load_json(release_dir / "manifest.json")
     keys = closure.get(f"{role}_resources", [])
     result: list[Path] = []
@@ -1111,9 +1103,9 @@ def fetch_spec(
             readiness_errors.append("selected transaction analysis form is unavailable")
         if root_status["transaction_source"] != "ok":
             readiness_errors.append("selected transaction source form is unavailable")
-        readiness_errors.extend(
-            f"required artifact unavailable: {key}" for key in required_failures
-        )
+        degradation_warnings = [
+            f"dependency unavailable: {key}" for key in required_failures
+        ]
         build_ready = crawl_complete and not readiness_errors
         closure = {
             "format": 2,
@@ -1125,6 +1117,9 @@ def fetch_spec(
             "crawl_complete": crawl_complete,
             "build_ready": build_ready,
             "readiness_errors": readiness_errors,
+            "degraded": bool(degradation_warnings),
+            "degraded_resources": required_failures,
+            "degradation_warnings": degradation_warnings,
             "interrupted": interrupted,
             "phase": phase,
             "build_resources": sorted(roles["build"]),

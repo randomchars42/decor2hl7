@@ -97,11 +97,11 @@ def _mapping_roots(
     cda: Mapping[str, Any], cda_mapping: Mapping[str, Any]
 ) -> dict[str, str]:
     from .bindings import structure_rules
-    from .transforms import mapping_rules
+    from .transforms import cda_target_name, mapping_rules
 
     roots: dict[str, str] = {}
     names = {
-        str(rule.get("target") or "")
+        cda_target_name(rule)
         for selected in cda_mapping.get("fields", {}).values()
         for rule in mapping_rules(selected)
     }
@@ -112,7 +112,7 @@ def _mapping_roots(
             if not isinstance(branch, Mapping):
                 continue
             if branch.get("target"):
-                names.add(str(branch["target"]))
+                names.add(cda_target_name(branch))
             constants = branch.get("constants", {})
             if isinstance(constants, Mapping):
                 names.update(str(name) for name in constants)
@@ -293,8 +293,8 @@ def run_fixture(
     """Run an isolated fixture and write machine- and human-readable results."""
     from . import cda as cda_runtime
     from . import validate
-    from .bindings import build_assignments, structure_rules
-    from .transforms import selected_targets
+    from .bindings import build_assignments, structure_rules, target_default_values
+    from .transforms import cda_target_name, mapping_rules
 
     config_dir = test_dir / "config"
     expected = load_json(test_dir / "expected.json")
@@ -349,9 +349,9 @@ def run_fixture(
             f"{len(missing_exercise)} mapped field(s) were not exercised by generated input"
         )
     selected_target_names = {
-        target
+        cda_target_name(rule)
         for selected in cda_mapping.get("fields", {}).values()
-        for target in selected_targets(selected)
+        for rule in mapping_rules(selected)
     }
     for structure in structure_rules(cda_mapping):
         if structure.get("target"):
@@ -360,11 +360,15 @@ def run_fixture(
             if not isinstance(branch, Mapping):
                 continue
             if branch.get("target"):
-                selected_target_names.add(str(branch["target"]))
+                selected_target_names.add(cda_target_name(branch))
             constants = branch.get("constants", {})
             if isinstance(constants, Mapping):
                 selected_target_names.update(str(name) for name in constants)
-    unassigned_targets = sorted(selected_target_names - assigned_targets)
+    configured_defaults = set(target_default_values(cda, cda_mapping))
+    selected_target_names.update(configured_defaults)
+    unassigned_targets = sorted(
+        selected_target_names - assigned_targets - configured_defaults
+    )
     test_warnings = [item for values in render_warnings.values() for item in values]
     if expected.get("cda_mapping_sha256") != json_digest(cda_mapping):
         test_warnings.append(
@@ -392,6 +396,7 @@ def run_fixture(
             "mapped_fields_not_exercised": missing_exercise,
             "selected_targets": len(selected_target_names),
             "assigned_targets": len(assigned_targets),
+            "configured_target_defaults": sorted(configured_defaults),
             "selected_targets_not_assigned": unassigned_targets,
         },
         "provenance": {

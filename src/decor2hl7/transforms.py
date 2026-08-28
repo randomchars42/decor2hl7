@@ -36,6 +36,22 @@ def selected_targets(value: Any) -> list[str]:
     return [str(rule["target"]) for rule in mapping_rules(value)]
 
 
+def cda_target_name(rule: Mapping[str, Any]) -> str:
+    """Return the physical CDA target behind a logical target occurrence.
+
+    Most mappings use the same name for both.  Structural mappings may expose
+    distinct reviewable occurrences such as ``Pupilsize_right.value`` and
+    ``Pupilsize_left.value`` while both are rendered through the repeatable
+    schema target ``Pupilsize.value``.
+    """
+    return str(rule.get("cda_target") or rule.get("target") or "")
+
+
+def selected_cda_targets(value: Any) -> list[str]:
+    """Return physical CDA targets selected by one mapping value."""
+    return [cda_target_name(rule) for rule in mapping_rules(value)]
+
+
 def _selected_value(value: Any, transform: Mapping[str, Any]) -> Any:
     """Select the part of a normalized value used as a transform key.
 

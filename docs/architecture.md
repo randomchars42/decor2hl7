@@ -53,7 +53,7 @@ src/decor2hl7/
         cda.py          exact templates/SPEC → cda.json
         mapping.py      decisions → audit + proposal
         structural.py   cardinality/terminology → structural rules
-        reports.py      readable effective CDA
+        reports.py      readable effective CDA + mapping guide
     build/              compatibility imports for one release
     data.py             CSV joining/normalization
     bindings.py         occurrence fan-out/coalescing + CDA assignments
@@ -132,8 +132,9 @@ Important rules retained from the prototype:
 
 `manifest.json` answers “what is cached for this release?”; transaction
 `closure.json` answers “which cached resources belong to this transaction?” It
-also separates crawler settlement (`crawl_complete`) from permission to compile
-(`build_ready`).
+also separates crawler settlement (`crawl_complete`) from availability of the
+selected transaction pair (`build_ready`) and records unavailable recursive
+dependencies as degraded resources.
 
 ## Artifact and terminology contracts
 
@@ -150,14 +151,28 @@ records contained additions separately.
 `logical_domain` records dataset choices, `formal_terminology` records the exact
 transaction ValueSet binding and members, and `terminology_associations` retains
 direct links with their source concept IDs. `accepted_values` is the executable
-domain and prefers formal membership, preventing logical-only options from being
-silently treated as formal codes.
+domain. When a formal binding exists, only known formal members are executable;
+an unavailable or partly expanded binding is explicitly incomplete and does not
+fall back to logical-only labels.
+
+The compiler boundary separates unavailability from contradiction. Missing
+auxiliary datasets, terminology and nested templates are omitted and listed in
+`build-diagnostics.*`. A successful artifact with a mismatched exact identity or
+missing cached file is a contradiction and remains fatal. The selected
+transaction source/analysis pair and the representing CDA document template are
+also mandatory. This permits review of partial source material without silently
+claiming constraints or terminology that were not retrieved.
 
 ## CDA compilation
 
-`cda.json` is the runtime boundary. It contains named writable targets plus the
-compiled XML constraint tree. ART-DECOR identifiers are provenance, not runtime
-addresses.
+`cda.json` is the runtime boundary. `targets` contains physical named template
+constraints; `datapoints` contains the logical writable interface established
+after mapping. Most logical datapoints point to a same-named physical target.
+Discriminated repetitions instead expose separate names such as
+`Pupilsize_right.value` and `Pupilsize_left.value`, both linked to the physical
+repeatable `Pupilsize.value` constraint and carrying their side discriminator.
+The same logical datapoints are used by configuration, reports, validation and
+runtime assignment. ART-DECOR identifiers are provenance, not runtime addresses.
 
 `SPEC` is recursive constraint refinement, not tree concatenation. Matching
 child constraints inherit omitted parent properties and override explicit ones;
@@ -209,17 +224,29 @@ Mapping values can be direct target strings or declarative rule objects. A field
 may control more than one target (for example Tetanusschutz `negationInd` and
 `nullFlavor`) without introducing target-specific renderer code.
 
-`cda-mapping.json` version 3 separates scalar transforms from structural
-bindings. The compiler emits only rules supported by explicit cardinality and
-terminology evidence:
+`cda-mapping.json` version 5 separates scalar transforms, structural bindings,
+and CDA completion policy. The compiler emits only rules supported by explicit
+cardinality, terminology, and template evidence:
 
 - `for_each` preserves one source-group occurrence as one CDA occurrence;
 - `fan_out` turns sibling fields such as right/left measurements into separate
-  CDA occurrences and writes the discriminator required by the target ValueSet;
+  logical CDA datapoints and occurrences, retaining their shared physical
+  target and writing the discriminator required by the target ValueSet;
 - `coalesce` lets equivalent singleton fields share a target, using
   `equal_or_error` unless a different policy is explicitly configured;
-- `mode: "fallback"` fills absent leaves without replacing real values in other
-  occurrences (for example an unknown diagnosis end implied by certainty `Z`).
+- `mode: "fallback"` remains available for an explicitly configured
+  source-dependent fallback and fills each occurrence independently;
+- `defaults.required_unmapped` fills an otherwise empty required leaf in an
+  active template branch with `nullFlavor="NI"` by default;
+- `target_defaults` records reviewed target-specific completion, such as
+  `nullFlavor="UNK"` for the required diagnosis onset that this transaction does
+  not provide. A real mapped onset wins in its own occurrence.
+
+Completion rules do not activate optional branches. They cannot nullify
+attributes, optional targets, complex elements, or mandatory constraints that
+prohibit null flavors. Thus deliberately leaving a dataset-to-CDA field mapping
+empty does not invalidate the whole mapping when the corresponding required CDA
+leaf can legally carry a null flavor; optional leaves remain absent.
 
 The compiler does not embed AKTIN paths, OIDs, or side codes in the runtime. A
 generated rule carries the resolved source paths, targets, and terminology

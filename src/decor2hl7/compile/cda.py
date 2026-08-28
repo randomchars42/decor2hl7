@@ -731,8 +731,12 @@ def _annotate_targets(
                     # but do not allow mappings or site values to override it.
                     target["renderable"] = not prohibited and node.get("fixed_text") is None
                     # The concrete node carries effective SPEC constraints.
-                    for key in ("datatype", "value_sets", "codes", "fixed", "fixed_text", "unit"):
+                    for key in (
+                        "datatype", "value_sets", "codes", "fixed", "fixed_text", "unit",
+                        "min", "max", "mandatory",
+                    ):
                         target[key] = deepcopy(node.get(key))
+                    target["has_children"] = bool(node.get("children"))
                 if own_name:
                     for source in node.get("sources", []):
                         key = _source_key(source)
@@ -772,6 +776,10 @@ def _annotate_targets(
                         target["datatype"] = attr.get("datatype")
                         target["value_sets"] = deepcopy(attr.get("value_sets", []))
                         target["fixed"] = {"value": fixed_value} if fixed_value is not None else {}
+                        target["min"] = 0 if attr.get("optional") is not False else 1
+                        target["max"] = 1
+                        target["mandatory"] = attr.get("optional") is False
+                        target["has_children"] = False
                     if own_attr:
                         for source in attr.get("sources", []):
                             key = _source_key(source)
@@ -854,7 +862,7 @@ def compile_cda(
         return elements, attributes
     element_count, attribute_count = constraint_counts(document)
     return {
-        "version": 2,
+        "version": 3,
         "format": "cda",
         "document_template": {
             "id": template_id,
@@ -863,6 +871,10 @@ def compile_cda(
             "display_name": selected.get("displayName"),
         },
         "targets": targets,
+        # Filled after dataset-to-CDA mapping has established logical target
+        # occurrences.  ``targets`` remains the physical template constraint
+        # registry; ``datapoints`` is the writable model-facing interface.
+        "datapoints": {},
         "source_index": source_index,
         "assertions": assertions,
         "document": document,
@@ -894,12 +906,17 @@ def write_cda(
 def compile_cda_model(
     templates: Iterable[Path], model: dict[str, Any],
 ) -> dict[str, Any]:
-    """Compile the exact build-template closure into the CDA target model."""
-    return compile_cda(templates, model)
+    """Compile all available exact templates and report closure gaps."""
+    return compile_cda(templates, model, strict=False)
 
 
 def write_cda_model(
     templates: Iterable[Path], model_dir: Path, model: dict[str, Any],
 ) -> dict[str, Any]:
-    """Write ``cda.json`` and its effective Schematron."""
-    return write_cda(templates, model_dir, model)
+    """Write ``cda.json`` while retaining unresolved nested references."""
+    cda = compile_cda(templates, model, strict=False)
+    write_json(model_dir / "cda.json", cda)
+    (model_dir / "cda-assertions.sch").write_text(
+        schematron(cda), encoding="utf-8"
+    )
+    return cda

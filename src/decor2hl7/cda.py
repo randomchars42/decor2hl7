@@ -11,7 +11,11 @@ import xml.etree.ElementTree as ET
 from typing import Any, Mapping
 
 from .assertions import validate_contexts
-from .bindings import build_assignments
+from .bindings import (
+    build_assignments,
+    required_unmapped_null_flavor,
+    target_default_values,
+)
 from .semantics import base_datatype
 
 HL7 = "urn:hl7-org:v3"
@@ -254,6 +258,7 @@ def _render_transparent(
     node: Mapping[str, Any],
     parent: ET.Element | None,
     assignments: Mapping[str, Any],
+    target_defaults: Mapping[str, Mapping[str, str]],
     active_locations: set[tuple[int, ...]],
     cda: Mapping[str, Any],
     location: tuple[int, ...],
@@ -279,8 +284,9 @@ def _render_transparent(
         for index, child in enumerate(node.get("children", [])):
             result.extend(
                 _render_node(
-                    child, parent, assignments, active_locations, cda, location + (index,),
-                    null_flavor, problems, assertion_contexts, current_occurrence,
+                    child, parent, assignments, target_defaults, active_locations, cda,
+                    location + (index,), null_flavor, problems, assertion_contexts,
+                    current_occurrence,
                 )
             )
     return result
@@ -290,6 +296,7 @@ def _render_node(
     node: Mapping[str, Any],
     parent: ET.Element | None,
     assignments: Mapping[str, Any],
+    target_defaults: Mapping[str, Mapping[str, str]],
     active_locations: set[tuple[int, ...]],
     cda: Mapping[str, Any],
     location: tuple[int, ...],
@@ -300,7 +307,7 @@ def _render_node(
 ) -> list[ET.Element]:
     if node.get("kind") in {"include", "template"}:
         return _render_transparent(
-            node, parent, assignments, active_locations, cda, location,
+            node, parent, assignments, target_defaults, active_locations, cda, location,
             null_flavor, problems, assertion_contexts, occurrence,
         )
 
@@ -319,19 +326,20 @@ def _render_node(
         for index in range(count):
             result.extend(
                 _render_node_once(
-                    node, parent, assignments, active_locations, cda, location,
+                    node, parent, assignments, target_defaults, active_locations, cda, location,
                     null_flavor, problems, assertion_contexts, occurrence + (index,),
                 )
             )
         return result
     return _render_node_once(
-        node, parent, assignments, active_locations, cda, location,
+        node, parent, assignments, target_defaults, active_locations, cda, location,
         null_flavor, problems, assertion_contexts, occurrence,
     )
 
 
 def _render_node_once(
     node: Mapping[str, Any], parent: ET.Element | None, assignments: Mapping[str, Any],
+    target_defaults: Mapping[str, Mapping[str, str]],
     active_locations: set[tuple[int, ...]], cda: Mapping[str, Any],
     location: tuple[int, ...], null_flavor: str, problems: list[str],
     assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]],
@@ -374,6 +382,14 @@ def _render_node_once(
     assigned, target_name = _value_for_node(node, assignments)
     if target_name is not None:
         assigned = _at(assigned, occurrence)
+    default = next(
+        (
+            target_defaults[str(name)]
+            for name in node.get("targets", [])
+            if str(name) in target_defaults
+        ),
+        None,
+    )
     if assigned is not None:
         _write_value(element, assigned, node)
     elif node.get("codes"):
@@ -383,17 +399,33 @@ def _render_node_once(
             element.set("code", str(codes[0].get("code")))
             if codes[0].get("code_system"):
                 element.set("codeSystem", str(codes[0]["code_system"]))
+    elif default is not None:
+        _write_value(element, default, node)
 
     child_count = 0
     for index, child in enumerate(node.get("children", [])):
         child_count += len(
             _render_node(
-                child, element, assignments, active_locations, cda, location + (index,),
-                null_flavor, problems, assertion_contexts, occurrence,
+                child, element, assignments, target_defaults, active_locations, cda,
+                location + (index,), null_flavor, problems, assertion_contexts,
+                occurrence,
             )
         )
 
-    if required and assigned is None and not child_count and not element.attrib and not element.text:
+    if (
+        required and assigned is None and default is None
+        and not child_count and not element.attrib and not element.text
+    ):
+        if node.get("mandatory") or str(node.get("conformance") or "").upper() == "M":
+            raise ValueError(
+                f"mandatory CDA element {node.get('name')} has no fixed, mapped, "
+                "or default value and cannot use nullFlavor"
+            )
+        if node.get("children"):
+            raise ValueError(
+                f"required complex CDA element {node.get('name')} has no fixed, "
+                "mapped, or child value; configure a required leaf instead"
+            )
         element.set("nullFlavor", null_flavor)
     return [element]
 
@@ -409,6 +441,7 @@ def emit(
 ) -> tuple[bytes, list[str]]:
     targets = cda.get("targets", {})
     assignments, problems = build_assignments(record, model, cda, mapping, site)
+    target_defaults = target_default_values(cda, mapping)
 
     variables = {"key": record.get("key"), "document_version": document_version}
     document_root = site.get("identifiers", {}).get("document_root")
@@ -432,13 +465,13 @@ def emit(
     if not document:
         raise ValueError("compiled CDA model contains no document element")
     active_locations = _active_target_locations(cda, assignments)
-    null_flavor = str(site.get("null_flavor", {}).get("missing_required") or "NI")
+    null_flavor = required_unmapped_null_flavor(mapping)
     roots: list[ET.Element] = []
     assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]] = []
     for index, node in enumerate(document):
         roots.extend(
             _render_node(
-                node, None, assignments, active_locations, cda, (index,),
+                node, None, assignments, target_defaults, active_locations, cda, (index,),
                 null_flavor, problems, assertion_contexts, (),
             )
         )

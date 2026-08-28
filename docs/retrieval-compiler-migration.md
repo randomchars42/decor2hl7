@@ -73,12 +73,13 @@ CodeSystem identifiers are recorded as optional display evidence and do not
 cause HTTP requests. A CodeSystem used to expand an intensional ValueSet remains
 a required dependency.
 
-`crawl_complete` means that retrieval settled; `build_ready` means the exact
-required artifact/forms contract is satisfied. Closures created before this
-contract are rejected and must be refreshed. In particular, the supplied fresh
-archive predates the root-template/readiness fix, so it remains suitable for the
-semantic comparison above but is intentionally not accepted as a production
-build closure by the revised compiler.
+`crawl_complete` means that retrieval settled; `build_ready` means that the
+selected transaction source/analysis pair is available. Missing recursive
+dependencies are retained in `degraded_resources` and are not silently replaced.
+The compiler consumes the available exact artifacts and writes build diagnostics.
+It still rejects an incomplete crawl, a missing transaction pair, a missing
+representing document template, identity mismatches, and corrupt files that were
+recorded as successful downloads.
 
 ## Code structure
 

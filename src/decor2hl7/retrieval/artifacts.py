@@ -145,8 +145,14 @@ def artifact_record(
     }
 
 
-def artifact_problems(record: Mapping[str, Any]) -> list[str]:
-    """Validate exact identity and required compiler representation."""
+def artifact_integrity_problems(record: Mapping[str, Any]) -> list[str]:
+    """Return contradictions in an artifact that claims to be usable.
+
+    An unavailable dependency is not an integrity problem: the compiler can
+    omit it and report a degraded build.  A successful record with the wrong
+    identity, an absent analysis form, or a missing cached file is different;
+    using it would make the build untrustworthy and therefore remains fatal.
+    """
     problems: list[str] = []
     key = str(record.get("request_key") or "artifact")
     requested = record.get("requested", {})
@@ -154,32 +160,55 @@ def artifact_problems(record: Mapping[str, Any]) -> list[str]:
     forms = record.get("forms", {})
     if not isinstance(requested, Mapping) or not isinstance(resolved, Mapping):
         return [f"{key}: malformed identity"]
-    resolved_date = str(resolved.get("effective_date") or "")
-    requests = record.get("requests", [requested])
-    for request in (requests if isinstance(requests, list) else [requested]):
-        if not isinstance(request, Mapping):
-            continue
-        requested_date = str(request.get("effective_date") or "")
-        if requested_date and requested_date != resolved_date:
-            problems.append(
-                f"{key}: requested static revision {requested_date}, "
-                f"resolved {resolved_date or 'unknown'}"
-            )
-        if request.get("id") and resolved.get("id") and request.get("id") != resolved.get("id"):
-            problems.append(
-                f"{key}: requested id {request.get('id')}, resolved {resolved.get('id')}"
-            )
-    if record.get("required") and record.get("status") != "ok":
-        problems.append(f"{key}: required artifact status is {record.get('status')}")
-    if record.get("required") and (
+    if record.get("status") == "ok":
+        resolved_date = str(resolved.get("effective_date") or "")
+        requests = record.get("requests", [requested])
+        for request in (requests if isinstance(requests, list) else [requested]):
+            if not isinstance(request, Mapping):
+                continue
+            requested_date = str(request.get("effective_date") or "")
+            if requested_date and requested_date != resolved_date:
+                problems.append(
+                    f"{key}: requested static revision {requested_date}, "
+                    f"resolved {resolved_date or 'unknown'}"
+                )
+            if request.get("id") and resolved.get("id") and request.get("id") != resolved.get("id"):
+                problems.append(
+                    f"{key}: requested id {request.get('id')}, resolved {resolved.get('id')}"
+                )
+    if record.get("required") and record.get("status") == "ok" and (
         not isinstance(forms, Mapping) or "analysis" not in forms
     ):
-        problems.append(f"{key}: required analysis form is unavailable")
-    for name, form in (forms.items() if isinstance(forms, Mapping) else ()):
-        if isinstance(form, Mapping):
-            path = form.get("path")
-            if isinstance(path, Path) and not path.is_file():
-                problems.append(f"{key}[{name}]: missing file {path}")
+        problems.append(f"{key}: successful artifact has no analysis form")
+    if record.get("status") == "ok":
+        for name, form in (forms.items() if isinstance(forms, Mapping) else ()):
+            if isinstance(form, Mapping):
+                path = form.get("path")
+                if isinstance(path, Path) and not path.is_file():
+                    problems.append(f"{key}[{name}]: missing file {path}")
+    return problems
+
+
+def artifact_unavailable_reasons(record: Mapping[str, Any]) -> list[str]:
+    """Explain why a dependency cannot contribute to a degraded build."""
+    key = str(record.get("request_key") or "artifact")
+    status = str(record.get("status") or "unknown")
+    reasons: list[str] = []
+    if status != "ok":
+        reasons.append(f"{key}: artifact status is {status}")
+    forms = record.get("forms", {})
+    analysis = forms.get("analysis", {}) if isinstance(forms, Mapping) else {}
+    path = analysis.get("path") if isinstance(analysis, Mapping) else None
+    if status == "ok" and not isinstance(path, Path):
+        reasons.append(f"{key}: analysis form is unavailable")
+    return reasons
+
+
+def artifact_problems(record: Mapping[str, Any]) -> list[str]:
+    """Return the strict artifact contract used by explicit validators."""
+    problems = artifact_integrity_problems(record)
+    if record.get("required"):
+        problems.extend(artifact_unavailable_reasons(record))
     return problems
 
 
@@ -187,22 +216,11 @@ def closure_records(
     release_dir: Path,
     transaction_dir: Path,
     role: str = "build",
-    *,
-    require_ready: bool = True,
 ) -> list[ArtifactRecord]:
     closure = load_json(transaction_dir / "closure.json")
     crawl_complete = closure.get("crawl_complete", closure.get("complete"))
-    build_ready = closure.get("build_ready") is True
     if not crawl_complete or closure.get("interrupted") or closure.get("truncated"):
         raise ValueError("transaction crawl is incomplete; rerun `decor2hl7 fetch`")
-    if role == "build" and require_ready and not build_ready:
-        reasons = closure.get("readiness_errors", [])
-        if "build_ready" not in closure:
-            reasons = [
-                "closure predates build-readiness validation; rerun `decor2hl7 fetch`"
-            ]
-        suffix = f": {'; '.join(map(str, reasons))}" if reasons else ""
-        raise ValueError(f"transaction specification is not build-ready{suffix}")
     manifest = load_json(release_dir / "manifest.json")
     resources = manifest.get("resources", {})
     role_map = closure.get("resource_roles", {})
@@ -270,8 +288,18 @@ def transaction_record(release_dir: Path, transaction_dir: Path) -> ArtifactReco
     if source is not None:
         record["forms"]["source"] = source
     problems = artifact_problems(record)
+    if source_entry.get("status") != "ok":
+        problems.append(
+            f"{analysis_key}: required source artifact status is "
+            f"{source_entry.get('status') or 'unknown'}"
+        )
     if "source" not in record["forms"]:
         problems.append(f"{analysis_key}: required source form is unavailable")
+    elif not record["forms"]["source"]["path"].is_file():
+        problems.append(
+            f"{analysis_key}[source]: missing file "
+            f"{record['forms']['source']['path']}"
+        )
     if problems:
         raise ValueError("; ".join(problems))
     return record
@@ -294,6 +322,6 @@ def form_paths(
         forms = record.get("forms", {})
         selected = forms.get(form, {}) if isinstance(forms, Mapping) else {}
         path = selected.get("path") if isinstance(selected, Mapping) else None
-        if isinstance(path, Path) and path not in paths:
+        if isinstance(path, Path) and path.is_file() and path not in paths:
             paths.append(path)
     return paths

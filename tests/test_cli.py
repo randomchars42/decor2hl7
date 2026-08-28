@@ -23,6 +23,56 @@ TRANSACTIONS = [{
 
 
 class CliTests(unittest.TestCase):
+    def test_build_completes_with_reported_auxiliary_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            set_release(root, RELEASES[0])
+            set_transaction(root, TRANSACTIONS[0])
+            source = root / "transaction.source.xml"
+            analysis = root / "transaction.xml"
+            template = root / "template.xml"
+            source.write_text('''<transaction id="tx" effectiveDate="2026">
+              <representingTemplate ref="doc" flexibility="2026">
+                <concept ref="c" minimumMultiplicity="0" maximumMultiplicity="1"/>
+              </representingTemplate>
+            </transaction>''', encoding="utf-8")
+            analysis.write_text('''<dataset transactionId="tx" transactionEffectiveDate="2026"
+                templateId="doc" templateEffectiveDate="2026">
+              <concept id="c" shortName="note" type="item">
+                <name>Note</name><valueDomain type="string"/>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            template.write_text('''<template id="doc" effectiveDate="2026" name="Doc">
+              <element name="hl7:ClinicalDocument">
+                <include ref="old-entry" flexibility="2005"/>
+              </element>
+            </template>''', encoding="utf-8")
+            unavailable = [{
+                "request_key": "dataset:old@2005", "type": "dataset",
+                "status": "missing", "roles": ["structure"],
+                "reasons": ["dataset:old@2005: artifact status is missing"],
+            }]
+            inputs = {
+                "transaction_source": source,
+                "transaction_analysis": analysis,
+                "model_resources": [],
+                "terminology_resources": [],
+                "templates": [template],
+                "mapping_evidence": [source, analysis, template],
+                "unavailable_artifacts": unavailable,
+                "warnings": unavailable[0]["reasons"],
+            }
+            stderr = StringIO()
+            with patch("decor2hl7.cli._compiler_inputs", return_value=inputs), redirect_stderr(stderr):
+                self.assertEqual(main(["--root", str(root), "build"]), 0)
+            model_dir = transaction_model_dir(root)
+            diagnostics = load_json(model_dir / "build-diagnostics.json")
+            self.assertEqual(diagnostics["status"], "degraded")
+            self.assertEqual(diagnostics["summary"]["unavailable_artifacts"], 1)
+            self.assertEqual(diagnostics["summary"]["unresolved_templates"], 1)
+            self.assertIn("warning: degraded build", stderr.getvalue())
+
     def test_symmetric_release_and_transaction_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

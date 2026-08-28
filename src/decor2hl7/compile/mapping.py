@@ -17,7 +17,7 @@ from ..semantics import (
     accepted_values, direct_compatibility, payload_match,
     transformed_compatibility, type_match,
 )
-from ..transforms import mapping_rules
+from ..transforms import cda_target_name, mapping_rules
 from .structural import (
     coalesce_rule as _coalesce_rule,
     fanout_rule as _fanout_rule,
@@ -892,23 +892,32 @@ def _certainty_mapping(
                 "map": {alias: True for alias, code in aliases.items() if code == "A"},
             },
         })
-    high = sibling("/hl7:effectiveTime/hl7:high")
-    if high:
-        rules.append({
-            "target": high,
-            "mode": "fallback",
-            "transform": {
-                "type": "enum", "select": "raw",
-                "map": {alias: {"nullFlavor": "UNK"} for alias, code in aliases.items() if code == "Z"},
-            },
-        })
+    target_defaults: dict[str, dict[str, str]] = {}
+    low = sibling("/hl7:effectiveTime/hl7:low")
+    low_target = cda.get("targets", {}).get(low, {}) if low else {}
+    low_required = bool(low_target.get("mandatory")) or int(low_target.get("min") or 0) >= 1
+    low_nullable = (
+        not low_target.get("mandatory")
+        and str(low_target.get("conformance") or "").upper() != "M"
+    )
+    if low and low_required and low_nullable and not low_target.get("has_children"):
+        target_defaults[low] = {
+            "nullFlavor": "UNK",
+            "reason": (
+                "The transaction contains no diagnosis-onset datapoint; the "
+                "required onset therefore exists with an unknown value."
+            ),
+        }
     primary = _candidate(
         target_name, target,
         ["LOGICAL(V/A/Z/G)", f"VS({value_set_oid})", "TRANSFORM(certainty)"],
         "MEDIUM", 105, kind="TRANSFORM", actionable=True, mapping=rules,
         warnings=["diagnosis certainty is normalized into the formal CDA qualifier vocabulary"],
     )
-    return {"mapping": rules, "primary": primary}, {"aliases": aliases}
+    return {"mapping": rules, "primary": primary}, {
+        "aliases": aliases,
+        "target_defaults": target_defaults,
+    }
 
 
 def _cda_mapping_analysis(
@@ -958,6 +967,7 @@ def _cda_mapping_analysis(
         }
 
     value_set_members = _value_set_members(xml_paths)
+    target_defaults: dict[str, dict[str, str]] = {}
     for path, field in model_fields.items():
         certainty = _certainty_mapping(path, field, cda, value_set_members)
         if certainty is None:
@@ -970,6 +980,13 @@ def _cda_mapping_analysis(
         details[path]["selected"] = selection["mapping"]
         details[path]["semantic_transform"] = metadata
         fields[path] = selection["mapping"]
+        for target_name, default in metadata.get("target_defaults", {}).items():
+            existing = target_defaults.get(str(target_name))
+            if existing is not None and existing != default:
+                raise ValueError(
+                    f"conflicting generated defaults for CDA target {target_name!r}"
+                )
+            target_defaults[str(target_name)] = dict(default)
 
     for path in model_fields:
         if details[path]["primary"] is None:
@@ -1007,15 +1024,17 @@ def _cda_mapping_analysis(
         if resolved is not None:
             rule_name, rule = resolved
             structures[rule_name] = rule
-            branch_names = {
-                str(branch.get("source")): str(branch.get("branch") or "")
+            branches = {
+                str(branch.get("source")): branch
                 for branch in rule.get("branches", []) if isinstance(branch, Mapping)
             }
             for path in paths:
+                branch = branches.get(path, {})
                 fields[path] = {
-                    "target": target_name,
+                    "target": str(branch.get("target") or target_name),
+                    "cda_target": str(branch.get("cda_target") or target_name),
                     "structure": rule_name,
-                    **({"branch": branch_names[path]} if path in branch_names else {}),
+                    **({"branch": branch["branch"]} if branch.get("branch") else {}),
                 }
                 details[path]["selected"] = fields[path]
                 details[path]["structural_rule"] = rule_name
@@ -1055,7 +1074,7 @@ def _cda_mapping_analysis(
     structures.update(_for_each_rules(model, cda, fields))
 
     proposal = {
-        "version": 3,
+        "version": 5,
         "model": {
             "dataset_id": model.get("meta", {}).get("dataset_id"),
             "transaction_id": model.get("meta", {}).get("transaction_id"),
@@ -1067,6 +1086,10 @@ def _cda_mapping_analysis(
         },
         "fields": fields,
         "structures": structures,
+        "defaults": {
+            "required_unmapped": {"nullFlavor": "NI"},
+        },
+        "target_defaults": target_defaults,
     }
 
     def coverage(detail: Mapping[str, Any]) -> str:
@@ -1322,6 +1345,9 @@ def _cda_mapping_analysis(
 
     detail_lines = [
         "# CDA Mapping Details",
+        "",
+        "This is the evidence appendix for `cda-mapping.json`. Edit the JSON mapping,",
+        "not this generated report; the concise review workflow is in `cda-mapping.md`.",
         "",
         f"Target CDA template: `{cda.get('document_template', {}).get('id')}` @ "
         f"`{cda.get('document_template', {}).get('effective_date')}`",
@@ -1592,18 +1618,42 @@ def csv_mapping_proposal(model: Mapping[str, Any], input_dir: Path | None, join_
         "join": {"column": join_column},
         "fields": fields,
     }
-    lines = ["# CSV-to-model mapping", "", f"Mapped: {sum(value is not None for value in fields.values())}/{len(fields)}", "", "## Mapping", ""]
+    lines = [
+        "# CSV-to-dataset mapping",
+        "",
+        "Edit `csv-mapping.json`. Each row connects one dataset datapoint to one",
+        "input column; parsing is shown only when it changes the input value.",
+        "",
+        f"Mapped automatically: **{sum(value is not None for value in fields.values())}/{len(fields)}**.",
+        "",
+        "| Dataset datapoint | CSV source and column | Parsing or review note |",
+        "|---|---|---|",
+    ]
     for path, field in model.get("fields", {}).items():
         value = fields[path]
         if value:
             display = (
-                f"{value.get('source')}:{value.get('column')} + {value.get('parse_as')}→rank"
+                f"{value.get('source')}:{value.get('column')}"
                 if isinstance(value, Mapping) else str(value)
             )
-            lines.append(f"{field.get('name') or path} | YES | `{path}` ← `{display}` | PROPOSED ({detail[path][0]:.2f})")
+            parsing = (
+                f"Parse as `{value.get('parse_as')}` and apply `{value.get('transform', {}).get('type')}` transform"
+                if isinstance(value, Mapping) and value.get("parse_as") else "Direct"
+            )
+            lines.append(
+                f"| {field.get('name') or path} (`{path}`) | `{display}` | {parsing} |"
+            )
         else:
             alternatives = ", ".join(f"{name} ({score:.2f})" for score, name in detail[path][1][:3]) or "none"
-            lines.append(f"{field.get('name') or path} | NO | `{path}` | candidates: {alternatives}")
+            lines.append(
+                f"| {field.get('name') or path} (`{path}`) | — | Review candidates: {alternatives} |"
+            )
+    lines += [
+        "",
+        "Candidate scores are suggestions only. Unmapped rows remain `null` in the JSON",
+        "until a user chooses a source column.",
+        "",
+    ]
     return proposal, "\n".join(lines) + "\n"
 
 
@@ -1687,7 +1737,14 @@ def codes_mapping_proposal(model: Mapping[str, Any], csv_mapping: Mapping[str, A
     fields: dict[str, dict[str, str | None]] = {
         path: dict(values) for path, values in proposal["fields"].items()
     }
-    lines = ["# Raw-code-to-dataset-value mapping", ""]
+    lines = [
+        "# Input-value-to-dataset-code mapping",
+        "",
+        "Edit `codes-mapping.json`. Canonical dataset values are accepted unchanged;",
+        "the tables therefore show only aliases that require translation and unresolved",
+        "input values observed in the CSV files.",
+        "",
+    ]
 
     for path, translations in fields.items():
         field = model.get("fields", {}).get(path, {})
@@ -1712,7 +1769,6 @@ def codes_mapping_proposal(model: Mapping[str, Any], csv_mapping: Mapping[str, A
             if code:
                 by_code.setdefault(code, canonical_text)
 
-        default_count = len(translations)
         for raw in sorted(raw_values):
             translations.setdefault(raw, by_code.get(raw) or by_norm.get(_norm(raw)))
 
@@ -1720,12 +1776,25 @@ def codes_mapping_proposal(model: Mapping[str, Any], csv_mapping: Mapping[str, A
         lines.append(f"## {field.get('name') or path}")
         lines.append("")
         lines.append(
-            f"`{path}` — {default_count} model defaults; "
-            f"{observed_mapped}/{len(raw_values)} observed raw values mapped"
+            f"`{path}` — {sum(raw == canonical for raw, canonical in translations.items())} "
+            f"canonical values accepted directly; {observed_mapped}/{len(raw_values)} "
+            "observed input values mapped."
         )
         lines.append("")
-        for raw, canonical in translations.items():
-            lines.append(f"- `{raw}` → `{canonical}`" if canonical else f"- `{raw}` → **UNMAPPED → nullFlavor OTH**")
+        shown = [
+            (raw, canonical) for raw, canonical in translations.items()
+            if canonical is None or raw != canonical
+        ]
+        if shown:
+            lines += [
+                "| Input value | Dataset value |",
+                "|---|---|",
+            ]
+            for raw, canonical in shown:
+                destination = f"`{canonical}`" if canonical else "**UNMAPPED → nullFlavor OTH**"
+                lines.append(f"| `{raw}` | {destination} |")
+        else:
+            lines.append("No aliases require configuration.")
         lines.append("")
 
     return {"version": 1, "fields": fields}, "\n".join(lines) + "\n"
@@ -1756,6 +1825,83 @@ def write_input_mappings(
     return {"csv": csv_proposal, "codes": code_proposal}
 
 
+def cda_datapoints(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Build the logical writable CDA datapoints selected by the mapping.
+
+    A physical template target may be repeatable.  Structural rules turn such
+    a schema node into distinct logical datapoints—for example right and left
+    pupil values—without pretending that the expanded template contains two
+    different physical ``value`` elements.
+    """
+    targets = cda.get("targets", {})
+    structures = mapping.get("structures", {})
+    result: dict[str, dict[str, Any]] = {}
+    for source, selection in mapping.get("fields", {}).items():
+        for rule in mapping_rules(selection):
+            name = str(rule.get("target") or "")
+            physical_name = cda_target_name(rule)
+            target = targets.get(physical_name)
+            if not name or not isinstance(target, Mapping):
+                continue
+            datapoint = result.setdefault(name, {
+                "cda_target": physical_name,
+                "template_id": target.get("template_id"),
+                "template_effective_date": target.get("template_effective_date"),
+                "template_name": target.get("template_name"),
+                "template_display_name": target.get("template_display_name"),
+                "path": target.get("path"),
+                "datatype": target.get("datatype"),
+                "repeat_ancestors": list(target.get("repeat_ancestors", [])),
+                "dataset_fields": [],
+            })
+            datapoint["dataset_fields"].append(str(source))
+
+            structure_name = str(rule.get("structure") or "")
+            structure = (
+                structures.get(structure_name, {})
+                if structure_name and isinstance(structures, Mapping) else {}
+            )
+            if isinstance(structure, Mapping) and structure:
+                occurrence: dict[str, Any] = {
+                    "structure": structure_name,
+                    "type": structure.get("type"),
+                }
+                if rule.get("branch"):
+                    occurrence["branch"] = rule["branch"]
+                branch = next((
+                    item for item in structure.get("branches", [])
+                    if isinstance(item, Mapping)
+                    and str(item.get("source") or "") == str(source)
+                    and str(item.get("target") or "") == name
+                ), None)
+                if isinstance(branch, Mapping) and branch.get("constants"):
+                    occurrence["constants"] = dict(branch["constants"])
+                datapoint["occurrence"] = occurrence
+    for name, default in mapping.get("target_defaults", {}).items():
+        physical_name = str(name)
+        target = targets.get(physical_name)
+        if not isinstance(target, Mapping) or not isinstance(default, Mapping):
+            continue
+        datapoint = result.setdefault(physical_name, {
+            "cda_target": physical_name,
+            "template_id": target.get("template_id"),
+            "template_effective_date": target.get("template_effective_date"),
+            "template_name": target.get("template_name"),
+            "template_display_name": target.get("template_display_name"),
+            "path": target.get("path"),
+            "datatype": target.get("datatype"),
+            "repeat_ancestors": list(target.get("repeat_ancestors", [])),
+            "dataset_fields": [],
+        })
+        datapoint["default"] = {
+            "nullFlavor": default.get("nullFlavor"),
+            **({"reason": default["reason"]} if default.get("reason") else {}),
+        }
+    return result
+
+
 def write_cda_mapping(
     xml_paths: Iterable[Path],
     model_dir: Path,
@@ -1763,15 +1909,29 @@ def write_cda_mapping(
     cda: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Write the ART-DECOR/model-to-CDA proposal without inspecting CSV input."""
-    cda_proposal, audit, cda_report, cda_details = cda_mapping_audit(
+    cda_proposal, audit, _, cda_details = cda_mapping_audit(
         model, cda, xml_paths
     )
+    enriched_cda = dict(cda)
+    enriched_cda["datapoints"] = cda_datapoints(cda, cda_proposal)
+    enriched_cda["version"] = 4
+    enriched_cda["stats"] = {
+        **dict(cda.get("stats", {})),
+        "datapoints": len(enriched_cda["datapoints"]),
+    }
+    if isinstance(cda, dict):
+        cda.clear()
+        cda.update(enriched_cda)
+    write_json(model_dir / "cda.json", enriched_cda)
     write_json(model_dir / "cda-mapping.proposed.json", cda_proposal)
     write_json(model_dir / "mapping-audit.json", audit)
-    (model_dir / "cda-mapping.md").write_text(cda_report, encoding="utf-8")
     (model_dir / "cda-mapping-details.md").write_text(cda_details, encoding="utf-8")
-    from .reports import write_readable_cda
-    write_readable_cda(model_dir, cda, audit)
+    from .reports import render_cda_mapping_markdown, write_readable_cda
+    cda_report = render_cda_mapping_markdown(
+        model, enriched_cda, cda_proposal, audit
+    )
+    (model_dir / "cda-mapping.md").write_text(cda_report, encoding="utf-8")
+    write_readable_cda(model_dir, enriched_cda, audit)
     return cda_proposal
 
 
