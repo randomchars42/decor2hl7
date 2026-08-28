@@ -284,14 +284,16 @@ cda-expanded-readable.xml     cda-expanded-readable.md
 
 `propose-input` is intentionally heuristic and input-local. Source filenames, case source, 1:1/1:n cardinalities, join columns, and occurrence semantics remain explicit configuration rather than inferred relationships.
 
-`decor2hl7 init-cda-mapping` copies the CDA proposal to the shareable
-transaction-specific `mapping/` bundle. `mapping-lock.json` records the release,
+`decor2hl7 init-cda-mapping` copies the CDA proposal and both generated CDA
+mapping guides to the shareable transaction-specific `mapping/` bundle.
+`mapping-lock.json` records the release,
 transaction identity, and compiled model hashes; test results record the exact
 hash of the mapping that was exercised.
 
-`decor2hl7 init-site-config` copies CSV/code proposals to the local `site/`
-bundle when the user file does not yet exist. Existing user selections are
-never overwritten.
+`decor2hl7 init-site-config` copies CSV/code proposals and their generated
+guides to the local `site/` bundle. This keeps code-mapping review with the
+local administrator rather than in the shareable CDA-mapping bundle. Existing
+user selections are never overwritten; generated Markdown guidance is refreshed.
 For `codes-mapping.json`, newly generated non-null canonical/code defaults are
 added when missing so terminology updates become usable without discarding user
 edits. `site.json` is release-specific by default and is never overwritten.
