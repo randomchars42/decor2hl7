@@ -17,17 +17,19 @@ from .workspace import (
     load_json,
     load_settings,
     input_dir,
-    release_config_dir,
+    release_site_dir,
     release_spec_dir,
     selected_release,
     selected_transaction,
     set_release,
     set_transaction,
     state_dir,
-    transaction_config_dir,
+    transaction_mapping_dir,
     transaction_model_dir,
     transaction_out_dir,
+    transaction_site_dir,
     transaction_spec_dir,
+    transaction_test_dir,
     write_json,
 )
 
@@ -47,6 +49,53 @@ def _require(path: Path, hint: str = "") -> Path:
     if hint:
         message += f"\n  {hint}"
     raise ValueError(message)
+
+
+def _explicit_path(value: str | Path) -> Path:
+    path = Path(value).expanduser()
+    return path.resolve()
+
+
+def _cda_mapping_path(
+    root: Path,
+    release: Mapping[str, Any],
+    transaction: Mapping[str, Any],
+    override: str | Path | None = None,
+) -> Path:
+    if override is None:
+        return transaction_mapping_dir(root, release, transaction) / "cda-mapping.json"
+    path = _explicit_path(override)
+    return path / "cda-mapping.json" if path.is_dir() or not path.suffix else path
+
+
+def _site_paths(
+    root: Path,
+    release: Mapping[str, Any],
+    transaction: Mapping[str, Any],
+    override: str | Path | None = None,
+) -> tuple[Path, Path, Path, Path]:
+    """Return bundle dir, CSV mapping, code mapping and site JSON paths.
+
+    The default workspace keeps release-wide site.json one level above the
+    transaction-specific CSV/code mappings.  An explicit bundle path keeps all
+    three files together, which makes a local or test configuration portable.
+    """
+    if override is None:
+        bundle = transaction_site_dir(root, release, transaction)
+        return (
+            bundle,
+            bundle / "csv-mapping.json",
+            bundle / "codes-mapping.json",
+            release_site_dir(root, release) / "site.json",
+        )
+    path = _explicit_path(override)
+    if path.suffix:
+        bundle = path.parent
+        site = path
+    else:
+        bundle = path
+        site = bundle / "site.json"
+    return bundle, bundle / "csv-mapping.json", bundle / "codes-mapping.json", site
 
 
 def _safe_key(value: str) -> str:
@@ -276,23 +325,42 @@ def cmd_propose_input(args: argparse.Namespace) -> int:
     model_dir = transaction_model_dir(root, release, transaction)
     model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build` first"))
     source_root = input_dir(root, args.input, required=True)
+    proposal_dir, _, _, _ = _site_paths(
+        root, release, transaction, getattr(args, "site_config", None)
+    )
+    proposal_dir.mkdir(parents=True, exist_ok=True)
     proposals = write_input_mappings(
-        model_dir,
+        proposal_dir,
         source_root,
         model,
         join_column=args.join_column or "patient_id",
     )
     _say(f"CSV mapped proposal: {sum(value is not None for value in proposals['csv']['fields'].values())}/{len(model.get('fields', {}))}")
-    _say(f"input mapping proposals written from: {source_root}")
+    _say(f"input mapping proposals written to: {proposal_dir}")
+    _say(f"input snapshot inspected: {source_root}")
     return 0
 
 
-def _site_scaffold(root: Path, release: Mapping[str, Any], transaction: Mapping[str, Any]) -> dict[str, Any]:
+def _site_scaffold(
+    root: Path, release: Mapping[str, Any], transaction: Mapping[str, Any],
+    csv_mapping: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    from .data import mapping_locator
+
     sources: dict[str, Any] = {}
+    if csv_mapping is not None:
+        for value in csv_mapping.get("fields", {}).values():
+            locator = mapping_locator(value)
+            if locator is not None:
+                name = str(locator["source"])
+                sources.setdefault(name, {"file": f"{name}.csv", "cardinality": "1:1"})
     configured_input = input_dir(root, required=False)
     if configured_input is not None and configured_input.is_dir():
         for path in sorted(configured_input.glob("*.csv")):
-            sources[path.stem] = {"file": path.name, "cardinality": "1:1"}
+            sources.setdefault(path.stem, {"file": path.name, "cardinality": "1:1"})
+    join_column = str(
+        (csv_mapping or {}).get("join", {}).get("column") or "patient_id"
+    )
     return {
         "version": 1,
         "release": release.get("key"),
@@ -301,8 +369,8 @@ def _site_scaffold(root: Path, release: Mapping[str, Any], transaction: Mapping[
         "identifiers": {"document_root": None, "patient_root": None, "encounter_root": None, "roots": {}},
         "null_flavor": {"missing_required": "NI", "unmapped_code": "OTH"},
         "input": {
-            "join_column": "patient_id",
-            "case_source": None,
+            "join_column": join_column,
+            "case_source": next(iter(sources)) if len(sources) == 1 else None,
             "encoding": "utf-8-sig",
             "delimiter": None,
             "decimal_separator": ".",
@@ -351,21 +419,68 @@ def _merge_code_mapping_defaults(source: Path, destination: Path) -> int:
     return added
 
 
-def cmd_config(args: argparse.Namespace) -> int:
+def _mapping_lock(
+    release: Mapping[str, Any], transaction: Mapping[str, Any],
+    model: Mapping[str, Any], cda: Mapping[str, Any], mapping: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "release": {"key": release.get("key"), "date": release.get("date")},
+        "transaction": {
+            "key": transaction.get("key"), "id": transaction.get("id"),
+            "effective_date": transaction.get("effective_date"),
+        },
+        "model_sha256": _json_digest(model),
+        "cda_sha256": _json_digest(cda),
+        # Informational provenance.  Reviewers may edit the mapping after it is
+        # initialized; each test result records the actual tested hash.
+        "mapping_sha256_at_creation": _json_digest(mapping),
+    }
+
+
+def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
     root = _root(args)
     release = selected_release(root)
     transaction = selected_transaction(root)
     model_dir = transaction_model_dir(root, release, transaction)
-    config_dir = transaction_config_dir(root, release, transaction)
-    config_dir.mkdir(parents=True, exist_ok=True)
-    proposal_hints = {
-        "csv-mapping": "run `decor2hl7 propose-input --input PATH` first",
-        "codes-mapping": "run `decor2hl7 build` first",
-        "cda-mapping": "run `decor2hl7 build` first",
-    }
-    for name, hint in proposal_hints.items():
-        source = _require(model_dir / f"{name}.proposed.json", hint)
-        destination = config_dir / f"{name}.json"
+    source = _require(
+        model_dir / "cda-mapping.proposed.json", "run `decor2hl7 build` first"
+    )
+    destination = _cda_mapping_path(
+        root, release, transaction, getattr(args, "cda_mapping", None)
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if copy_if_missing(source, destination):
+        _say("created " + str(destination))
+    else:
+        _say("kept    " + str(destination))
+    model = load_json(_require(model_dir / "model.json"))
+    cda = load_json(_require(model_dir / "cda.json"))
+    mapping = load_json(destination)
+    lock = destination.parent / "mapping-lock.json"
+    if not lock.exists():
+        write_json(lock, _mapping_lock(release, transaction, model, cda, mapping))
+        _say("created " + str(lock))
+    else:
+        _say("kept    " + str(lock))
+    return 0
+
+
+def cmd_init_site_config(args: argparse.Namespace) -> int:
+    root = _root(args)
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    proposal_dir, csv_destination, codes_destination, site = _site_paths(
+        root, release, transaction, getattr(args, "site_config", None)
+    )
+    proposal_dir.mkdir(parents=True, exist_ok=True)
+    for name, destination in (
+        ("csv-mapping", csv_destination), ("codes-mapping", codes_destination)
+    ):
+        source = _require(
+            proposal_dir / f"{name}.proposed.json",
+            "run `decor2hl7 propose-input --input PATH` first",
+        )
         if copy_if_missing(source, destination):
             _say("created " + str(destination))
         elif name == "codes-mapping":
@@ -374,31 +489,37 @@ def cmd_config(args: argparse.Namespace) -> int:
             _say("kept    " + str(destination) + suffix)
         else:
             _say("kept    " + str(destination))
-
-    site_dir = release_config_dir(root, release)
-    site = site_dir / "site.json"
     if not site.exists():
-        write_json(site, _site_scaffold(root, release, transaction))
+        csv_proposal = load_json(proposal_dir / "csv-mapping.proposed.json")
+        write_json(site, _site_scaffold(root, release, transaction, csv_proposal))
         _say(f"created {site}")
     else:
         _say(f"kept    {site}")
     return 0
 
 
-def _runtime_files(root: Path) -> tuple[
+def _runtime_files(
+    root: Path,
+    cda_mapping_override: str | Path | None = None,
+    site_config_override: str | Path | None = None,
+) -> tuple[
     dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]
 ]:
     release = selected_release(root)
     transaction = selected_transaction(root)
     model_dir = transaction_model_dir(root, release, transaction)
-    config_dir = transaction_config_dir(root, release, transaction)
-    site_dir = release_config_dir(root, release)
+    _, csv_path, codes_path, site_path = _site_paths(
+        root, release, transaction, site_config_override
+    )
+    mapping_path = _cda_mapping_path(
+        root, release, transaction, cda_mapping_override
+    )
     model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build`"))
     cda = load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`"))
-    csv_mapping = load_json(_require(config_dir / "csv-mapping.json", "run `decor2hl7 config`"))
-    codes_mapping = load_json(_require(config_dir / "codes-mapping.json", "run `decor2hl7 config`"))
-    cda_mapping = load_json(_require(config_dir / "cda-mapping.json", "run `decor2hl7 config`"))
-    site = load_json(_require(site_dir / "site.json", "run `decor2hl7 config`"))
+    csv_mapping = load_json(_require(csv_path, "run `decor2hl7 init-site-config`"))
+    codes_mapping = load_json(_require(codes_path, "run `decor2hl7 init-site-config`"))
+    cda_mapping = load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`"))
+    site = load_json(_require(site_path, "run `decor2hl7 init-site-config`"))
     return model, cda, csv_mapping, codes_mapping, cda_mapping, site
 
 
@@ -408,7 +529,9 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     root = _root(args)
     release = selected_release(root)
-    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(root)
+    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(
+        root, args.cda_mapping, args.site_config
+    )
     errors = verify_manifest(release_spec_dir(root, release))
     errors.extend(validate.verify_compiled_cda(cda))
     errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
@@ -432,13 +555,117 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
+    """Validate the shareable dataset-to-CDA bundle without site CSV input."""
+    from . import validate
+    from .compile.mapping import code_mapping_defaults
+    from .testing import synthetic_site
+
+    root = _root(args)
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    model_dir = transaction_model_dir(root, release, transaction)
+    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build`"))
+    cda = load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`"))
+    mapping_path = _cda_mapping_path(root, release, transaction, args.cda_mapping)
+    cda_mapping = load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`"))
+    neutral_csv = {
+        "version": 1,
+        "join": {"column": "case_id"},
+        "fields": {path: None for path in model.get("fields", {})},
+    }
+    site = synthetic_site(release, cda, cda_mapping)
+    errors = validate.verify_compiled_cda(cda)
+    errors.extend(validate.check_config(
+        model, cda, neutral_csv, cda_mapping, code_mapping_defaults(model), site
+    ))
+    try:
+        inputs = _compiler_inputs(root)
+        errors.extend(validate.verify_compiled_against_artdecor(cda, inputs["templates"]))
+    except ValueError as error:
+        errors.append(str(error))
+    lock_path = mapping_path.parent / "mapping-lock.json"
+    if lock_path.exists():
+        lock = load_json(lock_path)
+        if lock.get("model_sha256") != _json_digest(model):
+            errors.append("mapping-lock.json was created for a different compiled dataset model")
+        if lock.get("cda_sha256") != _json_digest(cda):
+            errors.append("mapping-lock.json was created for a different compiled CDA model")
+        locked_tx = lock.get("transaction", {})
+        if isinstance(locked_tx, Mapping) and locked_tx.get("id") != transaction.get("id"):
+            errors.append("mapping-lock.json names a different transaction OID")
+    else:
+        errors.append("mapping-lock.json is missing beside cda-mapping.json")
+    print(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
+    print(f"mapping: {mapping_path}")
+    if errors:
+        print("CDA mapping errors:")
+        for error in errors:
+            print(f"  - {error}")
+        return 1
+    print("CDA mapping: OK")
+    return 0
+
+
+def cmd_setup_test(args: argparse.Namespace) -> int:
+    from .testing import setup_fixture
+
+    root = _root(args)
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    model_dir = transaction_model_dir(root, release, transaction)
+    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build`"))
+    cda = load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`"))
+    mapping_path = _cda_mapping_path(root, release, transaction, args.cda_mapping)
+    cda_mapping = load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`"))
+    test_dir = (
+        _explicit_path(args.test_dir) if args.test_dir
+        else transaction_test_dir(root, release, transaction)
+    )
+    expected = setup_fixture(
+        test_dir, release, transaction, model, cda, cda_mapping, force=args.force
+    )
+    _say(f"test fixture: {test_dir}")
+    _say(f"generated {len(expected['generated_fields'])} model datapoint columns")
+    _say(f"CDA-mapped fields covered by input: {len(expected['mapped_fields'])}")
+    return 0
+
+
+def cmd_test_cda_mapping(args: argparse.Namespace) -> int:
+    from .testing import run_fixture
+
+    root = _root(args)
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    model_dir = transaction_model_dir(root, release, transaction)
+    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build`"))
+    cda = load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`"))
+    mapping_path = _cda_mapping_path(root, release, transaction, args.cda_mapping)
+    cda_mapping = load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`"))
+    test_dir = (
+        _explicit_path(args.test_dir) if args.test_dir
+        else transaction_test_dir(root, release, transaction)
+    )
+    _require(test_dir / "expected.json", "run `decor2hl7 setup-test` first")
+    out_dir = _explicit_path(args.out) if args.out else test_dir / "out"
+    result, status = run_fixture(test_dir, out_dir, model, cda, cda_mapping)
+    print(json.dumps({
+        "status": result["status"],
+        "documents": len(result["documents"]),
+        "results": str(out_dir / "results.md"),
+    }, ensure_ascii=False))
+    return status
+
+
 def cmd_check_input(args: argparse.Namespace) -> int:
     from . import data, validate
 
     root = _root(args)
     source_root = input_dir(root, args.input, required=True)
     assert source_root is not None
-    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(root)
+    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(
+        root, args.cda_mapping, args.site_config
+    )
     errors = validate.verify_compiled_cda(cda)
     errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
     if errors:
@@ -536,13 +763,20 @@ def _transformation_context(
     }
 
 
-def _transform(root: Path, input_override: str | Path | None = None) -> tuple[list[Path], dict[str, int]]:
+def _transform(
+    root: Path,
+    input_override: str | Path | None = None,
+    cda_mapping_override: str | Path | None = None,
+    site_config_override: str | Path | None = None,
+) -> tuple[list[Path], dict[str, int]]:
     from . import cda as cda_runtime
     from . import data, state, validate
 
     release = selected_release(root)
     transaction = selected_transaction(root)
-    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(root)
+    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(
+        root, cda_mapping_override, site_config_override
+    )
     config_errors = validate.verify_compiled_cda(cda)
     config_errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
     if config_errors:
@@ -600,19 +834,27 @@ def _transform(root: Path, input_override: str | Path | None = None) -> tuple[li
 
 
 def cmd_transform(args: argparse.Namespace) -> int:
-    emitted, summary = _transform(_root(args), args.input)
+    emitted, summary = _transform(
+        _root(args), args.input, args.cda_mapping, args.site_config
+    )
     print(json.dumps(summary, ensure_ascii=False))
     for path in emitted:
         print(path)
     return 0 if summary["invalid"] == 0 else 2
 
 
-def _send_paths(root: Path, paths: list[Path] | None = None) -> tuple[int, int]:
+def _send_paths(
+    root: Path, paths: list[Path] | None = None,
+    site_config_override: str | Path | None = None,
+) -> tuple[int, int]:
     from . import state, transport
 
     release = selected_release(root)
     transaction = selected_transaction(root)
-    site = load_json(_require(release_config_dir(root, release) / "site.json"))
+    _, _, _, site_path = _site_paths(
+        root, release, transaction, site_config_override
+    )
+    site = load_json(_require(site_path, "run `decor2hl7 init-site-config`"))
     out_dir = transaction_out_dir(root, release, transaction)
     candidates = paths or sorted(out_dir.glob("*.xml"))
     sent = failed = 0
@@ -643,17 +885,22 @@ def _send_paths(root: Path, paths: list[Path] | None = None) -> tuple[int, int]:
 
 
 def cmd_send(args: argparse.Namespace) -> int:
-    sent, failed = _send_paths(_root(args), [Path(value) for value in args.files] if args.files else None)
+    sent, failed = _send_paths(
+        _root(args), [Path(value) for value in args.files] if args.files else None,
+        args.site_config,
+    )
     print(json.dumps({"sent": sent, "failed": failed}))
     return 0 if failed == 0 else 2
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     root = _root(args)
-    emitted, summary = _transform(root, args.input)
+    emitted, summary = _transform(
+        root, args.input, args.cda_mapping, args.site_config
+    )
     print(json.dumps(summary, ensure_ascii=False))
     if args.send:
-        sent, failed = _send_paths(root, emitted)
+        sent, failed = _send_paths(root, emitted, args.site_config)
         print(json.dumps({"sent": sent, "failed": failed}))
         return 0 if failed == 0 and summary["invalid"] == 0 else 2
     _say("documents were emitted but not sent; pass --send to transmit them")
@@ -688,6 +935,21 @@ def _add_network_override(parser: argparse.ArgumentParser) -> None:
         "--ipv6", action="store_true",
         help="diagnostic override; ART-DECOR uses IPv4 by default",
     )
+
+
+def _add_runtime_config_overrides(
+    parser: argparse.ArgumentParser, *, cda: bool = True, site: bool = True
+) -> None:
+    if cda:
+        parser.add_argument(
+            "--cda-mapping",
+            help="cda-mapping.json (or its directory); overrides the selected workspace bundle",
+        )
+    if site:
+        parser.add_argument(
+            "--site-config",
+            help="site config bundle directory (or site.json); CSV/code mappings are read beside it",
+        )
 
 
 def parser() -> argparse.ArgumentParser:
@@ -733,29 +995,56 @@ def parser() -> argparse.ArgumentParser:
     q = sub.add_parser("propose-input", help="inspect CSV input and propose CSV/code mappings")
     q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
     q.add_argument("--join-column", default="patient_id")
+    _add_runtime_config_overrides(q, cda=False)
     q.set_defaults(func=cmd_propose_input)
 
-    q = sub.add_parser("config", help="seed human-editable configuration without overwriting it")
-    q.set_defaults(func=cmd_config)
+    q = sub.add_parser("init-cda-mapping", help="initialize the shareable dataset-to-CDA mapping bundle")
+    _add_runtime_config_overrides(q, site=False)
+    q.set_defaults(func=cmd_init_cda_mapping)
+
+    q = sub.add_parser("init-site-config", help="initialize local CSV/code/site configuration")
+    _add_runtime_config_overrides(q, cda=False)
+    q.set_defaults(func=cmd_init_site_config)
 
     q = sub.add_parser("check", help="check downloads, compiled models and configuration")
+    _add_runtime_config_overrides(q)
     q.set_defaults(func=cmd_check)
+
+    q = sub.add_parser("check-cda-mapping", help="validate a shareable CDA mapping without site input")
+    _add_runtime_config_overrides(q, site=False)
+    q.set_defaults(func=cmd_check_cda_mapping)
+
+    q = sub.add_parser("setup-test", help="generate isolated synthetic CSV/config mapping test input")
+    q.add_argument("--test-dir", help="test fixture directory; defaults to test/<release>/<transaction>")
+    q.add_argument("--force", action="store_true", help="replace generated input/config/expected files")
+    _add_runtime_config_overrides(q, site=False)
+    q.set_defaults(func=cmd_setup_test)
+
+    q = sub.add_parser("test-cda-mapping", help="run the isolated CDA mapping fixture")
+    q.add_argument("--test-dir", help="test fixture directory; defaults to test/<release>/<transaction>")
+    q.add_argument("--out", help="result directory; defaults to the fixture's out directory")
+    _add_runtime_config_overrides(q, site=False)
+    q.set_defaults(func=cmd_test_cda_mapping)
 
     q = sub.add_parser("check-input", help="validate the external CSV input snapshot without emitting CDA")
     q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
+    _add_runtime_config_overrides(q)
     q.set_defaults(func=cmd_check_input)
 
     q = sub.add_parser("transform", help="read, normalize, validate and emit changed documents")
     q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
+    _add_runtime_config_overrides(q)
     q.set_defaults(func=cmd_transform)
 
     q = sub.add_parser("send", help="send emitted documents not already recorded as sent")
     q.add_argument("files", nargs="*")
+    _add_runtime_config_overrides(q, cda=False)
     q.set_defaults(func=cmd_send)
 
     q = sub.add_parser("run", help="perform the runtime pipeline")
     q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
     q.add_argument("--send", action="store_true")
+    _add_runtime_config_overrides(q)
     q.set_defaults(func=cmd_run)
 
     q = sub.add_parser("status", help="show sent/pending document state")

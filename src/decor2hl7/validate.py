@@ -80,6 +80,37 @@ def check_config(
     site: Mapping[str, Any] | None = None,
 ) -> list[str]:
     errors: list[str] = []
+    model_identity = model.get("meta", {})
+    expected_identity = {
+        "dataset_id": model_identity.get("dataset_id"),
+        "transaction_id": model_identity.get("transaction_id"),
+        "effective_date": model_identity.get("transaction_effective_date"),
+    }
+    for name, mapping in (("csv-mapping", csv_mapping), ("cda-mapping", cda_mapping)):
+        configured_identity = mapping.get("model", {})
+        if not isinstance(configured_identity, Mapping):
+            errors.append(f"{name}: model identity must be an object")
+            continue
+        for key, expected in expected_identity.items():
+            configured = configured_identity.get(key)
+            if configured not in (None, "") and expected not in (None, "") and configured != expected:
+                errors.append(
+                    f"{name}: {key} {configured!r} does not match compiled model {expected!r}"
+                )
+    configured_target = cda_mapping.get("target", {})
+    compiled_template = cda.get("document_template", {})
+    if isinstance(configured_target, Mapping) and isinstance(compiled_template, Mapping):
+        configured_template = configured_target.get("template")
+        expected_template = compiled_template.get("name")
+        if (
+            configured_template not in (None, "")
+            and expected_template not in (None, "")
+            and configured_template != expected_template
+        ):
+            errors.append(
+                f"cda-mapping: target template {configured_template!r} does not match "
+                f"compiled CDA {expected_template!r}"
+            )
     fields = set(model.get("fields", {}))
     for name, mapping in (("csv-mapping", csv_mapping), ("cda-mapping", cda_mapping)):
         mapped = set(mapping.get("fields", {}))

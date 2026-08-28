@@ -61,6 +61,7 @@ src/decor2hl7/
     transforms.py       small declarative mapping transforms
     assertions.py       ART-DECOR assert evaluator + Schematron output
     cda.py              CDA rendering from cda.json
+    testing.py          synthetic fixture generation + isolated mapping test
     state.py            fingerprint/change/sent history
     transport.py        receiver transport
 ```
@@ -82,12 +83,26 @@ Artifact-producing commands own their directories:
 
 - `fetch` creates `spec/<release>/...` and transaction `closure.json`.
 - `build` creates `model/<release>/<transaction>/...`.
-- `config` creates missing user scaffolds.
+- `init-cda-mapping` creates the shareable mapping bundle and identity lock.
+- `propose-input` and `init-site-config` create local input/code/site scaffolds.
+- `setup-test` creates an isolated synthetic fixture; `test-cda-mapping` writes
+  only below that fixture (or its explicit `--out`).
 - `transform` creates `out/<release>/<transaction>/...`.
 
 The CSV input root is external to the workspace. `propose-input`, `check-input`, `transform`, and `run` accept `--input PATH`; otherwise they resolve the optional deployment default `aktin.json: input.directory`. `build` and `check` deliberately do not touch source CSVs. Relative source filenames in `site.json` are resolved below this input root.
 
 Release-wide downloads are shared; transaction-specific products are isolated.
+The workspace also expresses ownership: `mapping/` is a portable specification
+product, `site/` is deployment configuration, and `test/` is disposable
+verification input/output. `config/` is reserved for acquisition-wide settings
+such as repository source hints.
+
+Runtime commands accept bundle overrides rather than a separate flag for every
+JSON file. `--cda-mapping` selects one reviewed mapping file;
+`--site-config` selects a directory containing `site.json`,
+`csv-mapping.json`, and `codes-mapping.json`. The default workspace layout may
+share `site.json` across transactions within a release, while an explicit
+bundle keeps all three files together for portability.
 
 ## Fetch closure
 
@@ -240,6 +255,27 @@ transaction model—for example a Boolean leading-diagnosis column can become
 sequence number `1` for true and be omitted for false.
 
 `build` has no input argument and never inspects CSVs. CSV/code proposal generation is a separate explicit `propose-input` step. The proposal step may inspect column names and observed coded values, but it does not infer relationships between CSV sources; joins/cardinalities remain explicit configuration.
+
+## User-facing mapping verification
+
+`check-cda-mapping` validates the compiled CDA, structural bindings, target
+compatibility, and `mapping-lock.json` without requiring site CSV mappings.
+This is the review gate for the shareable specification product.
+
+`setup-test` derives deterministic CSV columns from `model.json`. Scalar fields
+go to `cases.csv`; each distinct repeat chain gets a generated `1:n` source with
+explicit occurrence-key columns. The fixture configuration uses valid synthetic
+identifier roots and model-derived terminology aliases. `expected.json` freezes
+the selected release/transaction and model/CDA/mapping hashes and records mapped
+and unmapped fields.
+
+`test-cda-mapping` reads that fixture through the ordinary production modules:
+`data.ingest` → record validation → structural bindings → CDA rendering and
+ART-DECOR assertions. It writes generated XML, `results.json`, and `results.md`
+to the test result directory. It intentionally bypasses production change
+state and transport. Coverage means a mapped datapoint survived normalization
+and participated in the tested record; it does not claim that a single
+synthetic document can exercise mutually exclusive or conditional branches.
 
 ## State
 

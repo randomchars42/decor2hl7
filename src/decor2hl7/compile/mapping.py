@@ -1740,7 +1740,7 @@ def write_code_mapping(model_dir: Path, model: Mapping[str, Any]) -> dict[str, A
 
 
 def write_input_mappings(
-    model_dir: Path,
+    output_dir: Path,
     input_dir: Path,
     model: Mapping[str, Any],
     *,
@@ -1749,10 +1749,10 @@ def write_input_mappings(
     """Inspect one CSV snapshot and write only input-side mapping proposals."""
     csv_proposal, csv_report = csv_mapping_proposal(model, input_dir, join_column)
     code_proposal, code_report = codes_mapping_proposal(model, csv_proposal, input_dir)
-    write_json(model_dir / "csv-mapping.proposed.json", csv_proposal)
-    write_json(model_dir / "codes-mapping.proposed.json", code_proposal)
-    (model_dir / "csv-mapping.md").write_text(csv_report, encoding="utf-8")
-    (model_dir / "codes-mapping.md").write_text(code_report, encoding="utf-8")
+    write_json(output_dir / "csv-mapping.proposed.json", csv_proposal)
+    write_json(output_dir / "codes-mapping.proposed.json", code_proposal)
+    (output_dir / "csv-mapping.md").write_text(csv_report, encoding="utf-8")
+    (output_dir / "codes-mapping.md").write_text(code_report, encoding="utf-8")
     return {"csv": csv_proposal, "codes": code_proposal}
 
 

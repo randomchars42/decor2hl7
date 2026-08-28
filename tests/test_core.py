@@ -28,7 +28,8 @@ from decor2hl7.semantics import accepted_values
 from decor2hl7.workspace import load_json
 from decor2hl7.workspace import (
     init_workspace, input_dir, load_json, release_spec_dir, set_release, set_transaction,
-    transaction_config_dir, transaction_key, transaction_model_dir,
+    transaction_mapping_dir, transaction_key, transaction_model_dir,
+    transaction_site_dir, transaction_test_dir,
 )
 
 
@@ -59,7 +60,7 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             init_workspace(root)
-            for path in ("spec", "model", "config", "out", "state"):
+            for path in ("spec", "model", "config", "mapping", "site", "test", "out", "state"):
                 self.assertTrue((root / path).is_dir())
             self.assertFalse((root / "raw").exists())
             self.assertIsNone(load_json(root / "aktin.json")["release"])
@@ -68,7 +69,9 @@ class CoreTests(unittest.TestCase):
             # Selection commands do not create release/transaction artifact paths.
             self.assertFalse(release_spec_dir(root).exists())
             self.assertFalse(transaction_model_dir(root).exists())
-            self.assertFalse(transaction_config_dir(root).exists())
+            self.assertFalse(transaction_mapping_dir(root).exists())
+            self.assertFalse(transaction_site_dir(root).exists())
+            self.assertFalse(transaction_test_dir(root).exists())
 
     def test_external_input_directory_uses_override_then_workspace_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as configured, tempfile.TemporaryDirectory() as override:
@@ -868,6 +871,24 @@ class CoreTests(unittest.TestCase):
         errors = validate.check_config({"fields": {"a": {}, "b": {}}}, {"targets": {"T.value": {}}},
                                        {"fields": {"a": "cases:a"}}, {"fields": {"a": "T.value", "b": None}})
         self.assertIn("csv-mapping: missing model field b", errors)
+
+    def test_mapping_identity_cannot_silently_cross_transactions(self) -> None:
+        model = {
+            "meta": {
+                "dataset_id": "1.2.3", "transaction_id": "1.2.3.4",
+                "transaction_effective_date": "2026-01-01T00:00:00",
+            },
+            "fields": {},
+        }
+        errors = validate.check_config(
+            model,
+            {"targets": {}, "document_template": {"name": "ExpectedTemplate"}},
+            {"model": {"transaction_id": "9.9.9"}, "fields": {}},
+            {"model": {"transaction_id": "8.8.8"}, "target": {"template": "Other"}, "fields": {}},
+        )
+        self.assertTrue(any("csv-mapping: transaction_id" in error for error in errors))
+        self.assertTrue(any("cda-mapping: transaction_id" in error for error in errors))
+        self.assertTrue(any("target template" in error for error in errors))
 
     def test_repeating_instances_preserve_row_alignment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

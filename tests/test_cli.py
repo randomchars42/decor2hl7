@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -8,7 +9,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from decor2hl7.cli import _prune_absent_pending, _prune_stale_pending, main
-from decor2hl7.workspace import load_json, set_release, set_transaction, transaction_model_dir, write_json
+from decor2hl7.workspace import (
+    load_json, set_release, set_transaction, transaction_mapping_dir,
+    transaction_model_dir, transaction_site_dir, transaction_test_dir, write_json,
+)
 
 RELEASES = [{"key": "2026.1.2", "label": "2026.1.2", "date": "2026-04-27T18:50:33", "status": "final"}]
 TRANSACTIONS = [{
@@ -78,6 +82,9 @@ class CliTests(unittest.TestCase):
         self.assertFalse(hasattr(build, "join_column"))
         check = parser().parse_args(["check"])
         self.assertFalse(hasattr(check, "input"))
+        test = parser().parse_args(["test-cda-mapping", "--out", "/tmp/results"])
+        self.assertEqual(test.out, "/tmp/results")
+        self.assertTrue(hasattr(test, "cda_mapping"))
 
     def test_propose_input_writes_only_csv_and_code_proposals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -119,8 +126,9 @@ class CliTests(unittest.TestCase):
                 main(["--root", str(root), "propose-input", "--input", str(source)]),
                 0,
             )
-            csv_proposal = load_json(model_dir / "csv-mapping.proposed.json")
-            code_proposal = load_json(model_dir / "codes-mapping.proposed.json")
+            proposal_dir = transaction_site_dir(root)
+            csv_proposal = load_json(proposal_dir / "csv-mapping.proposed.json")
+            code_proposal = load_json(proposal_dir / "codes-mapping.proposed.json")
             self.assertEqual(csv_proposal["fields"]["aufnahme.aufnahmezeitpunkt"], "cases:Aufnahmezeitpunkt")
             self.assertEqual(csv_proposal["fields"]["aufnahme.triage"], "cases:Triage")
             self.assertEqual(code_proposal["fields"]["aufnahme.triage"]["rot"], "rot")
@@ -128,35 +136,35 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code_proposal["fields"]["aufnahme.triage"]["orange"], "orange")
             self.assertEqual(code_proposal["fields"]["aufnahme.triage"]["O"], "orange")
             self.assertFalse((model_dir / "cda-mapping.proposed.json").exists())
+            self.assertEqual(main(["--root", str(root), "init-site-config"]), 0)
+            site = load_json(root / "site" / "2026.1.2" / "site.json")
+            self.assertEqual(site["input"]["case_source"], "cases")
+            self.assertEqual(site["input"]["sources"]["cases"]["file"], "cases.csv")
 
-    def test_config_adds_new_code_defaults_without_overwriting_user_values(self) -> None:
+    def test_init_site_config_adds_defaults_without_overwriting_user_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.assertEqual(main(["--root", str(root), "init"]), 0)
             set_release(root, RELEASES[0])
             set_transaction(root, TRANSACTIONS[0])
-            model = transaction_model_dir(root)
-            model.mkdir(parents=True)
-            write_json(model / "csv-mapping.proposed.json", {"version": 1, "fields": {}})
-            write_json(model / "cda-mapping.proposed.json", {"version": 2, "fields": {}})
-            write_json(model / "codes-mapping.proposed.json", {
+            site_dir = transaction_site_dir(root)
+            write_json(site_dir / "csv-mapping.proposed.json", {"version": 1, "fields": {}})
+            write_json(site_dir / "codes-mapping.proposed.json", {
                 "version": 1,
                 "fields": {"triage": {"R": "rot", "O": "orange", "unknown": None}},
             })
-            config_dir = root / "config" / "2026.1.2" / "notaufnahmeregister--60"
-            config_dir.mkdir(parents=True)
-            write_json(config_dir / "codes-mapping.json", {
+            write_json(site_dir / "codes-mapping.json", {
                 "version": 1,
                 "fields": {"triage": {"R": "custom"}},
             })
 
-            self.assertEqual(main(["--root", str(root), "config"]), 0)
-            configured = load_json(config_dir / "codes-mapping.json")
+            self.assertEqual(main(["--root", str(root), "init-site-config"]), 0)
+            configured = load_json(site_dir / "codes-mapping.json")
             self.assertEqual(configured["fields"]["triage"]["R"], "custom")
             self.assertEqual(configured["fields"]["triage"]["O"], "orange")
             self.assertNotIn("unknown", configured["fields"]["triage"] )
 
-    def test_config_never_overwrites_user_mapping(self) -> None:
+    def test_initializers_never_overwrite_user_mappings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.assertEqual(main(["--root", str(root), "init"]), 0)
@@ -164,15 +172,109 @@ class CliTests(unittest.TestCase):
             set_transaction(root, TRANSACTIONS[0])
             model = transaction_model_dir(root)
             model.mkdir(parents=True)
-            (model / "csv-mapping.proposed.json").write_text('{"fields":{"a":"cases:a"}}')
-            (model / "codes-mapping.proposed.json").write_text('{"fields":{}}')
+            write_json(model / "model.json", {"fields": {"a": {"type": "text"}}})
+            write_json(model / "cda.json", {"document": [], "targets": {}})
             (model / "cda-mapping.proposed.json").write_text('{"fields":{"a":"Doc.value"}}')
-            self.assertEqual(main(["--root", str(root), "config"]), 0)
-            config = root / "config" / "2026.1.2" / "notaufnahmeregister--60" / "csv-mapping.json"
+            site_dir = transaction_site_dir(root)
+            site_dir.mkdir(parents=True)
+            (site_dir / "csv-mapping.proposed.json").write_text('{"fields":{"a":"cases:a"}}')
+            (site_dir / "codes-mapping.proposed.json").write_text('{"fields":{}}')
+            self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
+            self.assertEqual(main(["--root", str(root), "init-site-config"]), 0)
+            config = site_dir / "csv-mapping.json"
             config.write_text('{"user":true}')
-            self.assertEqual(main(["--root", str(root), "config"]), 0)
+            self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
+            self.assertEqual(main(["--root", str(root), "init-site-config"]), 0)
             self.assertEqual(load_json(config), {"user": True})
-            self.assertTrue((root / "config" / "2026.1.2" / "site.json").exists())
+            self.assertTrue((root / "site" / "2026.1.2" / "site.json").exists())
+            self.assertTrue((transaction_mapping_dir(root) / "mapping-lock.json").exists())
+
+    def test_setup_and_run_cda_mapping_test_are_isolated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            set_release(root, RELEASES[0])
+            set_transaction(root, TRANSACTIONS[0])
+            model_dir = transaction_model_dir(root)
+            model_dir.mkdir(parents=True)
+            model = {
+                "meta": {"transaction_id": TRANSACTIONS[0]["id"]},
+                "groups": {},
+                "fields": {"case.note": {"name": "Note", "type": "text", "repeat_chain": []}},
+            }
+            cda = {
+                "document": [{
+                    "kind": "element", "name": "hl7:ClinicalDocument", "min": 1, "max": 1,
+                    "attributes": [], "children": [{
+                        "kind": "element", "name": "hl7:text", "datatype": "ST",
+                        "min": 0, "max": 1, "attributes": [], "children": [],
+                        "targets": ["Document.note"],
+                    }], "targets": [],
+                }],
+                "targets": {
+                    "Document.note": {
+                        "renderable": True, "prohibited": False, "locations": ["0.0"],
+                        "datatype": "ST", "path": "hl7:ClinicalDocument/hl7:text",
+                        "repeat_ancestors": [],
+                    }
+                },
+                "assertions": [], "unresolved_templates": [],
+            }
+            mapping = {"version": 2, "fields": {"case.note": "Document.note"}, "structures": []}
+            write_json(model_dir / "model.json", model)
+            write_json(model_dir / "cda.json", cda)
+            write_json(model_dir / "cda-mapping.proposed.json", mapping)
+            self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
+            with patch("decor2hl7.cli._compiler_inputs", return_value={"templates": []}), patch(
+                "decor2hl7.validate.verify_compiled_against_artdecor", return_value=[]
+            ):
+                self.assertEqual(main(["--root", str(root), "check-cda-mapping"]), 0)
+            self.assertEqual(main(["--root", str(root), "setup-test"]), 0)
+            fixture = transaction_test_dir(root)
+            self.assertTrue((fixture / "input" / "cases.csv").exists())
+            self.assertTrue((fixture / "config" / "site.json").exists())
+            self.assertTrue((fixture / "expected.json").exists())
+            external_out = root / "review-results"
+            self.assertEqual(main([
+                "--root", str(root), "test-cda-mapping", "--out", str(external_out)
+            ]), 0)
+            self.assertTrue((external_out / "test-1.xml").exists())
+            self.assertEqual(load_json(external_out / "results.json")["status"], "PASS")
+            self.assertFalse((root / "out" / RELEASES[0]["key"] / TRANSACTIONS[0]["key"]).exists())
+            self.assertEqual(list((root / "state").iterdir()), [])
+
+    def test_synthetic_repeat_fixture_exercises_small_code_domain(self) -> None:
+        from decor2hl7.testing import setup_fixture
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / "fixture"
+            model = {
+                "groups": {"diagnoses": {"repeating": True}},
+                "fields": {
+                    "diagnoses.certainty": {
+                        "type": "code", "repeat_chain": ["diagnoses"],
+                        "accepted_values": {
+                            key: {"code": key, "code_system": "1.2.3"}
+                            for key in ("V", "A", "Z", "G")
+                        },
+                    },
+                    "diagnoses.leading": {
+                        "type": "boolean", "repeat_chain": ["diagnoses"]
+                    },
+                },
+            }
+            expected = setup_fixture(
+                fixture, RELEASES[0], TRANSACTIONS[0], model,
+                {"targets": {}},
+                {"fields": {path: None for path in model["fields"]}},
+            )
+            source = expected["repeat_sources"][0]["source"]
+            with (fixture / "input" / f"{source}.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 4)
+            self.assertEqual([row["diagnoses.certainty"] for row in rows], ["V", "A", "Z", "G"])
+            self.assertEqual(rows[0]["diagnoses.leading"], "true")
+            self.assertTrue(all(row["diagnoses.leading"] == "false" for row in rows[1:]))
 
     def test_stale_pending_output_is_pruned_when_source_changes_or_reverts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

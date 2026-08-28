@@ -7,7 +7,7 @@ Selection is deliberately independent from filesystem creation:
 * commands that create artifacts create the directories they own lazily.
 
 Specification releases are the acquisition/cache scope. Transactions are the
-model/config/output scope within a release.
+model/mapping/site/test/output scope within a release.
 """
 
 from __future__ import annotations
@@ -22,7 +22,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 SETTINGS = "aktin.json"
-TOP_LEVEL = ("spec", "model", "config", "out", "state")
+# ``config`` is intentionally reserved for acquisition-wide configuration
+# such as sources.json.  Shareable CDA mappings, site-specific input mappings,
+# and generated test fixtures have different owners and lifecycles.
+TOP_LEVEL = ("spec", "model", "config", "mapping", "site", "test", "out", "state")
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -212,18 +215,42 @@ def transaction_model_dir(
     return root / "model" / str(release["key"]) / str(transaction["key"])
 
 
-def release_config_dir(root: Path, release: Mapping[str, Any] | None = None) -> Path:
+def release_mapping_dir(root: Path, release: Mapping[str, Any] | None = None) -> Path:
     release = dict(release or selected_release(root))
-    return root / "config" / str(release["key"])
+    return root / "mapping" / str(release["key"])
 
 
-def transaction_config_dir(
+def transaction_mapping_dir(
     root: Path,
     release: Mapping[str, Any] | None = None,
     transaction: Mapping[str, Any] | None = None,
 ) -> Path:
     transaction = dict(transaction or selected_transaction(root))
-    return release_config_dir(root, release) / str(transaction["key"])
+    return release_mapping_dir(root, release) / str(transaction["key"])
+
+
+def release_site_dir(root: Path, release: Mapping[str, Any] | None = None) -> Path:
+    release = dict(release or selected_release(root))
+    return root / "site" / str(release["key"])
+
+
+def transaction_site_dir(
+    root: Path,
+    release: Mapping[str, Any] | None = None,
+    transaction: Mapping[str, Any] | None = None,
+) -> Path:
+    transaction = dict(transaction or selected_transaction(root))
+    return release_site_dir(root, release) / str(transaction["key"])
+
+
+def transaction_test_dir(
+    root: Path,
+    release: Mapping[str, Any] | None = None,
+    transaction: Mapping[str, Any] | None = None,
+) -> Path:
+    release = dict(release or selected_release(root))
+    transaction = dict(transaction or selected_transaction(root))
+    return root / "test" / str(release["key"]) / str(transaction["key"])
 
 
 def transaction_out_dir(
