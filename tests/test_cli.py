@@ -207,12 +207,21 @@ class CliTests(unittest.TestCase):
                 "version": 1,
                 "fields": {"triage": {"R": "custom"}},
             })
+            (site_dir / "csv-mapping.md").write_text("# CSV guide", encoding="utf-8")
+            model_dir = transaction_model_dir(root)
+            model_dir.mkdir(parents=True)
+            (model_dir / "codes-mapping.md").write_text(
+                "# Model code guide", encoding="utf-8"
+            )
 
             self.assertEqual(main(["--root", str(root), "init-site-config"]), 0)
             configured = load_json(site_dir / "codes-mapping.json")
             self.assertEqual(configured["fields"]["triage"]["R"], "custom")
             self.assertEqual(configured["fields"]["triage"]["O"], "orange")
             self.assertNotIn("unknown", configured["fields"]["triage"] )
+            self.assertEqual(
+                (site_dir / "codes-mapping.md").read_text(), "# Model code guide"
+            )
 
     def test_initializers_never_overwrite_user_mappings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -225,10 +234,14 @@ class CliTests(unittest.TestCase):
             write_json(model / "model.json", {"fields": {"a": {"type": "text"}}})
             write_json(model / "cda.json", {"document": [], "targets": {}})
             (model / "cda-mapping.proposed.json").write_text('{"fields":{"a":"Doc.value"}}')
+            (model / "cda-mapping.md").write_text("# CDA guide", encoding="utf-8")
+            (model / "cda-mapping-details.md").write_text("# CDA details", encoding="utf-8")
             site_dir = transaction_site_dir(root)
             site_dir.mkdir(parents=True)
             (site_dir / "csv-mapping.proposed.json").write_text('{"fields":{"a":"cases:a"}}')
             (site_dir / "codes-mapping.proposed.json").write_text('{"fields":{}}')
+            (site_dir / "csv-mapping.md").write_text("# CSV guide", encoding="utf-8")
+            (site_dir / "codes-mapping.md").write_text("# Code guide", encoding="utf-8")
             self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
             self.assertEqual(main(["--root", str(root), "init-site-config"]), 0)
             config = site_dir / "csv-mapping.json"
@@ -237,7 +250,12 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["--root", str(root), "init-site-config"]), 0)
             self.assertEqual(load_json(config), {"user": True})
             self.assertTrue((root / "site" / "2026.1.2" / "site.json").exists())
-            self.assertTrue((transaction_mapping_dir(root) / "mapping-lock.json").exists())
+            mapping_dir = transaction_mapping_dir(root)
+            self.assertTrue((mapping_dir / "mapping-lock.json").exists())
+            self.assertEqual((mapping_dir / "cda-mapping.md").read_text(), "# CDA guide")
+            self.assertEqual((mapping_dir / "cda-mapping-details.md").read_text(), "# CDA details")
+            self.assertEqual((site_dir / "codes-mapping.md").read_text(), "# Code guide")
+            self.assertFalse((mapping_dir / "codes-mapping.md").exists())
 
     def test_setup_and_run_cda_mapping_test_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -274,6 +292,8 @@ class CliTests(unittest.TestCase):
             write_json(model_dir / "model.json", model)
             write_json(model_dir / "cda.json", cda)
             write_json(model_dir / "cda-mapping.proposed.json", mapping)
+            (model_dir / "cda-mapping.md").write_text("# CDA guide", encoding="utf-8")
+            (model_dir / "cda-mapping-details.md").write_text("# CDA details", encoding="utf-8")
             self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
             with patch("decor2hl7.cli._compiler_inputs", return_value={"templates": []}), patch(
                 "decor2hl7.validate.verify_compiled_against_artdecor", return_value=[]
