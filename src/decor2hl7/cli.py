@@ -440,6 +440,17 @@ def _merge_code_mapping_defaults(source: Path, destination: Path) -> int:
     return added
 
 
+def _copy_generated_guide(source: Path, destination: Path) -> None:
+    """Keep generated, read-only guidance beside the configuration it explains."""
+    source = _require(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() == destination.resolve():
+        _say("kept    " + str(destination))
+        return
+    destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    _say("updated " + str(destination))
+
+
 def _mapping_lock(
     release: Mapping[str, Any], transaction: Mapping[str, Any],
     model: Mapping[str, Any], cda: Mapping[str, Any], mapping: Mapping[str, Any],
@@ -475,6 +486,8 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         _say("created " + str(destination))
     else:
         _say("kept    " + str(destination))
+    for guide_name in ("cda-mapping.md", "cda-mapping-details.md"):
+        _copy_generated_guide(model_dir / guide_name, destination.parent / guide_name)
     model = load_json(_require(model_dir / "model.json"))
     cda = load_json(_require(model_dir / "cda.json"))
     mapping = load_json(destination)
@@ -494,6 +507,7 @@ def cmd_init_site_config(args: argparse.Namespace) -> int:
     proposal_dir, csv_destination, codes_destination, site = _site_paths(
         root, release, transaction, getattr(args, "site_config", None)
     )
+    model_dir = transaction_model_dir(root, release, transaction)
     proposal_dir.mkdir(parents=True, exist_ok=True)
     for name, destination in (
         ("csv-mapping", csv_destination), ("codes-mapping", codes_destination)
@@ -510,6 +524,10 @@ def cmd_init_site_config(args: argparse.Namespace) -> int:
             _say("kept    " + str(destination) + suffix)
         else:
             _say("kept    " + str(destination))
+        guide_source = proposal_dir / f"{name}.md"
+        if name == "codes-mapping" and not guide_source.exists():
+            guide_source = model_dir / "codes-mapping.md"
+        _copy_generated_guide(guide_source, destination.with_suffix(".md"))
     if not site.exists():
         csv_proposal = load_json(proposal_dir / "csv-mapping.proposed.json")
         write_json(site, _site_scaffold(root, release, transaction, csv_proposal))
