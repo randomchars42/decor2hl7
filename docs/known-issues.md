@@ -8,15 +8,36 @@ needed; they are not silent runtime fallbacks.
 
 ## Transform vocabulary
 
-`cda-mapping.json` version 2 accepts direct target names and small declarative
-rules. The built-in transform vocabulary is deliberately limited to `identity`,
+`cda-mapping.json` version 3 accepts direct target names, small declarative
+rules, and explicit structural bindings. The built-in scalar transform vocabulary is deliberately limited to `identity`,
 `enum`, `ordinal`, and `not`. The generated proposal uses it for the currently
-proven AKTIN semantics for Tetanusschutz, Isolation and modified Rankin.
+proven AKTIN semantics for Tetanusschutz, Isolation, modified Rankin, and
+diagnosis certainty. Structural `for_each`, `fan_out`, and `coalesce` behavior is
+implemented in the generic binding layer and is generated only from formal
+repeat/discriminator evidence.
 
 A future concept whose ART-DECOR representation needs a different structural or
 computed transformation remains evidence-linked but non-executable until an
 explicit transform is added. `ADAPT` remains usable mapping evidence but is not
 automatic dataset identity inheritance.
+
+## Secondary ICD-10 diagnoses (concept 29508)
+
+The current transaction represents `ICD-10 Sekundärdiagnose` as concept 29508
+with cardinality `0..1`, while historical/project material has also exposed it
+as `0..*`. It is therefore not yet safe to define a delimiter syntax or to
+expand it into additional diagnosis occurrences.
+
+The current CDA evidence provides no proven direct target distinct from the
+primary ICD value. The compiler deliberately leaves concept 29508 unmapped; it
+must not be written as `CD.translation`, because that would assert a translation
+of the primary diagnosis rather than another diagnosis.
+
+AKTIN clarification is needed on cardinality and intended CDA representation:
+whether each secondary code becomes another Problem Observation, how it relates
+to the leading diagnosis, and whether text/certainty are repeated with it. Until
+that is resolved, no semicolon parser or inferred clinical relationship is
+implemented.
 
 ## ART-DECOR assertion expression coverage
 

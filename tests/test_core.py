@@ -9,10 +9,12 @@ from urllib.parse import urlsplit
 from unittest.mock import patch
 
 from decor2hl7 import assertions, cda, data, state, validate
+from decor2hl7.bindings import build_assignments
 from decor2hl7.build import mapping
 from decor2hl7.build.mapping import cda_mapping_proposal
 from decor2hl7.build.model import compile_model
 from decor2hl7.build.target import collect_templates, compile_cda, select_template
+from decor2hl7.compile import mapping as mapping_compiler
 from decor2hl7.compile.terminology import domain_difference
 from decor2hl7.retrieval.artifacts import artifact_problems, artifact_record, closure_records
 from decor2hl7.retrieval.catalog import parse_releases, parse_transactions, transactions
@@ -545,12 +547,322 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             data.normalize_value("2026-08-21", {"type": "datetime", "precision": "YMDHM"}, {}, {"timezone": "Europe/Berlin", "input": {}})
 
-    def test_multiple_primary_rows_are_demoted(self) -> None:
+    def test_multiple_primary_rows_are_rejected_without_mutation(self) -> None:
         rows = [{"main": "0", "v": "a"}, {"main": "1", "v": "b"}, {"main": "1", "v": "c"}]
         ordered, problems = data._order_rows(rows, {"column": "main", "true_values": ["1"], "false_value": "0"})
-        self.assertEqual([row["v"] for row in ordered], ["b", "a", "c"])
-        self.assertEqual(ordered[2]["main"], "0")
+        self.assertEqual([row["v"] for row in ordered], ["a", "b", "c"])
+        self.assertEqual([row["main"] for row in ordered], ["0", "1", "1"])
         self.assertEqual(problems[0]["severity"], "error")
+
+    def test_boolean_leading_diagnosis_becomes_sequence_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp)
+            (raw / "cases.csv").write_text("case_id\nP1\n", encoding="utf-8")
+            (raw / "diagnoses.csv").write_text(
+                "case_id,leading,icd,text\n"
+                "P1,false,S93.4,Distorsion\n"
+                "P1,true,S82.1,Tibiakopffraktur\n",
+                encoding="utf-8",
+            )
+            model = {
+                "groups": {"diagnoses": {"repeating": True}},
+                "fields": {
+                    "diagnoses.sequence": {
+                        "type": "integer", "repeat": "diagnoses",
+                        "repeat_chain": ["diagnoses"],
+                    },
+                    "diagnoses.icd": {
+                        "type": "text", "repeat": "diagnoses",
+                        "repeat_chain": ["diagnoses"],
+                    },
+                    "diagnoses.text": {
+                        "type": "text", "repeat": "diagnoses",
+                        "repeat_chain": ["diagnoses"],
+                    },
+                },
+            }
+            csv_mapping = {"join": {"column": "case_id"}, "fields": {
+                "diagnoses.sequence": {
+                    "source": "diagnoses", "column": "leading", "parse_as": "boolean",
+                    "transform": {
+                        "type": "enum", "select": "value",
+                        "map": {"true": 1, "false": None},
+                    },
+                },
+                "diagnoses.icd": "diagnoses:icd",
+                "diagnoses.text": "diagnoses:text",
+            }}
+            site = {"input": {
+                "case_source": "cases",
+                "sources": {
+                    "cases": {"file": "cases.csv", "cardinality": "1:1"},
+                    "diagnoses": {
+                        "file": "diagnoses.csv", "cardinality": "1:n",
+                        "primary": {"column": "leading", "required": False},
+                    },
+                },
+            }}
+            record = data.ingest(raw, model, csv_mapping, {"fields": {}}, site)[0]
+            self.assertEqual(
+                data.field_value(record, "diagnoses.sequence", model["fields"]["diagnoses.sequence"]),
+                [1, None],
+            )
+            self.assertEqual(
+                data.field_value(record, "diagnoses.icd", model["fields"]["diagnoses.icd"]),
+                ["S82.1", "S93.4"],
+            )
+            self.assertFalse(record["problems"])
+
+    def test_fan_out_creates_side_discriminated_occurrences(self) -> None:
+        model = {"fields": {
+            "pupil.right": {"type": "text", "repeat_chain": []},
+            "pupil.left": {"type": "text", "repeat_chain": []},
+        }}
+        cda_model = {"targets": {
+            "Pupil.value": {
+                "datatype": "ST", "path": "hl7:observation/hl7:value",
+                "renderable": True, "locations": ["0.0.0"],
+                "repeat_ancestors": ["0.0"],
+            },
+            "Pupil.side": {
+                "datatype": "CD", "path": "hl7:observation/hl7:targetSiteCode",
+                "renderable": True, "locations": ["0.0.1"],
+                "repeat_ancestors": ["0.0"],
+            },
+        }}
+        mapping_cfg = {
+            "fields": {
+                "pupil.right": {"target": "Pupil.value", "structure": "pupils", "branch": "right"},
+                "pupil.left": {"target": "Pupil.value", "structure": "pupils", "branch": "left"},
+            },
+            "structures": {"pupils": {
+                "type": "fan_out",
+                "branches": [
+                    {"source": "pupil.right", "target": "Pupil.value", "constants": {
+                        "Pupil.side": {"code": "R", "codeSystem": "1.2.276.0.76.3.1.195.5.48", "displayName": "Auge rechts"},
+                    }},
+                    {"source": "pupil.left", "target": "Pupil.value", "constants": {
+                        "Pupil.side": {"code": "L", "codeSystem": "1.2.276.0.76.3.1.195.5.48", "displayName": "Auge links"},
+                    }},
+                ],
+            }},
+        }
+        assignments, problems = build_assignments(
+            {"values": {"pupil.right": "3", "pupil.left": "2"}, "instances": {}},
+            model, cda_model, mapping_cfg, {},
+        )
+        self.assertEqual(assignments["Pupil.value"], ["3", "2"])
+        self.assertEqual([value["code"] for value in assignments["Pupil.side"]], ["R", "L"])
+        self.assertFalse(problems)
+        self.assertEqual(
+            validate.check_config(
+                model, cda_model,
+                {"fields": {"pupil.right": None, "pupil.left": None}},
+                mapping_cfg,
+            ),
+            [],
+        )
+
+    def test_compiler_infers_data_driven_structural_and_certainty_rules(self) -> None:
+        pupil_model = {"fields": {
+            "vitals.pupil_right": {
+                "name": "Pupillenweite rechts", "type": "code",
+                "repeat_chain": ["vitals"],
+            },
+            "vitals.pupil_left": {
+                "name": "Pupillenweite links", "type": "code",
+                "repeat_chain": ["vitals"],
+            },
+        }}
+        pupil_cda = {"targets": {
+            "Pupil.value": {
+                "path": "hl7:observation/hl7:value", "renderable": True,
+                "locations": ["0.0.0"], "repeat_ancestors": ["0", "0.0"],
+            },
+            "Pupil.targetSiteCode": {
+                "path": "hl7:observation/hl7:targetSiteCode", "renderable": True,
+                "locations": ["0.0.1"], "repeat_ancestors": ["0", "0.0"],
+                "value_sets": ["eye-sides"],
+            },
+        }}
+        inferred = mapping_compiler._fanout_rule(
+            ["vitals.pupil_right", "vitals.pupil_left"], "Pupil.value",
+            pupil_model, pupil_cda,
+            {"eye-sides": [
+                {"code": "362502000", "codeSystem": "2.16.840.1.113883.6.96", "displayName": "Entire right eye"},
+                {"code": "362503005", "codeSystem": "2.16.840.1.113883.6.96", "displayName": "Entire left eye"},
+            ]},
+        )
+        self.assertIsNotNone(inferred)
+        _, fanout = inferred
+        self.assertEqual(
+            [branch["constants"]["Pupil.targetSiteCode"]["code"] for branch in fanout["branches"]],
+            ["362502000", "362503005"],
+        )
+
+        certainty_field = {
+            "name": "Zusatzkennzeichen",
+            "accepted_values": {
+                "Verdachtsdiagnose": {"synonyms": ["V"]},
+                "ausgeschlossene Diagnose": {"synonyms": ["A"]},
+                "Zustand nach": {"synonyms": ["Z"]},
+                "gesicherte Diagnose": {"synonyms": ["G"]},
+            },
+        }
+        certainty_cda = {"targets": {
+            "Certainty.value": {
+                "path": "hl7:qualifier/hl7:value", "renderable": True,
+                "locations": ["0.0"], "repeat_ancestors": ["0"],
+                "value_sets": ["certainty-vs"],
+            },
+            "Diagnosis.negationInd": {
+                "path": "hl7:observation/@negationInd", "renderable": True,
+                "locations": ["0.1"], "repeat_ancestors": ["0"],
+            },
+            "Diagnosis.high": {
+                "path": "hl7:observation/hl7:effectiveTime/hl7:high", "renderable": True,
+                "locations": ["0.2"], "repeat_ancestors": ["0"],
+            },
+        }}
+        certainty = mapping_compiler._certainty_mapping(
+            "diagnoses.certainty", certainty_field, certainty_cda,
+            {"certainty-vs": [
+                {"code": code, "codeSystem": "example-certainty", "displayName": code}
+                for code in "VAZG"
+            ]},
+        )
+        self.assertIsNotNone(certainty)
+        selection, _ = certainty
+        self.assertIn("VS(certainty-vs)", selection["primary"]["chain"])
+        self.assertEqual(selection["mapping"][-1]["mode"], "fallback")
+
+        coalesced = mapping_compiler._coalesce_rule(
+            ["encounter.admission", "encounter.documentation"], "Encounter.low",
+            {"fields": {
+                "encounter.admission": {"type": "datetime", "repeat_chain": []},
+                "encounter.documentation": {"type": "datetime", "repeat_chain": []},
+            }},
+            {"targets": {"Encounter.low": {"repeat_ancestors": []}}},
+        )
+        self.assertEqual(coalesced[1]["policy"], "equal_or_error")
+
+    def test_transaction_model_keeps_human_explanations_and_synonyms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transaction = Path(tmp) / "transaction.xml"
+            transaction.write_text('''<dataset id="d" transactionId="t">
+              <concept id="c" shortName="certainty" type="item">
+                <name>Zusatzkennzeichen</name>
+                <desc>Diagnosesicherheit</desc>
+                <comment>Für jede Diagnose</comment>
+                <implementation markdown="V, A, Z oder G"/>
+                <valueDomain type="code"><conceptList>
+                  <concept><name>Verdachtsdiagnose</name><synonym>V</synonym></concept>
+                </conceptList></valueDomain>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            field = compile_model(transaction)["fields"]["certainty"]
+            self.assertEqual(field["description"], "Diagnosesicherheit")
+            self.assertEqual(field["comment"], "Für jede Diagnose")
+            self.assertEqual(field["implementation"], "V, A, Z oder G")
+            self.assertEqual(
+                field["logical_domain"]["options"]["Verdachtsdiagnose"]["synonyms"],
+                ["V"],
+            )
+
+    def test_coalesce_equal_or_error(self) -> None:
+        model = {"fields": {
+            "encounter.admission": {"type": "datetime"},
+            "encounter.documentation_start": {"type": "datetime"},
+        }}
+        cda_model = {"targets": {"Encounter.time": {
+            "datatype": "TS", "renderable": True, "locations": ["0.0"],
+            "repeat_ancestors": [],
+        }}}
+        mapping_cfg = {
+            "fields": {
+                "encounter.admission": "Encounter.time",
+                "encounter.documentation_start": "Encounter.time",
+            },
+            "structures": {"encounter-time": {
+                "type": "coalesce", "policy": "equal_or_error",
+                "sources": ["encounter.admission", "encounter.documentation_start"],
+                "target": "Encounter.time",
+            }},
+        }
+        value = "2026-08-28T10:15:00+02:00"
+        assignments, _ = build_assignments(
+            {"values": {"encounter.admission": value, "encounter.documentation_start": value}},
+            model, cda_model, mapping_cfg, {},
+        )
+        self.assertEqual(assignments["Encounter.time"], value)
+        one, _ = build_assignments(
+            {"values": {"encounter.admission": value}}, model, cda_model, mapping_cfg, {},
+        )
+        self.assertEqual(one["Encounter.time"], value)
+        with self.assertRaisesRegex(ValueError, "differing values"):
+            build_assignments(
+                {"values": {
+                    "encounter.admission": value,
+                    "encounter.documentation_start": "2026-08-28T10:16:00+02:00",
+                }},
+                model, cda_model, mapping_cfg, {},
+            )
+
+    def test_diagnosis_certainty_and_end_time_are_occurrence_aligned(self) -> None:
+        fields = {
+            "diagnoses.certainty": {"type": "code", "repeat_chain": ["diagnoses"]},
+            "diagnoses.end": {"type": "datetime", "repeat_chain": ["diagnoses"]},
+        }
+        targets = {
+            "Diagnosis.certainty": {
+                "datatype": "CD", "renderable": True, "locations": ["0.0.0"],
+                "repeat_ancestors": ["0.0"],
+            },
+            "Diagnosis.negation": {
+                "datatype": "BL", "renderable": True, "locations": ["0.0.1"],
+                "repeat_ancestors": ["0.0"],
+            },
+            "Diagnosis.high": {
+                "datatype": "TS", "renderable": True, "locations": ["0.0.2"],
+                "repeat_ancestors": ["0.0"],
+            },
+        }
+        certainty_map = {
+            code: {"code": code, "codeSystem": "1.2.276.0.76.11.121"}
+            for code in "VAZG"
+        }
+        mapping_cfg = {"fields": {
+            "diagnoses.certainty": [
+                {"target": "Diagnosis.certainty", "transform": {
+                    "type": "enum", "select": "raw", "map": certainty_map,
+                }},
+                {"target": "Diagnosis.negation", "transform": {
+                    "type": "enum", "select": "raw", "map": {"A": True},
+                }},
+                {"target": "Diagnosis.high", "mode": "fallback", "transform": {
+                    "type": "enum", "select": "raw", "map": {"Z": {"nullFlavor": "UNK"}},
+                }},
+            ],
+            "diagnoses.end": "Diagnosis.high",
+        }}
+        record = {"values": {}, "instances": {"diagnoses": [
+            {"values": {
+                "diagnoses.certainty": {"raw": "A", "canonical": "Ausgeschlossen", "code": "A"},
+            }},
+            {"values": {
+                "diagnoses.certainty": {"raw": "Z", "canonical": "Zustand nach", "code": "Z"},
+            }},
+            {"values": {
+                "diagnoses.certainty": {"raw": "Z", "canonical": "Zustand nach", "code": "Z"},
+                "diagnoses.end": "2026-08-28T12:00:00+02:00",
+            }},
+        ]}}
+        assignments, _ = build_assignments(record, {"fields": fields}, {"targets": targets}, mapping_cfg, {})
+        self.assertEqual([item["code"] for item in assignments["Diagnosis.certainty"]], ["A", "Z", "Z"])
+        self.assertEqual(assignments["Diagnosis.negation"], [True, None, None])
+        self.assertEqual(assignments["Diagnosis.high"][0], None)
+        self.assertEqual(assignments["Diagnosis.high"][1], {"nullFlavor": "UNK"})
+        self.assertEqual(assignments["Diagnosis.high"][2], "2026-08-28T12:00:00+02:00")
 
     def test_config_validation_requires_all_fields(self) -> None:
         errors = validate.check_config({"fields": {"a": {}, "b": {}}}, {"targets": {"T.value": {}}},

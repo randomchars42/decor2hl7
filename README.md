@@ -260,10 +260,16 @@ Logical sources map to relative filenames under the external input root via rele
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "join": {"column": "patient_id"},
   "fields": {
     "administrative_aufnahmeinformationen.aufnahmezeitpunkt": "cases:aufnahmezeitpunkt",
+    "abschlussdiagnosen.abschlussdiagnose.fuhrende_abschlussdiagnoseq_sequenznummer": {
+      "source": "diagnoses",
+      "column": "leading",
+      "parse_as": "boolean",
+      "transform": {"type": "enum", "select": "value", "map": {"true": 1, "false": null}}
+    },
     "notfallanamnese.beschwerden_bei_vorstellung.beschwerden_bei_vorstellung_freitext": null
   }
 }
@@ -290,7 +296,7 @@ Unmapped raw codes become `nullFlavor="OTH"` by default.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "fields": {
     "patient.identifikatoren.patienten_id": "PatientIdentifier.id",
     "ersteinschatzung.parameter_der_ersteinschatzung.zeitpunkt_der_ersteinschatzung": "ersteinschatzung.effectiveTime",
@@ -299,6 +305,14 @@ Unmapped raw codes become `nullFlavor="OTH"` by default.
       "transform": {"type": "ordinal", "map": {"keine Symptome": 0, "Tod": 6}}
     },
     "masnahmen.wildcard_therapie.code": null
+  },
+  "structures": {
+    "encounter-time": {
+      "type": "coalesce",
+      "sources": ["administrative_aufnahmeinformationen.aufnahmezeitpunkt", "dokumentationsinformationen.beginn_patientenbezogene_dokumentation.zeitpunkt_beginn_patientenbezogene_dokumentation"],
+      "target": "CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.low@20160601",
+      "policy": "equal_or_error"
+    }
   }
 }
 ```
@@ -320,12 +334,17 @@ mapping or transform proves the runtime semantics.
 Direct `implementation/@xpath` declarations are treated as explicit technical
 mapping evidence when they uniquely resolve to a current writable CDA target.
 
-`cda-mapping.json` version 2 may also contain declarative rules. The generated
+`cda-mapping.json` version 3 may also contain declarative scalar and structural
+rules. The generated
 proposal currently derives only semantics supported by the specification itself:
 Tetanusschutz drives `negationInd` plus `nullFlavor=NI` for unknown status,
 Isolation drives `negationInd`, and modified Rankin labels map to their numeric
-`{score}` value. The transform vocabulary is intentionally small (`identity`,
-`enum`, `ordinal`, `not`) and remains data rather than clinical Python code.
+`{score}` value. Diagnosis occurrences use `for_each`; V/A/Z/G certainty controls
+the qualifier, negation, and fallback end-time; left/right pupil fields use a
+terminology-backed `fan_out`; equivalent encounter start fields use conservative
+`equal_or_error` coalescing. The transform vocabulary is intentionally small
+(`identity`, `enum`, `ordinal`, `not`) and remains data rather than clinical
+Python code.
 
 ## Runtime
 
@@ -348,7 +367,7 @@ datetimes use the configured timezone. `1:n` CSV sources preserve source order
 **and occurrence identity**: repeated groups are normalized as structured rows,
 so an absent value in occurrence 1 cannot shift occurrence 2 into its place. An
 optional primary flag can move one row first, and duplicate primary flags are
-reported/demoted deterministically. Nested independent repetitions use explicit
+reported as errors without changing the input. Nested independent repetitions use explicit
 `occurrence_keys` for every repeat level; those keys allow several CSV sources to
 join the same outer/inner occurrences without positional zipping.
 

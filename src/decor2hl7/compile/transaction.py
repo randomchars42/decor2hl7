@@ -348,6 +348,8 @@ def _concept_node(concept: ET.Element, path: str, parent: str | None) -> dict[st
         "path": path,
         "parent": parent,
         "name": child_text(concept, "name"),
+        "description": child_text(concept, "desc"),
+        "comment": child_text(concept, "comment"),
         "concept": concept.get("id"),
         "short_name": concept.get("shortName"),
         "kind": concept.get("type") or "item",
@@ -366,6 +368,8 @@ def _concept_node(concept: ET.Element, path: str, parent: str | None) -> dict[st
     }
     for child in concept:
         kind = local(child.tag)
+        if kind == "implementation":
+            result["implementation"] = clean(child.get("markdown"))
         if kind == "valueDomain":
             raw_type = child.get("type") or ""
             result["type"] = TYPE_NAMES.get(raw_type, raw_type or None)
@@ -730,6 +734,8 @@ def _logical_values(field: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     for label in field.get("options", []):
         info = {"display_name": label}
         detail = option_details.get(str(label), {}) if isinstance(option_details, Mapping) else {}
+        if isinstance(detail, Mapping) and detail.get("synonyms"):
+            info["synonyms"] = list(detail.get("synonyms", []))
         if isinstance(detail, Mapping) and detail.get("ordinal") is not None:
             info["ordinal"] = detail.get("ordinal")
         values.setdefault(str(label), info)
@@ -827,6 +833,9 @@ def compile_model(
     for path, node in nodes.items():
         common = {
             "name": node.get("name"),
+            "description": node.get("description"),
+            "comment": node.get("comment"),
+            "implementation": node.get("implementation"),
             "short_name": node.get("short_name"),
             "concept": node.get("concept"),
             "parent": node.get("parent"),

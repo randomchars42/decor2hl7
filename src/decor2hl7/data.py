@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .semantics import accepted_values
+from .transforms import OMIT, apply_transform, validate_transform
 
 _MISSING = object()
 from zoneinfo import ZoneInfo
@@ -105,6 +106,7 @@ def _canonical_code(
         return canonical
     if info.get("code"):
         return {
+            "raw": raw,
             "canonical": canonical,
             "code": info.get("code"),
             "codeSystem": info.get("code_system"),
@@ -173,6 +175,71 @@ def normalize_value(
     return text
 
 
+def mapping_locator(value: Any) -> dict[str, Any] | None:
+    """Normalize a CSV mapping entry.
+
+    Version-1 ``SOURCE:COLUMN`` strings remain valid.  Object locators add a
+    source datatype and a declarative transform without leaking CSV-specific
+    representation into the compiled transaction model.
+    """
+    if isinstance(value, str) and ":" in value:
+        source, column = value.split(":", 1)
+        return {"source": source, "column": column}
+    if isinstance(value, Mapping) and value.get("source") and value.get("column"):
+        return {
+            "source": str(value["source"]),
+            "column": str(value["column"]),
+            **({"parse_as": str(value["parse_as"])} if value.get("parse_as") else {}),
+            **({"transform": dict(value["transform"])} if isinstance(value.get("transform"), Mapping) else {}),
+        }
+    return None
+
+
+def _normalize_transformed(
+    value: Any,
+    field: Mapping[str, Any],
+    translations: Mapping[str, Any],
+    site: Mapping[str, Any],
+) -> Any:
+    if value is OMIT or value is None:
+        return None
+    if isinstance(value, Mapping):
+        return dict(value)
+    kind = str(field.get("type") or "text")
+    if kind == "boolean" and isinstance(value, bool):
+        return value
+    if kind == "integer" and isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if kind in {"quantity", "decimal", "duration"} and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    return normalize_value(value, field, translations, site)
+
+
+def normalize_input_value(
+    raw: Any,
+    field: Mapping[str, Any],
+    translations: Mapping[str, Any],
+    site: Mapping[str, Any],
+    locator: Mapping[str, Any] | None = None,
+) -> Any:
+    """Parse a source value, optionally transform it, then validate its model shape."""
+    locator = locator or {}
+    parse_as = str(locator.get("parse_as") or "")
+    transform = locator.get("transform")
+    if not parse_as and not transform:
+        return normalize_value(raw, field, translations, site)
+    source_field = dict(field)
+    if parse_as:
+        source_field["type"] = parse_as
+    parsed = normalize_value(raw, source_field, {}, site)
+    if parsed is None:
+        return None
+    for reason in validate_transform(transform):
+        raise ValueError(f"invalid input transform: {reason}")
+    transformed = apply_transform(parsed, transform)
+    return _normalize_transformed(transformed, field, translations, site)
+
+
 def _source_spec(
     name: str, input_dir: Path, site: Mapping[str, Any]
 ) -> tuple[Path, str, str | None, Mapping[str, Any] | None, dict[str, str]]:
@@ -197,25 +264,26 @@ def _source_spec(
 
 
 def _order_rows(rows: list[dict[str, str]], primary: Mapping[str, Any] | None) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    if not primary or not primary.get("column") or len(rows) < 2:
+    if not primary or not primary.get("column"):
         return rows, []
     column = str(primary["column"])
     true_values = {str(value).casefold() for value in primary.get("true_values", ["1", "true", "yes", "ja", "j"])}
     marked = [index for index, row in enumerate(rows) if str(row.get(column) or "").strip().casefold() in true_values]
     if not marked:
+        if primary.get("required"):
+            return rows, [{
+                "severity": "error", "path": column,
+                "message": "no primary row is marked",
+            }]
         return rows, []
+    if len(marked) > 1:
+        return rows, [{
+            "severity": "error", "path": column,
+            "message": f"multiple primary rows ({len(marked)})",
+        }]
     first = marked[0]
     ordered = [dict(rows[first])] + [dict(row) for index, row in enumerate(rows) if index != first]
-    if len(marked) == 1:
-        return ordered, []
-    false_value = str(primary.get("false_value") or "0")
-    for row in ordered[1:]:
-        if str(row.get(column) or "").strip().casefold() in true_values:
-            row[column] = false_value
-    return ordered, [{
-        "severity": "error", "path": column,
-        "message": f"multiple primary rows ({len(marked)}); kept the first and demoted the rest",
-    }]
+    return ordered, []
 
 
 def _read_csv(path: Path, site: Mapping[str, Any]) -> tuple[list[dict[str, str]], list[str]]:
@@ -293,8 +361,11 @@ def ingest(
     """
     groups = model.get("groups", {})
 
-    locators = [value for value in csv_mapping.get("fields", {}).values() if isinstance(value, str) and ":" in value]
-    source_name_set = {value.split(":", 1)[0] for value in locators}
+    locators = [
+        locator for value in csv_mapping.get("fields", {}).values()
+        if (locator := mapping_locator(value)) is not None
+    ]
+    source_name_set = {str(locator["source"]) for locator in locators}
     configured_case_source = site.get("input", {}).get("case_source")
     if configured_case_source:
         source_name_set.add(str(configured_case_source))
@@ -302,9 +373,10 @@ def ingest(
     default_join = str(csv_mapping.get("join", {}).get("column") or site.get("input", {}).get("join_column") or "patient_id")
     source_rows: dict[str, dict[str, Any]] = {}
     mapped_columns: dict[str, set[str]] = {}
-    for locator in csv_mapping.get("fields", {}).values():
-        if isinstance(locator, str) and ":" in locator:
-            source, column = locator.split(":", 1); mapped_columns.setdefault(source, set()).add(column)
+    for value in csv_mapping.get("fields", {}).values():
+        locator = mapping_locator(value)
+        if locator is not None:
+            mapped_columns.setdefault(str(locator["source"]), set()).add(str(locator["column"]))
     for name in source_names:
         path, cardinality, source_join, primary, occurrence_keys = _source_spec(name, input_dir, site)
         if cardinality not in {"1:1", "1:n"}:
@@ -368,10 +440,10 @@ def ingest(
     repeat_sources: dict[str, set[str]] = {}
     for field_path, field in model.get("fields", {}).items():
         chain = list(field.get("repeat_chain") or ([] if not field.get("repeat") else [field.get("repeat")]))
-        locator = csv_mapping.get("fields", {}).get(field_path)
-        if not chain or not isinstance(locator, str) or ":" not in locator:
+        locator = mapping_locator(csv_mapping.get("fields", {}).get(field_path))
+        if not chain or locator is None:
             continue
-        source = locator.split(":", 1)[0]
+        source = str(locator["source"])
         if source_rows.get(source, {}).get("cardinality") != "1:n":
             continue
         for repeat in chain:
@@ -403,12 +475,12 @@ def ingest(
         for source_data in source_rows.values():
             problems.extend(source_data.get("problems", {}).get(key, []))
         for field_path, field in model.get("fields", {}).items():
-            locator = csv_mapping.get("fields", {}).get(field_path)
+            locator = mapping_locator(csv_mapping.get("fields", {}).get(field_path))
             source = column = None
             rows: list[dict[str, str]] = []
             cardinality = "1:1"
-            if isinstance(locator, str) and ":" in locator:
-                source, column = locator.split(":", 1)
+            if locator is not None:
+                source, column = str(locator["source"]), str(locator["column"])
                 source_data = source_rows.get(source, {})
                 rows = list(source_data.get("rows", {}).get(key, []))
                 cardinality = str(source_data.get("cardinality") or "1:1")
@@ -441,7 +513,7 @@ def ingest(
                     occurrence = _ensure_occurrence(instances, [str(item) for item in chain], occurrence_keys, source, row_number)
                     raw = row.get(column)
                     try:
-                        normalized = normalize_value(raw, field, translations, site)
+                        normalized = normalize_input_value(raw, field, translations, site, locator)
                     except (ValueError, TypeError) as error:
                         problems.append({
                             "severity": "error", "path": f"{field_path}[{index}]",
@@ -462,7 +534,7 @@ def ingest(
 
             raw = rows[0].get(column) if rows and column is not None else None
             try:
-                normalized = normalize_value(raw, field, translations, site) if source is not None else None
+                normalized = normalize_input_value(raw, field, translations, site, locator) if source is not None else None
             except (ValueError, TypeError) as error:
                 problems.append({"severity": "error", "path": field_path, "message": str(error)})
                 normalized = None

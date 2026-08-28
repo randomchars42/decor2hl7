@@ -52,9 +52,11 @@ src/decor2hl7/
         terminology.py logical/formal domain accessors
         cda.py          exact templates/SPEC → cda.json
         mapping.py      decisions → audit + proposal
+        structural.py   cardinality/terminology → structural rules
         reports.py      readable effective CDA
     build/              compatibility imports for one release
     data.py             CSV joining/normalization
+    bindings.py         occurrence fan-out/coalescing + CDA assignments
     validate.py         config + record/source-constraint validation
     transforms.py       small declarative mapping transforms
     assertions.py       ART-DECOR assert evaluator + Schematron output
@@ -192,6 +194,22 @@ Mapping values can be direct target strings or declarative rule objects. A field
 may control more than one target (for example Tetanusschutz `negationInd` and
 `nullFlavor`) without introducing target-specific renderer code.
 
+`cda-mapping.json` version 3 separates scalar transforms from structural
+bindings. The compiler emits only rules supported by explicit cardinality and
+terminology evidence:
+
+- `for_each` preserves one source-group occurrence as one CDA occurrence;
+- `fan_out` turns sibling fields such as right/left measurements into separate
+  CDA occurrences and writes the discriminator required by the target ValueSet;
+- `coalesce` lets equivalent singleton fields share a target, using
+  `equal_or_error` unless a different policy is explicitly configured;
+- `mode: "fallback"` fills absent leaves without replacing real values in other
+  occurrences (for example an unknown diagnosis end implied by certainty `Z`).
+
+The compiler does not embed AKTIN paths, OIDs, or side codes in the runtime. A
+generated rule carries the resolved source paths, targets, and terminology
+members, so the same binding engine can execute another transaction/template.
+
 ## Assertions and nested occurrences
 
 Effective `<assert>` and `<let>` constraints are carried through recursive SPEC
@@ -214,6 +232,12 @@ ancestor instead of flattening lists.
 The producer owns the CSV directory; decor2hl7 never requires another program to copy data into a workspace-owned `raw/` directory. One command invocation treats the supplied input directory as one coherent snapshot.
 
 `data.py` receives the resolved external root explicitly. Source definitions remain logical (`cases`, `medications`, ...) and `site.json` supplies relative filenames/cardinality/occurrence keys. The physical input path is excluded from transformation fingerprints, so moving an otherwise identical snapshot does not create a correction.
+
+CSV mapping entries may be either the compact `SOURCE:COLUMN` form or an object
+with `source`, `column`, optional `parse_as`, and optional scalar `transform`.
+This supports representation changes at the input boundary without changing the
+transaction model—for example a Boolean leading-diagnosis column can become
+sequence number `1` for true and be omitted for false.
 
 `build` has no input argument and never inspects CSVs. CSV/code proposal generation is a separate explicit `propose-input` step. The proposal step may inspect column names and observed coded values, but it does not infer relationships between CSV sources; joins/cardinalities remain explicit configuration.
 

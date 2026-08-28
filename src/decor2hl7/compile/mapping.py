@@ -17,7 +17,13 @@ from ..semantics import (
     accepted_values, direct_compatibility, payload_match,
     transformed_compatibility, type_match,
 )
-from ..transforms import mapping_rules, selected_targets
+from ..transforms import mapping_rules
+from .structural import (
+    coalesce_rule as _coalesce_rule,
+    fanout_rule as _fanout_rule,
+    for_each_rules as _for_each_rules,
+    value_set_members as _value_set_members,
+)
 
 STRONG_EDGES = {"SPEC", "INHERIT", "ORIGINAL", "EQUIV", "VERSION", "COPY"}
 REVERSE_EDGES = {"INHERIT^-1", "ORIGINAL^-1", "SPEC^-1"}
@@ -820,6 +826,91 @@ def _context(
     )
 
 
+def _certainty_mapping(
+    path: str,
+    field: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    value_sets: Mapping[str, list[dict[str, str]]],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Recognize a V/A/Z/G diagnosis-certainty field and its CDA qualifier."""
+    aliases: dict[str, str] = {}
+    for label, info in accepted_values(field).items():
+        detail = info if isinstance(info, Mapping) else {}
+        candidates = [str(label)] + [str(value) for value in detail.get("synonyms", [])]
+        code = next((value.upper() for value in candidates if value.upper() in {"V", "A", "Z", "G"}), None)
+        if code:
+            for value in candidates:
+                aliases[value] = code
+    if set(aliases.values()) != {"V", "A", "Z", "G"}:
+        return None
+
+    candidates: list[
+        tuple[str, Mapping[str, Any], str, dict[str, dict[str, str]]]
+    ] = []
+    for name, target in cda.get("targets", {}).items():
+        if not target.get("renderable") or len(target.get("locations", [])) != 1:
+            continue
+        for oid in target.get("value_sets", []):
+            members = value_sets.get(str(oid), [])
+            by_code = {
+                str(member.get("code") or "").upper(): dict(member)
+                for member in members
+            }
+            if {"V", "A", "Z", "G"} <= set(by_code):
+                candidates.append((str(name), target, str(oid), by_code))
+    if len(candidates) != 1:
+        return None
+    target_name, target, value_set_oid, members = candidates[0]
+    repeat_ancestors = target.get("repeat_ancestors", [])
+    template_words = _words(
+        " ".join(str(field.get(key) or "") for key in ("name", "description", "implementation"))
+    ) | {"diagnos", "diagnose"}
+
+    def sibling(suffix: str) -> str | None:
+        rows: list[tuple[int, str]] = []
+        for name, candidate in cda.get("targets", {}).items():
+            if not candidate.get("renderable") or candidate.get("repeat_ancestors", []) != repeat_ancestors:
+                continue
+            if not str(candidate.get("path") or "").endswith(suffix):
+                continue
+            label = f"{candidate.get('template_name') or ''} {candidate.get('template_display_name') or ''} {name}"
+            rows.append((len(template_words & _words(label)), str(name)))
+        rows.sort(reverse=True)
+        return rows[0][1] if rows and (len(rows) == 1 or rows[0][0] > rows[1][0]) else None
+
+    enum_map = {alias: members[code] for alias, code in aliases.items()}
+    rules: list[dict[str, Any]] = [{
+        "target": target_name,
+        "transform": {"type": "enum", "select": "raw", "map": enum_map},
+    }]
+    negation = sibling("/@negationInd")
+    if negation:
+        rules.append({
+            "target": negation,
+            "transform": {
+                "type": "enum", "select": "raw",
+                "map": {alias: True for alias, code in aliases.items() if code == "A"},
+            },
+        })
+    high = sibling("/hl7:effectiveTime/hl7:high")
+    if high:
+        rules.append({
+            "target": high,
+            "mode": "fallback",
+            "transform": {
+                "type": "enum", "select": "raw",
+                "map": {alias: {"nullFlavor": "UNK"} for alias, code in aliases.items() if code == "Z"},
+            },
+        })
+    primary = _candidate(
+        target_name, target,
+        ["LOGICAL(V/A/Z/G)", f"VS({value_set_oid})", "TRANSFORM(certainty)"],
+        "MEDIUM", 105, kind="TRANSFORM", actionable=True, mapping=rules,
+        warnings=["diagnosis certainty is normalized into the formal CDA qualifier vocabulary"],
+    )
+    return {"mapping": rules, "primary": primary}, {"aliases": aliases}
+
+
 def _cda_mapping_analysis(
     model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: Iterable[Path]
 ) -> tuple[dict[str, Any], dict[str, Any], str, str]:
@@ -866,6 +957,20 @@ def _cda_mapping_analysis(
             "context": None,
         }
 
+    value_set_members = _value_set_members(xml_paths)
+    for path, field in model_fields.items():
+        certainty = _certainty_mapping(path, field, cda, value_set_members)
+        if certainty is None:
+            continue
+        selection, metadata = certainty
+        old_primary = details[path].get("primary")
+        if old_primary is not None:
+            details[path]["alternatives"] = [old_primary] + list(details[path].get("alternatives", []))
+        details[path]["primary"] = selection["primary"]
+        details[path]["selected"] = selection["mapping"]
+        details[path]["semantic_transform"] = metadata
+        fields[path] = selection["mapping"]
+
     for path in model_fields:
         if details[path]["primary"] is None:
             details[path]["context"] = _context(path, model, group_results)
@@ -878,24 +983,79 @@ def _cda_mapping_analysis(
     for path, detail in all_details.items():
         primary = detail.get("primary")
         if primary:
-            primary_targets = selected_targets(primary.get("mapping")) or [primary["target"]]
+            primary_rules = mapping_rules(primary.get("mapping"))
+            primary_targets = [
+                str(rule["target"]) for rule in primary_rules
+                if rule.get("mode") != "fallback"
+            ] or [primary["target"]]
             for target_name in primary_targets:
                 claims[target_name].append(path)
                 if path in model_fields:
                     field_claims[target_name].append(path)
 
-    # Shared semantic targets remain evidence, but they are not executable
-    # without an explicit merge/repetition rule.
+    structures: dict[str, dict[str, Any]] = {}
+
+    # Shared targets become executable only when their occurrence semantics are
+    # explicit.  Repeat fan-out requires a terminology-backed discriminator;
+    # singleton coalescing uses the conservative equal-or-error policy.
     for target_name, paths in field_claims.items():
         if len(paths) <= 1:
+            continue
+        resolved = _fanout_rule(paths, target_name, model, cda, value_set_members)
+        if resolved is None:
+            resolved = _coalesce_rule(paths, target_name, model, cda)
+        if resolved is not None:
+            rule_name, rule = resolved
+            structures[rule_name] = rule
+            branch_names = {
+                str(branch.get("source")): str(branch.get("branch") or "")
+                for branch in rule.get("branches", []) if isinstance(branch, Mapping)
+            }
+            for path in paths:
+                fields[path] = {
+                    "target": target_name,
+                    "structure": rule_name,
+                    **({"branch": branch_names[path]} if path in branch_names else {}),
+                }
+                details[path]["selected"] = fields[path]
+                details[path]["structural_rule"] = rule_name
+            continue
+
+        ranked = sorted(
+            paths,
+            key=lambda path: (
+                CONFIDENCE.get(str(details[path].get("primary", {}).get("confidence") or "CONTEXT"), 0),
+                int(details[path].get("primary", {}).get("score") or 0),
+            ),
+            reverse=True,
+        )
+        winner = ranked[0]
+        winner_rank = (
+            CONFIDENCE.get(str(details[winner].get("primary", {}).get("confidence") or "CONTEXT"), 0),
+            int(details[winner].get("primary", {}).get("score") or 0),
+        )
+        runner_rank = (
+            CONFIDENCE.get(str(details[ranked[1]].get("primary", {}).get("confidence") or "CONTEXT"), 0),
+            int(details[ranked[1]].get("primary", {}).get("score") or 0),
+        )
+        if winner_rank[0] > runner_rank[0] and winner_rank[0] >= CONFIDENCE["MEDIUM"]:
+            for path in paths:
+                if path == winner:
+                    continue
+                fields[path] = None
+                details[path]["selected"] = None
+                details[path]["runtime_blocked"] = f"WEAKER_SHARED_TARGET({winner})"
+            details[winner]["shared_target_winner"] = True
             continue
         for path in paths:
             fields[path] = None
             details[path]["selected"] = None
             details[path]["runtime_blocked"] = f"SHARED({len(paths)})"
 
+    structures.update(_for_each_rules(model, cda, fields))
+
     proposal = {
-        "version": 2,
+        "version": 3,
         "model": {
             "dataset_id": model.get("meta", {}).get("dataset_id"),
             "transaction_id": model.get("meta", {}).get("transaction_id"),
@@ -906,6 +1066,7 @@ def _cda_mapping_analysis(
             "template": cda.get("document_template", {}).get("name"),
         },
         "fields": fields,
+        "structures": structures,
     }
 
     def coverage(detail: Mapping[str, Any]) -> str:
@@ -948,6 +1109,11 @@ def _cda_mapping_analysis(
                 return (
                     "The best CDA target is supported by mapping evidence, but it is shared "
                     "with another dataset field and therefore needs an explicit rule before execution."
+                )
+            if detail.get("structural_rule"):
+                return (
+                    "The CDA target is supported by mapping evidence and the shared occurrence "
+                    f"semantics are made explicit by structural rule `{detail['structural_rule']}`."
                 )
             if primary.get("mapping") is not None:
                 return (
@@ -1036,6 +1202,8 @@ def _cda_mapping_analysis(
                 out += ["**Selected:**", "", f"`{primary.get('target')}` `[{target_datatype(str(primary.get('target')))}]` with declarative transform", ""]
             else:
                 out += ["**Selected:**", "", f"`{primary.get('target')}` `[{target_datatype(str(primary.get('target')))}]`", ""]
+            if detail.get("structural_rule"):
+                out += ["**Structural rule:**", "", f"`{detail['structural_rule']}`", ""]
         elif detail.get("context"):
             out += ["**Context:**", "", f"`{detail['context'].get('target')}`", ""]
         else:
@@ -1199,6 +1367,14 @@ def _cda_mapping_analysis(
             detail_lines.append(f"- {key}: {confidence[key]}")
     detail_lines.append("")
 
+    if structures:
+        detail_lines += ["## Executable structural rules", ""]
+        for name, rule in structures.items():
+            detail_lines.append(f"- `{name}` — `{rule.get('type')}`")
+            for item in rule.get("evidence", []):
+                detail_lines.append(f"  - {item}")
+        detail_lines.append("")
+
     if cda.get("unresolved_templates"):
         detail_lines += ["## Unresolved template references", ""]
         for unresolved in cda.get("unresolved_templates", []):
@@ -1265,6 +1441,14 @@ def _cda_mapping_analysis(
                 {"runtime_blocked": detail["runtime_blocked"]}
                 if detail.get("runtime_blocked") else {}
             ),
+            **(
+                {"structural_rule": detail["structural_rule"]}
+                if detail.get("structural_rule") else {}
+            ),
+            **(
+                {"shared_target_winner": True}
+                if detail.get("shared_target_winner") else {}
+            ),
         }
 
     audit = {
@@ -1277,6 +1461,7 @@ def _cda_mapping_analysis(
         "groups": {
             path: audit_detail(detail) for path, detail in group_results.items()
         },
+        "structures": structures,
         "unresolved_templates": list(cda.get("unresolved_templates", [])),
         "summary": {
             "datapoints": len(all_details),
@@ -1288,6 +1473,9 @@ def _cda_mapping_analysis(
             "executable_fields": sum(value is not None for value in fields.values()),
             "shared_target_blocks": sum(
                 bool(detail.get("runtime_blocked")) for detail in details.values()
+            ),
+            "structural_rules": Counter(
+                str(rule.get("type") or "unknown") for rule in structures.values()
             ),
         },
     }
@@ -1366,10 +1554,36 @@ def csv_mapping_proposal(model: Mapping[str, Any], input_dir: Path | None, join_
     detail: dict[str, tuple[float, list[tuple[float, str]]]] = {}
     for path, field in model.get("fields", {}).items():
         selected, score, candidates = _best_column(path, field, headers)
-        fields[path] = selected
+        value: Any = selected
+        semantic_text = " ".join(str(field.get(key) or "") for key in (
+            "name", "short_name", "description", "comment", "implementation",
+        )).casefold()
+        boolean_rank = (
+            selected is not None
+            and str(field.get("type") or "") == "integer"
+            and (field.get("min_value") is None or float(field.get("min_value")) >= 1)
+            and ("führende" in semantic_text or "fuehrende" in semantic_text or "hauptdiagnose" in semantic_text)
+            and ("sequenz" in semantic_text or "rank" in semantic_text or "führende" in semantic_text)
+        )
+        if boolean_rank and selected:
+            observed = {item.casefold() for item in _read_column_values(input_dir, selected) if item.strip()}
+            boolean_literals = {"0", "1", "true", "false", "yes", "no", "ja", "nein", "j", "n"}
+            if observed and observed <= boolean_literals:
+                source, column = selected.split(":", 1)
+                value = {
+                    "source": source,
+                    "column": column,
+                    "parse_as": "boolean",
+                    "transform": {
+                        "type": "enum",
+                        "select": "value",
+                        "map": {"true": 1, "false": None},
+                    },
+                }
+        fields[path] = value
         detail[path] = score, candidates
     proposal = {
-        "version": 1,
+        "version": 2,
         "model": {
             "dataset_id": model.get("meta", {}).get("dataset_id"),
             "transaction_id": model.get("meta", {}).get("transaction_id"),
@@ -1382,7 +1596,11 @@ def csv_mapping_proposal(model: Mapping[str, Any], input_dir: Path | None, join_
     for path, field in model.get("fields", {}).items():
         value = fields[path]
         if value:
-            lines.append(f"{field.get('name') or path} | YES | `{path}` ← `{value}` | PROPOSED ({detail[path][0]:.2f})")
+            display = (
+                f"{value.get('source')}:{value.get('column')} + {value.get('parse_as')}→rank"
+                if isinstance(value, Mapping) else str(value)
+            )
+            lines.append(f"{field.get('name') or path} | YES | `{path}` ← `{display}` | PROPOSED ({detail[path][0]:.2f})")
         else:
             alternatives = ", ".join(f"{name} ({score:.2f})" for score, name in detail[path][1][:3]) or "none"
             lines.append(f"{field.get('name') or path} | NO | `{path}` | candidates: {alternatives}")
@@ -1431,6 +1649,10 @@ def _code_mapping_defaults_for_field(field: Mapping[str, Any]) -> dict[str, str]
         display = str(info.get("display_name") or "").strip()
         if display and display != canonical_text:
             defaults.setdefault(display, canonical_text)
+        for synonym in info.get("synonyms", []):
+            synonym_text = str(synonym).strip()
+            if synonym_text:
+                defaults.setdefault(synonym_text, canonical_text)
 
     # Keep compatibility with hand-built/minimal models where concept-list
     # options have not yet been folded into ``values``.
@@ -1471,7 +1693,11 @@ def codes_mapping_proposal(model: Mapping[str, Any], csv_mapping: Mapping[str, A
         field = model.get("fields", {}).get(path, {})
         values = accepted_values(field)
         locator = csv_mapping.get("fields", {}).get(path)
-        raw_values = _read_column_values(input_dir, locator) if isinstance(locator, str) else set()
+        if isinstance(locator, Mapping) and locator.get("source") and locator.get("column"):
+            locator_text = f"{locator['source']}:{locator['column']}"
+        else:
+            locator_text = locator if isinstance(locator, str) else None
+        raw_values = _read_column_values(input_dir, locator_text) if locator_text else set()
 
         by_norm: dict[str, str] = {}
         by_code: dict[str, str] = {}

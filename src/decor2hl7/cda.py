@@ -6,14 +6,13 @@ ids are provenance only; an element does not need an id to be writable.
 
 from __future__ import annotations
 
-from collections import defaultdict
 import re
 import xml.etree.ElementTree as ET
 from typing import Any, Mapping
 
 from .assertions import validate_contexts
-from .semantics import base_datatype, identifier_root_for_target
-from .transforms import OMIT, apply_transform, mapping_rules
+from .bindings import build_assignments
+from .semantics import base_datatype
 
 HL7 = "urn:hl7-org:v3"
 XSI = "http://www.w3.org/2001/XMLSchema-instance"
@@ -55,27 +54,6 @@ def _format_site(value: Any, variables: Mapping[str, Any]) -> Any:
     if isinstance(value, list):
         return [_format_site(item, variables) for item in value]
     return value
-
-
-def _record_value(record: Mapping[str, Any], model: Mapping[str, Any], path: str) -> Any:
-    field = model.get("fields", {}).get(path, {})
-    chain = list(field.get("repeat_chain") or ([] if not field.get("repeat") else [field.get("repeat")]))
-    if not chain:
-        return record.get("values", {}).get(path)
-
-    def collect(instances: Mapping[str, Any], depth: int) -> list[Any]:
-        rows = instances.get(str(chain[depth]), []) if isinstance(instances, Mapping) else []
-        result: list[Any] = []
-        for row in rows if isinstance(rows, list) else []:
-            if not isinstance(row, Mapping):
-                result.append(None); continue
-            if depth == len(chain) - 1:
-                result.append(row.get("values", {}).get(path))
-            else:
-                result.append(collect(row.get("instances", {}), depth + 1))
-        return result
-
-    return collect(record.get("instances", {}), 0)
 
 
 def _nested_at(value: Any, occurrence: tuple[int, ...]) -> Any:
@@ -155,35 +133,6 @@ def _write_value(element: ET.Element, value: Any, node: Mapping[str, Any]) -> No
         element.set("value", "true" if bool(value) else "false")
     else:
         element.text = str(value)
-
-
-def _prepare_identifier_assignment(
-    name: str, target: Mapping[str, Any], value: Any, site: Mapping[str, Any]
-) -> Any:
-    if _base_datatype(target.get("datatype")) != "II":
-        return value
-    root = identifier_root_for_target(name, target, site)
-    if root is None:
-        raise ValueError(f"CDA identifier target {name!r} has no fixed/configured root")
-    def one(item: Any) -> Any:
-        if item is None or (isinstance(item, Mapping) and item.get("nullFlavor")):
-            return item
-        if isinstance(item, Mapping):
-            result = dict(item); result.setdefault("root", root); return result
-        return {"root": root, "extension": str(item)}
-    return [one(item) for item in value] if isinstance(value, list) else one(value)
-
-
-def _combine(existing: Any, value: Any) -> Any:
-    if existing is None:
-        return value
-    if existing == value:
-        return existing
-    if isinstance(existing, list):
-        return existing + (value if isinstance(value, list) else [value])
-    if isinstance(value, list):
-        return [existing] + value
-    return [existing, value]
 
 
 def _active_target_locations(
@@ -459,34 +408,7 @@ def emit(
     document_version: int = 1,
 ) -> tuple[bytes, list[str]]:
     targets = cda.get("targets", {})
-    assignments: dict[str, Any] = {}
-    problems: list[str] = []
-
-    for path, selected in mapping.get("fields", {}).items():
-        if selected is None:
-            continue
-        value = _record_value(record, model, path)
-        if value is None or (isinstance(value, list) and not any(item is not None for item in value)):
-            continue
-        for rule in mapping_rules(selected):
-            name = str(rule["target"])
-            target = targets.get(name)
-            if not target or not target.get("renderable") or target.get("prohibited"):
-                problems.append(f"unknown, prohibited or non-renderable CDA target {name!r} for {path}")
-                continue
-            locations = target.get("locations", [])
-            if len(locations) != 1:
-                raise ValueError(
-                    f"CDA target {name!r} for {path} has {len(locations)} physical locations; "
-                    "resolve the ambiguity before rendering"
-                )
-            transformed = apply_transform(value, rule.get("transform"))
-            if transformed is OMIT or (isinstance(transformed, list) and not any(item is not None for item in transformed)):
-                continue
-            prepared = _prepare_identifier_assignment(name, target, transformed, site)
-            if name in assignments and assignments[name] != prepared:
-                raise ValueError(f"multiple model fields assign CDA target {name!r}; configure an explicit merge/repetition rule")
-            assignments[name] = prepared
+    assignments, problems = build_assignments(record, model, cda, mapping, site)
 
     variables = {"key": record.get("key"), "document_version": document_version}
     document_root = site.get("identifiers", {}).get("document_root")

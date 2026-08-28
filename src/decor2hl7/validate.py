@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import xml.etree.ElementTree as ET
 
 from .assertions import evaluate as evaluate_assertion
+from .bindings import covered_shared_claims, structure_rules, validate_structures
+from .data import mapping_locator
 from .retrieval.xml import local, parse_file
 from .semantics import direct_compatibility, transformed_compatibility, identifier_root_for_target, valid_oid
 from .transforms import mapping_rules, selected_targets, validate_transform
@@ -86,6 +88,10 @@ def check_config(
         for extra in sorted(mapped - fields):
             errors.append(f"{name}: unknown model field {extra}")
     targets = cda.get("targets", {})
+    structures_by_id = {
+        str(rule.get("id") or ""): rule
+        for rule in structure_rules(cda_mapping)
+    }
     claims: dict[str, list[str]] = defaultdict(list)
     for path, value in cda_mapping.get("fields", {}).items():
         field = model.get("fields", {}).get(path, {})
@@ -95,7 +101,13 @@ def check_config(
             if target is None:
                 errors.append(f"cda-mapping: {path} references unknown target {target_name}")
                 continue
-            claims[target_name].append(path)
+            if rule.get("mode") not in {None, "fallback"}:
+                errors.append(
+                    f"cda-mapping: {path} -> {target_name}: unknown assignment mode "
+                    f"{rule.get('mode')!r}"
+                )
+            if rule.get("mode") != "fallback":
+                claims[target_name].append(path)
             if target.get("prohibited") or not target.get("renderable"):
                 errors.append(f"cda-mapping: {path} references prohibited/non-renderable target {target_name}")
             locations = target.get("locations", [])
@@ -104,7 +116,19 @@ def check_config(
             transform = rule.get("transform")
             for reason in validate_transform(transform):
                 errors.append(f"cda-mapping: {path} -> {target_name}: {reason}")
-            compatible, reasons = transformed_compatibility(field, target, transform)
+            compatibility_field = field
+            structure_name = rule.get("structure")
+            structure = structures_by_id.get(str(structure_name or ""), {})
+            if structure.get("type") == "fan_out":
+                compatibility_field = dict(field)
+                chain = list(
+                    field.get("repeat_chain")
+                    or ([] if not field.get("repeat") else [field.get("repeat")])
+                )
+                compatibility_field["repeat_chain"] = chain + [f"fan_out:{structure_name}"]
+            compatible, reasons = transformed_compatibility(
+                compatibility_field, target, transform
+            )
             if not compatible:
                 wording = "not directly executable" if not transform else "not executable with configured transform"
                 errors.append(f"cda-mapping: {path} -> {target_name} is {wording}: " + "; ".join(reasons))
@@ -112,11 +136,22 @@ def check_config(
                 if not identifier_root_for_target(target_name, target, site):
                     errors.append(f"cda-mapping: {path} -> {target_name} is an II without a fixed/configured root")
     for target_name, paths in sorted(claims.items()):
-        if len(paths) > 1:
+        covered = covered_shared_claims(cda_mapping).get(target_name, set())
+        if len(paths) > 1 and covered != set(paths):
             errors.append(f"cda-mapping: target {target_name} is assigned by multiple model fields without an explicit rule: " + ", ".join(sorted(paths)))
     for path, value in csv_mapping.get("fields", {}).items():
-        if value is not None and (not isinstance(value, str) or ":" not in value):
-            errors.append(f"csv-mapping: {path} must be SOURCE:COLUMN or null")
+        if value is not None and mapping_locator(value) is None:
+            errors.append(f"csv-mapping: {path} must be SOURCE:COLUMN, a locator object, or null")
+        locator = mapping_locator(value)
+        if locator is not None:
+            parse_as = locator.get("parse_as")
+            if parse_as and parse_as not in {
+                "string", "text", "identifier", "datetime", "date", "boolean",
+                "code", "quantity", "decimal", "integer", "count", "ordinal", "duration",
+            }:
+                errors.append(f"csv-mapping: {path} has unknown parse_as {parse_as!r}")
+            for reason in validate_transform(locator.get("transform")):
+                errors.append(f"csv-mapping: {path}: {reason}")
     if codes_mapping is not None:
         for path in sorted(set(codes_mapping.get("fields", {})) - fields):
             errors.append(f"codes-mapping: unknown model field {path}")
@@ -131,6 +166,7 @@ def check_config(
                     errors.append(f"codes-mapping: {path} maps {raw!r} to unknown canonical value {value!r}")
     if site is not None:
         errors.extend(check_site(site, cda))
+    errors.extend(validate_structures(model, cda, cda_mapping))
     return errors
 
 

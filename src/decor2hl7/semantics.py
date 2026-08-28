@@ -62,7 +62,7 @@ def type_match(model_type: str, cda_type: str | None) -> bool:
 def payload_match(model_type: str, target: Mapping[str, Any]) -> bool:
     leaf = str(target.get("path") or "").rsplit("/", 1)[-1].replace("cda:", "hl7:")
     if model_type in {"quantity", "decimal", "integer", "ordinal", "code", "duration"}:
-        return leaf in {"hl7:value", "hl7:originalText"}
+        return leaf in {"hl7:value", "hl7:originalText", "hl7:sequenceNumber"}
     if model_type == "text":
         return leaf in {"hl7:value", "hl7:originalText", "hl7:text"}
     if model_type == "boolean":

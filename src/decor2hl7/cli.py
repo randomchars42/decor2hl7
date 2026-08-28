@@ -312,8 +312,8 @@ def _site_scaffold(root: Path, release: Mapping[str, Any], transaction: Mapping[
             "source_note": (
                 "Source file names are relative to the external input root. "
                 "For 1:n sources set cardinality to 1:n. Optional primary: "
-                "{column, true_values, false_value} moves one flagged row first "
-                "and demotes duplicate flags."
+                "{column, true_values, required} moves one flagged row first; "
+                "missing required or duplicate flags are input errors."
             ),
         },
         "cda": {
