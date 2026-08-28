@@ -353,6 +353,89 @@ class CoreTests(unittest.TestCase):
             ],
         )
 
+    def test_cda_guide_merges_xml_context_and_explains_candidates(self) -> None:
+        def element(name: str, children: list[dict] | None = None, **values: object) -> dict:
+            return {
+                "kind": "element", "name": name, "attributes": [],
+                "children": children or [], "fixed": {}, "targets": [], **values,
+            }
+
+        low = element("hl7:low", datatype="TS", targets=["Encounter.low"])
+        high = element("hl7:high", datatype="TS", targets=["Encounter.high"])
+        effective = element("hl7:effectiveTime", [low, high])
+        encounter = element(
+            "hl7:encompassingEncounter", [effective],
+            fixed={"classCode": "ENC", "moodCode": "EVN"},
+        )
+        header = element("hl7:componentOf", [encounter], fixed={"typeCode": "COMP"})
+        candidate = element("hl7:code", datatype="CE", targets=["Referral.code"])
+        section = element("hl7:section", [candidate], target="Referral.section")
+        document = element("hl7:ClinicalDocument", [header, element("hl7:component", [section])])
+        cda_model = {
+            "document_template": {
+                "id": "doc", "effective_date": "2026-01-01",
+                "name": "Document", "display_name": "Test document",
+            },
+            "document": [document],
+            "targets": {
+                "Encounter.low": {
+                    "locations": ["0.0.0.0.0"], "path": (
+                        "hl7:componentOf/hl7:encompassingEncounter/"
+                        "hl7:effectiveTime/hl7:low"
+                    ), "datatype": "TS", "kind": "element",
+                    "template_name": "Encounter", "template_id": "enc",
+                    "template_effective_date": "2026-01-01",
+                },
+                "Encounter.high": {
+                    "locations": ["0.0.0.0.1"], "path": (
+                        "hl7:componentOf/hl7:encompassingEncounter/"
+                        "hl7:effectiveTime/hl7:high"
+                    ), "datatype": "TS", "kind": "element",
+                    "template_name": "Encounter", "template_id": "enc",
+                    "template_effective_date": "2026-01-01",
+                },
+                "Referral.section": {
+                    "locations": ["0.1.0"], "path": "hl7:section",
+                    "template_name": "Referral", "template_display_name": "Referral",
+                },
+                "Referral.code": {
+                    "locations": ["0.1.0.0"], "path": "hl7:section/hl7:code",
+                    "datatype": "CE", "kind": "element", "description": "Referral code",
+                    "template_name": "Referral", "template_display_name": "Referral",
+                },
+            },
+        }
+        model = {
+            "order": ["case.start", "case.end", "case.referral"],
+            "groups": {"case": {"name": "Case"}},
+            "fields": {
+                "case.start": {"name": "Start"},
+                "case.end": {"name": "End"},
+                "case.referral": {"name": "Referral source"},
+            },
+        }
+        mapping_cfg = {"fields": {
+            "case.start": "Encounter.low", "case.end": "Encounter.high",
+            "case.referral": None,
+        }}
+        audit = {
+            "summary": {"field_coverage": {"NO": 1}},
+            "fields": {"case.referral": {"alternatives": [{
+                "target": "Referral.code", "datatype": "CE", "confidence": "STRONG",
+                "chain": ["SPEC", "TA"], "actionable": False,
+            }]}},
+        }
+        report = render_cda_mapping_markdown(model, cda_model, mapping_cfg, audit)
+        self.assertIn('<componentOf typeCode="COMP">', report)
+        self.assertIn('<encompassingEncounter classCode="ENC" moodCode="EVN">', report)
+        self.assertIn('<low value="{Encounter.low}"/>', report)
+        self.assertIn('<high value="{Encounter.high}"/>', report)
+        self.assertIn("**1** unresolved dataset datapoint(s)", report)
+        self.assertIn("Referral code", report)
+        self.assertIn("SPEC → TA", report)
+        self.assertIn("evidence only", report)
+        self.assertIn("None of these rows is directly selectable", report)
+
     def test_code_normalization_and_unmapped_code(self) -> None:
         field = {"type": "code", "values": {"rot": {"code": "R", "code_system": "1.2.3", "display_name": "rot"}}}
         site = {"null_flavor": {"unmapped_code": "OTH"}, "input": {}}
