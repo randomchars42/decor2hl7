@@ -129,6 +129,12 @@ Important rules retained from the prototype:
     fetch a CodeSystem as required only for intensional expansion.
 12. Fetch the representing template explicitly even if it appears in live
     project evidence.
+13. Treat valid dependency analysis XML as a complete cache hit even when its
+    optional source sidecar is absent; both selected transaction forms remain
+    mandatory.
+14. In `--offline` mode, perform closure discovery from cached files without any
+    HTTP attempt and record uncached references as retryable unavailable
+    dependencies.
 
 `manifest.json` answers “what is cached for this release?”; transaction
 `closure.json` answers “which cached resources belong to this transaction?” It
@@ -142,6 +148,11 @@ Every compiler artifact retains requested and resolved identity, dependency
 role, resolution provenance and all available source/analysis/expansion forms.
 A static identity mismatch is an error. Optional usable forms remain accessible
 even when another optional representation is unavailable.
+
+Dependency analysis forms determine cache/build availability. Dependency source
+forms add provenance and mapping evidence but are not synchronously backfilled
+when analysis is already cached. The selected transaction source/analysis pair
+is separately mandatory.
 
 The transaction source defines selected concepts, transaction cardinality
 overrides and direct terminology associations. The analysis form supplies

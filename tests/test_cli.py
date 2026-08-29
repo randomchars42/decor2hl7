@@ -135,6 +135,9 @@ class CliTests(unittest.TestCase):
         test = parser().parse_args(["test-cda-mapping", "--out", "/tmp/results"])
         self.assertEqual(test.out, "/tmp/results")
         self.assertTrue(hasattr(test, "cda_mapping"))
+        fetch = parser().parse_args(["fetch", "--offline"])
+        self.assertTrue(fetch.offline)
+        self.assertFalse(fetch.retry_missing)
 
     def test_propose_input_writes_only_csv_and_code_proposals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

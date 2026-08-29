@@ -423,6 +423,7 @@ def _fetch_direct(
     url: str,
     ipv4: bool,
     retry_missing: bool,
+    offline: bool = False,
     progress: Progress | None = None,
     label: str | None = None,
     identity: Mapping[str, str] | None = None,
@@ -448,6 +449,15 @@ def _fetch_direct(
         return target
     if old.get("status") == "missing" and not retry_missing:
         _emit(progress, f"fetch: {display}: known missing")
+        return None
+    if offline:
+        resources[key] = {
+            "status": "unavailable",
+            "url": old.get("url") or url,
+            "reason": "not cached; network disabled by --offline",
+            **({"identity": dict(identity)} if identity else {}),
+        }
+        _emit(progress, f"fetch: {display}: not cached (offline)")
         return None
     target.parent.mkdir(parents=True, exist_ok=True)
     _emit(progress, f"fetch: {display}: requesting")
@@ -500,6 +510,7 @@ def _fetch_openapi(
     api_base: str,
     ipv4: bool,
     retry_missing: bool,
+    offline: bool = False,
     progress: Progress | None = None,
 ) -> Path | None:
     """Cache and capability-check the server's OpenAPI description."""
@@ -521,6 +532,14 @@ def _fetch_openapi(
         _emit(progress, "fetch: API contract: known missing")
         return None
     url = openapi_url(api_base)
+    if payload is None and offline:
+        manifest["resources"][key] = {
+            "status": "unavailable",
+            "url": old.get("url") or url,
+            "reason": "not cached; network disabled by --offline",
+        }
+        _emit(progress, "fetch: API contract: not cached (offline)")
+        return None
     if payload is None:
         _emit(progress, "fetch: API contract: requesting")
         try:
@@ -559,6 +578,7 @@ def _fetch_want(
     language: str,
     ipv4: bool,
     retry_missing: bool,
+    offline: bool = False,
     request_budget: dict[str, int] | None = None,
     progress: Progress | None = None,
     save_manifest: Callable[[], None] | None = None,
@@ -590,8 +610,15 @@ def _fetch_want(
         payload = _existing_cache_payload(path, entry)
         return payload, dict(entry) if payload is not None else {}
 
-    cached_source, cached_source_entry = cached_representation("source")
-    if existing is not None and cached_source is not None:
+    cached_representations: dict[str, dict[str, Any]] = {}
+    cached_payloads: dict[str, bytes] = {}
+    for form in old_representations:
+        payload, entry = cached_representation(str(form))
+        if payload is not None:
+            cached_representations[str(form)] = entry
+            cached_payloads[str(form)] = payload
+    cached_source = cached_payloads.get("source")
+    if existing is not None:
         resolved_date = _resolved_effective_date(existing, resolved_want)
         requested_date = requested_want.get("effective_date") or ""
         # A static dependency must not accidentally adopt another revision that
@@ -599,16 +626,18 @@ def _fetch_want(
         # whatever revision the valid cached response actually contains.
         expected_date = resolved_want.get("effective_date") or ""
         if not expected_date or not resolved_date or resolved_date == expected_date:
-            manifest["resources"][key] = {
+            cache_entry = {
                 **old,
                 "status": "ok",
                 "file": relative,
+                "project": old.get("project") or resolved_want.get("project") or "",
+                "api_base": old.get("api_base") or resolved_want.get("api_base") or api_base,
                 "bytes": len(existing),
                 "sha256": _digest(existing),
                 "requested_effective_date": requested_date or "dynamic",
                 "resolved_effective_date": resolved_date or old.get("resolved_effective_date", ""),
                 "representations": {
-                    **dict(old_representations),
+                    **cached_representations,
                     "analysis": {
                         "status": "ok",
                         "file": relative,
@@ -616,17 +645,27 @@ def _fetch_want(
                         "bytes": len(existing),
                         "sha256": _digest(existing),
                     },
-                    "source": cached_source_entry,
                 },
                 "identity": _identity(
                     resolved_want,
-                    project=str(old.get("project") or ""),
+                    project=str(old.get("project") or resolved_want.get("project") or ""),
                     effective_date=resolved_date or str(old.get("resolved_effective_date") or ""),
                     api_base=str(old.get("api_base") or api_base),
                 ),
                 **({"source_hint": resolved_want["source_hint"]} if resolved_want.get("source_hint") else {}),
+                **(
+                    {"source_warning": "source representation unavailable"}
+                    if cached_source is None else {}
+                ),
             }
-            repaired = old.get("status") != "ok" or old.get("file") != relative
+            if cached_source is not None:
+                cache_entry.pop("source_warning", None)
+            manifest["resources"][key] = cache_entry
+            repaired = (
+                old.get("status") != "ok"
+                or old.get("file") != relative
+                or cached_source is None and not old.get("source_warning")
+            )
             suffix = " (manifest repaired)" if repaired else ""
             _emit(progress, f"fetch: {display}: cached{suffix}")
             if repaired and save_manifest is not None:
@@ -642,7 +681,7 @@ def _fetch_want(
 
     attempts: list[dict[str, Any]] = []
     saved_representations: dict[str, dict[str, Any]] = {
-        **({"source": cached_source_entry} if cached_source is not None else {}),
+        **cached_representations,
         **(
             {
                 "analysis": {
@@ -656,6 +695,28 @@ def _fetch_want(
             if existing is not None else {}
         ),
     }
+
+    if offline:
+        manifest["resources"][key] = {
+            "status": "unavailable",
+            "reason": "not cached; network disabled by --offline",
+            "project": old.get("project") or resolved_want.get("project") or "",
+            "api_base": old.get("api_base") or resolved_want.get("api_base") or api_base,
+            "requested_effective_date": requested_want.get("effective_date") or "dynamic",
+            "resolved_effective_date": old.get("resolved_effective_date") or "",
+            "representations": saved_representations,
+            "identity": _identity(
+                resolved_want,
+                project=str(old.get("project") or resolved_want.get("project") or ""),
+                effective_date=str(old.get("resolved_effective_date") or ""),
+                api_base=str(old.get("api_base") or api_base),
+            ),
+            **({"source_hint": resolved_want["source_hint"]} if resolved_want.get("source_hint") else {}),
+        }
+        if save_manifest is not None:
+            save_manifest()
+        _emit(progress, f"fetch: {display}: not cached (offline)")
+        return None
 
     def request(project: str, form: str, url: str) -> bytes | None:
         if request_budget is not None:
@@ -995,6 +1056,7 @@ def fetch_spec(
     language: str = "de-DE",
     ipv4: bool = True,
     retry_missing: bool = False,
+    offline: bool = False,
     max_requests: int = 1500,
     progress: Progress | None = None,
     api_base: str = DEFAULT_API_BASE,
@@ -1087,6 +1149,10 @@ def fetch_spec(
             key for key in current_keys
             if manifest.get("resources", {}).get(key, {}).get("status") == "missing"
         )
+        current_unavailable = sorted(
+            key for key in current_keys
+            if manifest.get("resources", {}).get(key, {}).get("status") == "unavailable"
+        )
         build_pending = pending_keys("build")
         evidence_pending = pending_keys("evidence")
         crawl_complete = complete
@@ -1137,6 +1203,7 @@ def fetch_spec(
                 "evidence": evidence_pending,
             },
             "missing": current_missing,
+            "unavailable": current_unavailable,
             "errors": current_errors + root_errors,
             "root_status": dict(root_status),
             "summary": {
@@ -1145,6 +1212,7 @@ def fetch_spec(
                     for key in current_keys
                 ) + int(root_status["project_config"] == "ok") + int(root_status["transaction"] == "ok"),
                 "missing": len(current_missing),
+                "unavailable": len(current_unavailable),
                 "error": len(current_errors) + len(root_errors),
             },
             "resources_considered": resources_considered,
@@ -1157,6 +1225,7 @@ def fetch_spec(
             "resources": len(manifest.get("resources", {})),
             "ok": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "ok"),
             "missing": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "missing"),
+            "unavailable": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "unavailable"),
             "error": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "error"),
         }
         write_json(manifest_path, manifest)
@@ -1166,7 +1235,7 @@ def fetch_spec(
     try:
         contract = _fetch_openapi(
             release_dir, manifest, api_base=api_base, ipv4=ipv4,
-            retry_missing=retry_missing, progress=progress,
+            retry_missing=retry_missing, offline=offline, progress=progress,
         )
         root_status["api_contract"] = "ok" if contract is not None else "error"
 
@@ -1174,7 +1243,7 @@ def fetch_spec(
             release_dir, manifest, key=f"project-config:{prefix}",
             relative_file="project.xml",
             url=project_url(prefix, base_url=api_base), ipv4=ipv4,
-            retry_missing=retry_missing, progress=progress,
+            retry_missing=retry_missing, offline=offline, progress=progress,
             label=f"project configuration {prefix}",
             identity={
                 "type": "project", "id": prefix, "effective_date": "live",
@@ -1190,7 +1259,7 @@ def fetch_spec(
                 prefix, language=language, mode="verbatim", base_url=api_base
             ),
             ipv4=ipv4,
-            retry_missing=retry_missing, progress=progress,
+            retry_missing=retry_missing, offline=offline, progress=progress,
             label=f"live evidence project {prefix}",
             identity={
                 "type": "project-evidence", "id": prefix,
@@ -1204,7 +1273,7 @@ def fetch_spec(
             release_dir, manifest, key="project-directory",
             relative_file="project-directory.xml",
             url=projects_url(base_url=api_base), ipv4=ipv4,
-            retry_missing=retry_missing, progress=progress,
+            retry_missing=retry_missing, offline=offline, progress=progress,
             label="global project directory",
             identity={
                 "type": "project-directory", "id": "project",
@@ -1225,7 +1294,7 @@ def fetch_spec(
             relative_file=str(
                 (transaction_dir / "transaction.source.xml").relative_to(release_dir)
             ),
-            url=source_url, ipv4=ipv4, retry_missing=retry_missing,
+            url=source_url, ipv4=ipv4, retry_missing=retry_missing, offline=offline,
             progress=progress,
             label=f"transaction source {transaction.get('key') or tx_id or '?'}",
             identity={
@@ -1240,7 +1309,8 @@ def fetch_spec(
             release_dir, manifest,
             key=f"transaction:{tx_id}@{tx_effective}",
             relative_file=str((transaction_dir / "transaction.xml").relative_to(release_dir)),
-            url=analysis_url, ipv4=ipv4, retry_missing=retry_missing, progress=progress,
+            url=analysis_url, ipv4=ipv4, retry_missing=retry_missing, offline=offline,
+            progress=progress,
             label=f"transaction {transaction.get('key') or tx_id or '?'}",
             identity={
                 "type": "transaction", "id": tx_id,
@@ -1337,7 +1407,7 @@ def fetch_spec(
                         path = _fetch_want(
                             release_dir, manifest, want, owners=owners,
                             repositories=repositories, language=language,
-                            ipv4=ipv4, retry_missing=retry_missing,
+                            ipv4=ipv4, retry_missing=retry_missing, offline=offline,
                             request_budget=request_budget, progress=progress,
                             save_manifest=save_manifest,
                             main_project=prefix, release=release_date,
@@ -1407,7 +1477,7 @@ def fetch_spec(
                     path = _fetch_want(
                         release_dir, manifest, want, owners=owners,
                         repositories=repositories, language=language,
-                        ipv4=ipv4, retry_missing=retry_missing,
+                        ipv4=ipv4, retry_missing=retry_missing, offline=offline,
                         request_budget=request_budget, progress=progress,
                         save_manifest=save_manifest,
                         main_project=prefix, release=release_date,
@@ -1459,6 +1529,7 @@ def fetch_spec(
             "fetch: complete: "
             f"{closure['summary']['ok']} ok/cached, "
             f"{closure['summary']['missing']} missing, "
+            f"{closure['summary']['unavailable']} unavailable, "
             f"{closure['summary']['error']} error(s), "
             f"{closure['recursive_http_requests']} recursive HTTP request(s)",
         )

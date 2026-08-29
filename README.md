@@ -176,13 +176,17 @@ then recursively follows typed references to datasets, templates, value sets,
 code systems, and (where needed) individual concepts.
 
 The selected transaction and exact recursively resolved artifact revisions are
-build truth. For templates, value sets, and code systems, both a source form and
-an analysis form are retained. Template analysis uses the API's expanded tree
+build truth. When a new template, value set, or code system is retrieved, its
+available source and analysis forms are retained. Template analysis uses the
+API's expanded tree
 (`$extract?tree=expand`); intensional value sets also request `$expand` when
-available. Source files remain provenance/debugging material, while analysis
-files provide resolved definitions. The compiler receives both forms, uses the
-transaction source as selection truth, and cross-checks their identities. The
-global project directory is used to resolve the
+available. Analysis files provide the compiler-facing definitions and are
+sufficient for a dependency cache hit and build availability. Source sidecars
+remain optional provenance and mapping evidence; an ordinary rerun does not
+backfill a missing source sidecar when valid analysis XML is already cached.
+The selected transaction is stricter: its source and analysis forms are both
+required and their identities are cross-checked. The global project directory
+is used to resolve the
 owning project for OIDs when possible, avoiding repeated guessing and handling
 stale project metadata in historical links.
 
@@ -196,6 +200,15 @@ intensional expansion are build dependencies.
 HTTP 200 responses containing an empty `<return/>` are treated as not-found.
 Known terminal failures are recorded in `manifest.json` and skipped on later
 runs unless `--retry-missing` is given.
+
+`decor2hl7 fetch --offline` performs a cache-only closure pass and makes no HTTP
+requests. It is intended for resuming after an interrupted fetch while
+ART-DECOR is unavailable: valid files already under `spec/` repair their
+manifest entries and participate in closure discovery. Referenced artifacts
+that are not cached are recorded as temporarily `unavailable`, so `build` can
+report a degraded omission where allowed and a later ordinary `fetch` will try
+them again. The selected transaction source/analysis pair must already be
+cached; otherwise the offline fetch is not build-ready.
 
 The live main-project file is read directly for local history and associations,
 while external evidence is fetched only for concepts/templates already relevant

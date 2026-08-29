@@ -229,6 +229,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         language=language,
         ipv4=ipv4,
         retry_missing=args.retry_missing,
+        offline=args.offline,
         max_requests=args.max_requests,
         progress=_say,
         api_base=api_base,
@@ -238,7 +239,9 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     summary = closure.get("summary", {})
     _say(
         f"selected transaction fetch: {summary.get('ok', 0)} cached/ok, "
-        f"{summary.get('missing', 0)} missing, {summary.get('error', 0)} errors"
+        f"{summary.get('missing', 0)} missing, "
+        f"{summary.get('unavailable', 0)} unavailable, "
+        f"{summary.get('error', 0)} errors"
     )
     _say(
         f"transaction closure: {len(closure.get('build_resources', []))} build resources, "
@@ -1041,7 +1044,12 @@ def parser() -> argparse.ArgumentParser:
     q.set_defaults(func=cmd_set_transaction)
 
     q = sub.add_parser("fetch", help="fetch the selected transaction specification to closure")
-    q.add_argument("--retry-missing", action="store_true")
+    fetch_network = q.add_mutually_exclusive_group()
+    fetch_network.add_argument("--retry-missing", action="store_true")
+    fetch_network.add_argument(
+        "--offline", action="store_true",
+        help="use cached specification files only; make no HTTP requests",
+    )
     q.add_argument("--max-requests", type=int, default=1500)
     _add_network_override(q)
     q.set_defaults(func=cmd_fetch)

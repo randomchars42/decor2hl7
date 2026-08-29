@@ -653,6 +653,28 @@ class CoreTests(unittest.TestCase):
                 from decor2hl7.retrieval.fetch import closure_paths
                 closure_paths(release_dir, tx_dir)
 
+            # A cache-only rerun settles the pending closure without touching
+            # the unavailable server. Uncached dependencies remain explicit
+            # degraded inputs and can be retried by a later online fetch.
+            with patch(
+                "decor2hl7.retrieval.fetch.get",
+                side_effect=AssertionError("offline fetch attempted HTTP"),
+            ) as mocked:
+                result = fetch_spec(
+                    release_dir, tx_dir, prefix="aktin-",
+                    release=RELEASE,
+                    transaction={**TRANSACTION, "id": "t", "key": "tx"},
+                    offline=True, max_requests=20,
+                )
+            self.assertEqual(mocked.call_count, 0)
+            self.assertTrue(result["closure"]["crawl_complete"])
+            self.assertTrue(result["closure"]["build_ready"])
+            self.assertEqual(result["closure"]["recursive_http_requests"], 0)
+            self.assertIn(
+                "dataset:9.9.1@2020-01-01",
+                result["closure"]["unavailable"],
+            )
+
     def test_recursive_request_budget_counts_actual_http_attempts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = {"resources": {}}
@@ -1427,7 +1449,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual({item["id"] for item in refs if item["kind"] == "concept"}, {"old"})
         self.assertFalse(any(item["kind"] == "dataset" for item in refs))
 
-    def test_fetch_want_adopts_valid_existing_file_without_manifest_entry(self) -> None:
+    def test_fetch_want_adopts_cached_analysis_without_backfilling_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
             target = release_dir / "templates" / "1.2.3_2025-05-01.xml"
@@ -1452,8 +1474,11 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(entry["status"], "ok")
             self.assertEqual(entry["file"], "templates/1.2.3_2025-05-01.xml")
             self.assertTrue(entry["sha256"])
-            self.assertIn("source", entry["representations"])
-            self.assertEqual(mocked.call_count, 1)
+            self.assertNotIn("source", entry["representations"])
+            self.assertEqual(
+                entry["source_warning"], "source representation unavailable"
+            )
+            self.assertEqual(mocked.call_count, 0)
 
     def test_fetch_want_redownloads_checksum_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
