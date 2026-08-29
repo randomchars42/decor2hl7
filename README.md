@@ -481,4 +481,9 @@ state are removed before a newer/invalid state is processed, and unsent pending
 documents for records no longer present in the input are pruned. History rotation
 is based on the first entry timestamp, not file modification time.
 
-See `docs/architecture.md` for package boundaries and `docs/known-issues.md` for intentionally remaining work.
+See [`Project-decor2hl7.md`](Project-decor2hl7.md) for the project charter,
+[`docs/decisions.md`](docs/decisions.md) for durable semantic and architectural
+choices, [`docs/architecture.md`](docs/architecture.md) for current package
+boundaries, and [`docs/known-issues.md`](docs/known-issues.md) for intentionally
+remaining work. Dated source analyses are retained separately under
+[`docs/analyses/`](docs/analyses/README.md).
