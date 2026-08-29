@@ -1011,7 +1011,9 @@ class CoreTests(unittest.TestCase):
                 model, cda_model, mapping_cfg, {},
             )
 
-    def test_diagnosis_certainty_and_end_time_are_occurrence_aligned(self) -> None:
+    def test_explicit_diagnosis_fallback_is_occurrence_aligned(self) -> None:
+        # This verifies the generic, explicitly configured fallback mechanism.
+        # The compiler intentionally does not generate a Z-to-end-time rule.
         fields = {
             "diagnoses.certainty": {"type": "code", "repeat_chain": ["diagnoses"]},
             "diagnoses.end": {"type": "datetime", "repeat_chain": ["diagnoses"]},
