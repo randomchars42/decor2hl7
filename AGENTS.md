@@ -63,6 +63,18 @@ or replace an exact missing ART-DECOR artifact with another revision.
   crosswalks, clinical timestamps, or mapping choices without sufficient
   evidence and a reviewable rule.
 
+## Repository write authorization
+
+The repository owner has authorized coding agents working on this project to
+create and merge pull requests into `randomchars42/decor2hl7` without requesting
+case-by-case confirmation. This authorization remains in effect until the owner
+revokes it.
+
+Continue to use a pull request, review the exact diff, complete the checks below,
+and respect repository protections. This authorization does not permit bypassing
+failed checks, branch protection, permission failures, or an explicit request to
+leave a pull request unmerged.
+
 ## Finishing a change
 
 For every semantic or architectural change, update in the same pull request:

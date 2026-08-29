@@ -76,6 +76,13 @@ merged. Dynamic resolutions are frozen. `crawl_complete` and `build_ready` are
 independent states. Repository resolution uses explicit link/prefix, configured
 hints and cached ownership before OID inference and HTTP probing.
 
+A valid dependency analysis form is sufficient for cache/build availability;
+missing dependency source sidecars are optional evidence and are not backfilled
+by an ordinary rerun. The selected transaction still requires both forms. A
+cache-only fetch makes no HTTP attempts, reconstructs closure from valid local
+files, and records uncached references as unavailable so a later online fetch
+will retry them.
+
 Evidence: `docs/architecture.md`, `src/decor2hl7/retrieval/`.
 
 ## DEC-005 — Target-neutral model and target boundary

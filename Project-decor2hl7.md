@@ -277,6 +277,17 @@ An artifact may have several representations with different purposes:
 
 These forms are not blindly merged.
 
+For recursive dependencies, a valid analysis representation is sufficient for
+a cache hit and compiler availability. A missing source sidecar does not trigger
+synchronous backfilling during an ordinary fetch; it only reduces optional
+provenance or mapping evidence. The selected transaction remains a deliberate
+exception because its source form controls selection and its analysis form
+controls resolved definitions, so both are required.
+
+A cache-only fetch mode must make no network requests. It may reconstruct a
+completed closure from valid files already under `spec/`; uncached references
+remain explicitly unavailable and retryable by a later online fetch.
+
 Dynamic and exact request aliases that resolve to one artifact should point to one canonical stored artifact record.
 
 ### Resolution order
