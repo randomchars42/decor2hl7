@@ -1,6 +1,10 @@
-# Retrieval/compiler migration result
+# Retrieval/compiler migration result (historical)
 
 Date: 2026-08-27
+
+Status: completed implementation record. Current behaviour is described in
+[`../architecture.md`](../architecture.md); durable choices are indexed in
+[`../decisions.md`](../decisions.md).
 
 ## Result
 
