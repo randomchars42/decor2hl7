@@ -386,8 +386,10 @@ logical datapoints `Pupilsize_right.value` and `Pupilsize_left.value`.
 
 ```markdown
 Diagnosis certainty is mapped within each diagnosis occurrence. Code `A` also
-sets `negationInd=true`. Code `Z` supplies an unknown diagnosis end only as a
-fallback when no actual end value exists.
+sets `negationInd=true`. No diagnosis end is derived from code `Z`, because
+“Zustand nach” supplies no timepoint. The required diagnosis onset that the
+selected transaction does not provide uses the reviewed target default
+`nullFlavor="UNK"`; it does not manufacture a date.
 ```
 
 ## Mapping reasoning
