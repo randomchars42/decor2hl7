@@ -23,6 +23,8 @@ automatic dataset identity inheritance.
 
 ## Diagnosis time and certainty
 
+Decision record: `DEC-008` in [`decisions.md`](decisions.md).
+
 The compiler no longer derives a diagnosis end from certainty `Z`. The
 transaction web view contains no diagnosis timepoint, and `Zustand nach` is a
 certainty/clinical-status qualifier rather than a timestamp. V/A/Z/G therefore
@@ -42,6 +44,8 @@ mapping-wide `nullFlavor="NI"` completion default. Optional unmapped leaves are
 omitted, and mandatory/non-nullable targets remain validation errors.
 
 ## Secondary ICD-10 diagnoses (concept 29508)
+
+Decision record: `DEC-009` in [`decisions.md`](decisions.md).
 
 The current transaction represents `ICD-10 Sekundärdiagnose` as concept 29508
 with cardinality `0..1`, while historical/project material has also exposed it
