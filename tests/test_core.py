@@ -1109,6 +1109,20 @@ class CoreTests(unittest.TestCase):
             "shared section container with occurrence-aligned entries",
             rules["for-each-therapy"]["evidence"],
         )
+        self.assertEqual(
+            mapping_compiler._for_each_rules(
+                {
+                    "groups": {"rows": {"repeating": True}},
+                    "fields": {"rows.value": {"repeat_chain": ["rows"]}},
+                },
+                {"targets": {"Observation.value": {
+                    "renderable": True, "locations": ["0.0"],
+                    "repeatable": True, "repeat_ancestors": ["0"],
+                }}},
+                {"rows.value": "Observation.value"},
+            ),
+            {},
+        )
 
     def test_for_each_can_bind_source_repeat_below_shared_cda_container(self) -> None:
         code_target = {
