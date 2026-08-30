@@ -1071,7 +1071,7 @@ def _cda_mapping_analysis(
             details[path]["selected"] = None
             details[path]["runtime_blocked"] = f"SHARED({len(paths)})"
 
-    structures.update(_for_each_rules(model, cda, fields))
+    structures.update(_for_each_rules(model, cda, fields, group_results))
 
     proposal = {
         "version": 5,
