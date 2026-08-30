@@ -265,9 +265,10 @@ analysis.
   logical labels are not promoted into formal codes.
 - `build-diagnostics.json` / `build-diagnostics.md`: unavailable dependency
   identities, their expected build effect, and unresolved CDA template links.
-- `cda.json`: reachable CDA template constraints, compiled document structure,
-  formal ART-DECOR assertions, and readable writable target names such as
-  `PatientIdentifier.id` or `ersteinschatzung.effectiveTime`.
+- `cda.json`: reachable CDA template constraints plus datatype-derived legal
+  structure, the automatic datatype inventory, explicit writable value
+  representations, formal ART-DECOR assertions, and readable target names such
+  as `PatientIdentifier.id` or `ersteinschatzung.effectiveTime`.
 - `cda-assertions.sch`: ISO Schematron containing the original effective
   ART-DECOR `<assert>` expressions and `<let>` variables.
 - `mapping-audit.json`: structured candidates, evidence, confidence, conflicts
@@ -285,10 +286,13 @@ branch.
 
 Fixed element text and fixed attributes are compiled as template constraints,
 not writable targets. `conformance="NP"` nodes are prohibited and never emitted.
-A writable target must resolve to exactly one physical document location;
-ambiguous targets stay in `cda.json` for evidence/provenance but cannot be
-selected for rendering. `decor2hl7 check` verifies these compiled-model
-invariants before transformation.
+A writable target must have a datatype-defined value representation and resolve
+to exactly one unfixed physical document location. Complex datatypes such as
+`AD` and `PN` expose their legal child value targets even when the ART-DECOR
+template declares only the parent datatype. ART-DECOR constraints refine those
+generic parts. Ambiguous or structural-only targets stay in `cda.json` for
+evidence/provenance but cannot be selected for scalar rendering. `decor2hl7
+check` verifies these compiled-model invariants before transformation.
 
 ## Mapping configuration
 

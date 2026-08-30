@@ -18,6 +18,7 @@ from ..semantics import (
     transformed_compatibility, type_match,
 )
 from ..transforms import cda_target_name, mapping_rules
+from ..cda.model import ValueRepresentationKind
 from .structural import (
     coalesce_rule as _coalesce_rule,
     fanout_rule as _fanout_rule,
@@ -172,7 +173,10 @@ def _implementation_candidates(
             if tid and str(target.get("template_id") or "") != tid:
                 continue
             target_path = _xpath_shape(str(target.get("path") or ""))
-            if target_path != relative and not full.endswith("/" + target_path):
+            if (
+                target_path not in {relative, full}
+                and not full.endswith("/" + target_path)
+            ):
                 continue
             shifted = bool(effective and str(target.get("template_effective_date") or "") != effective)
             matches.append((name, target, shifted))
@@ -619,6 +623,33 @@ def _deduplicate(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def _unresolved_reason(
+    candidates: Iterable[Mapping[str, Any]],
+    context: Mapping[str, Any] | None,
+) -> str:
+    rows = list(candidates)
+    nodes = [row.get("node", {}) for row in rows]
+    warnings = [
+        str(warning)
+        for row in rows
+        for warning in row.get("warnings", [])
+    ]
+    if any(len(node.get("locations", [])) != 1 for node in nodes):
+        return "ambiguous_value_target"
+    if any("incompatible" in warning or warning.startswith("datatype ") for warning in warnings):
+        return "incompatible_value_type"
+    contextual = context.get("node", {}) if isinstance(context, Mapping) else {}
+    if contextual and not contextual.get("writable"):
+        return (
+            "datatype_component_available"
+            if contextual.get("datatype") and contextual.get("has_children")
+            else "structural_only"
+        )
+    if nodes and all(not node.get("writable") for node in nodes):
+        return "structural_only"
+    return "no_semantic_evidence"
+
+
 
 def _words(value: str) -> set[str]:
     parts = re.findall(r"[A-Za-zÄÖÜäöüß]+", value or "")
@@ -745,10 +776,10 @@ def _semantic_transform_candidates(
         for tid, locator_confidence in template_ids:
             numeric = [
                 (name, target) for name, target in targets.items()
-                if target.get("renderable") and len(target.get("locations", [])) == 1
+                if target.get("writable") and len(target.get("locations", [])) == 1
                 and str(target.get("template_id") or "") == tid
-                and str(target.get("path") or "").endswith("/hl7:value")
-                and str(target.get("datatype") or "").upper().split(".", 1)[0] in {"PQ", "INT", "REAL"}
+                and target.get("value_representation", {}).get("kind")
+                == ValueRepresentationKind.QUANTITY.value
             ]
             if len(numeric) != 1:
                 continue
@@ -991,6 +1022,10 @@ def _cda_mapping_analysis(
     for path in model_fields:
         if details[path]["primary"] is None:
             details[path]["context"] = _context(path, model, group_results)
+            details[path]["unresolved_reason"] = _unresolved_reason(
+                details[path].get("alternatives", []),
+                details[path].get("context"),
+            )
 
     all_details: dict[str, dict[str, Any]] = {**group_results, **details}
     all_nodes: dict[str, Mapping[str, Any]] = {**groups, **model_fields}
@@ -1531,7 +1566,7 @@ def cda_mapping_audit(
 def cda_mapping_proposal(
     model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: Iterable[Path]
 ) -> tuple[dict[str, Any], str]:
-    """Backward-compatible proposal API returning the user-facing report."""
+    """Return the editable proposal and user-facing report."""
     proposal, report, _ = cda_mapping_reports(model, cda, xml_paths)
     return proposal, report
 

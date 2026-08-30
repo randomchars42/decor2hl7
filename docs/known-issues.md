@@ -134,6 +134,13 @@ If a future source format has no stable occurrence identifier for independent
 nested streams, the ambiguity must be resolved in source configuration; the
 runtime will not invent an association by zipping rows.
 
+HL7 datatype expansion (`DEC-013`) does not replace these occurrence rules. It
+can expose legal value components below the active medication template, but it
+does not establish which repeated dataset medication owns which CDA entry. The
+reviewed medication `for_each` and pupil-side `fan_out` therefore remain in the
+generated mapping unless later specification evidence provides an equivalent
+explicit occurrence binding.
+
 ## CDA narrative
 
 The structural CDA renderer is generic. Section-specific human-readable

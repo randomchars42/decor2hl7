@@ -27,10 +27,11 @@ is not necessarily an accepted clinical policy.
 | DEC-010 | Missing-artifact tolerance | accepted | verified |
 | DEC-011 | Mapping evidence and documentation | accepted | verified |
 | DEC-012 | External artifact supplements and waivers | open | partial |
+| DEC-013 | Compiled HL7 V3 datatype model | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
-**Decision:** accepted  
+**Decision:** accepted
 **Implementation:** verified
 
 `randomchars42/decor2hl7` on `main` is authoritative for implementation, tests
@@ -41,7 +42,7 @@ Evidence: `Project-decor2hl7.md`, repository history.
 
 ## DEC-002 — Three workflows and workspace ownership
 
-**Decision:** accepted  
+**Decision:** accepted
 **Implementation:** verified
 
 Specification/target mapping, site/input configuration and runtime operation are
@@ -54,7 +55,7 @@ Evidence: `README.md`, `Project-decor2hl7.md`, `src/decor2hl7/workspace.py`,
 
 ## DEC-003 — Transaction and terminology authority
 
-**Decision:** accepted  
+**Decision:** accepted
 **Implementation:** verified
 
 The exact selected transaction controls selection, cardinality and direct formal
@@ -68,7 +69,7 @@ Evidence: `docs/analyses/2026-08-26-authority-and-artifact-audit.md`,
 
 ## DEC-004 — Artifact identity, forms and readiness
 
-**Decision:** accepted  
+**Decision:** accepted
 **Implementation:** verified
 
 Artifact identity includes type, OID, effective date and repository context.
@@ -247,6 +248,39 @@ Evidence: `docs/analyses/2026-08-30-external-artifact-phase-1.md`,
 `docs/analyses/2026-08-30-medication-mapping-plan.md`,
 `src/decor2hl7/retrieval/sources.py`,
 `src/decor2hl7/retrieval/fetch.py`, `tests/test_external_sources.py`.
+
+## DEC-013 — Compiled HL7 V3 datatype model
+
+**Decision:** accepted
+**Implementation:** verified
+
+CDA compilation combines the fully resolved ART-DECOR constraint tree with a
+deterministic HL7 V3 datatype catalogue before mapping begins. The catalogue is
+compiler knowledge derived from HL7 Version 3 Data Types Release 2 and CDA R2;
+it is package-local and requires no build-time network access. The effective
+template produces its datatype inventory automatically. Every declared type is
+classified as a datatype, constrained alias, structural model type, or explicit
+unsupported error.
+
+The compiled target model distinguishes structural nodes from writable value
+targets. Every writable target carries a compiled value representation (element
+text, XML attribute, identifier, timestamp, quantity, coded value or boolean)
+and logical input types. Mapping consumes that metadata instead of path-name
+leaf heuristics; rendering consumes it instead of interpreting datatype names a
+second time. ART-DECOR constraints override generic datatype cardinality,
+conformance, fixed values and datatype refinements. Optional legal datatype
+parts are instantiated only when assigned, required, fixed or needed as an
+ancestor.
+
+CDA-specific compilation, datatype modelling and rendering live in
+`decor2hl7.cda`. Generated `cda.json`, mappings and documentation are rebuilt;
+no compatibility adapter for the former generated representation is retained.
+Structural occurrence rules from `DEC-007`, including medication `for_each` and
+pupil-side `fan_out`, remain authoritative because datatype expansion supplies
+legal XML value structure, not source/target occurrence semantics.
+
+Evidence: `src/decor2hl7/cda/`, `src/decor2hl7/semantics.py`,
+`tests/test_cda_datatypes.py`, `tests/test_core.py`.
 
 ## Maintenance rule
 

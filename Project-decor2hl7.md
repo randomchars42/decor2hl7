@@ -351,6 +351,12 @@ A target implementation compiles the selected HL7 output specification into a fo
 
 The current CDA target compiles exact reachable templates, recursive `SPEC` refinement, `INCLUDE` / `CONTAINS`, fixed constraints, vocabulary, and assertions.
 
+It also expands the HL7 V3 datatypes declared by that effective template from a
+deterministic compiler catalogue. ART-DECOR constraints refine the generic
+datatype structure. Structural CDA nodes and explicit writable value targets
+remain distinct; mapping and rendering consume each target's compiled value
+representation instead of guessing from XML path names or datatype names.
+
 It distinguishes:
 
 - **physical CDA targets** — actual writable constraints in the compiled template;

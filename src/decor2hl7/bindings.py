@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from .data import field_value
 from .semantics import identifier_root_for_target
+from .cda.model import ValueRepresentationKind
 from .transforms import (
     OMIT,
     apply_transform,
@@ -151,7 +152,7 @@ def validate_target_defaults(
         resolved[physical] = (name, flavor)
         if target.get("kind") != "element":
             errors.append(f"{prefix} cannot apply nullFlavor to an attribute")
-        if target.get("prohibited") or not target.get("renderable"):
+        if target.get("prohibited") or not target.get("writable"):
             errors.append(f"{prefix} references a prohibited/non-renderable target")
         if len(target.get("locations", [])) != 1:
             errors.append(
@@ -172,10 +173,6 @@ def validate_target_defaults(
     return errors
 
 
-def _base_datatype(value: Any) -> str:
-    return str(value or "").upper().split(".", 1)[0]
-
-
 def _physical_target_name(
     cda: Mapping[str, Any], rule: Mapping[str, Any]
 ) -> str:
@@ -194,7 +191,11 @@ def _physical_target_name(
 def _prepare_identifier(
     name: str, target: Mapping[str, Any], value: Any, site: Mapping[str, Any]
 ) -> Any:
-    if _base_datatype(target.get("datatype")) != "II":
+    representation = target.get("value_representation", {})
+    if (
+        not isinstance(representation, Mapping)
+        or representation.get("kind") != ValueRepresentationKind.IDENTIFIER.value
+    ):
         return value
     root = identifier_root_for_target(name, target, site)
     if root is None:
@@ -425,7 +426,7 @@ def build_assignments(
             logical_name = str(rule["target"])
             name = _physical_target_name(cda, rule)
             target = targets.get(name)
-            if not target or not target.get("renderable") or target.get("prohibited"):
+            if not target or not target.get("writable") or target.get("prohibited"):
                 problems.append(
                     f"unknown, prohibited or non-renderable CDA target {name!r} "
                     f"for {path} via logical datapoint {logical_name!r}"
@@ -577,7 +578,7 @@ def validate_structures(
                 if path not in fields:
                     errors.append(f"{prefix} references unknown source field {path!r}")
             target = targets.get(target_name)
-            if not target or not target.get("renderable") or len(target.get("locations", [])) != 1:
+            if not target or not target.get("writable") or len(target.get("locations", [])) != 1:
                 errors.append(f"{prefix} references non-renderable target {target_name!r}")
             elif target.get("repeat_ancestors"):
                 depths = {len(fields.get(path, {}).get("repeat_chain", [])) for path in sources}
@@ -611,11 +612,11 @@ def validate_structures(
             elif target:
                 for name in constants:
                     constant_target = targets.get(str(name))
-                    if not constant_target or not constant_target.get("renderable"):
+                    if not constant_target or not constant_target.get("writable"):
                         errors.append(f"{prefix} references non-renderable constant target {name!r}")
                     elif constant_target.get("repeat_ancestors") != target.get("repeat_ancestors"):
                         errors.append(f"{prefix} constant target {name!r} is in a different occurrence")
-        if not target or not target.get("renderable") or len(target.get("locations", [])) != 1:
+        if not target or not target.get("writable") or len(target.get("locations", [])) != 1:
             errors.append(f"{prefix} references non-renderable target {target_name!r}")
         elif len(depths) == 1 and len(target.get("repeat_ancestors", [])) != next(iter(depths)) + 1:
             errors.append(f"{prefix} must add exactly one target occurrence level")

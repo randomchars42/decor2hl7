@@ -16,7 +16,8 @@ from typing import Any, Mapping
 
 from .compile.mapping import code_mapping_defaults
 from .data import field_value, ingest
-from .semantics import accepted_values, base_datatype
+from .semantics import accepted_values
+from .cda.model import ValueRepresentationKind
 from .workspace import load_json, write_json
 
 
@@ -119,8 +120,13 @@ def _mapping_roots(
     for name in names:
         target = cda.get("targets", {}).get(name, {})
         fixed = target.get("fixed", {})
-        if base_datatype(target.get("datatype")) == "II" and not (
+        representation = target.get("value_representation", {})
+        if (
+            isinstance(representation, Mapping)
+            and representation.get("kind") == ValueRepresentationKind.IDENTIFIER.value
+            and not (
             isinstance(fixed, Mapping) and fixed.get("root")
+            )
         ):
             roots[name] = "1.2.276.0.76.999.1"
     return roots

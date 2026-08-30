@@ -10,13 +10,13 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Any, Mapping
 
-from .assertions import validate_contexts
-from .bindings import (
+from ..assertions import validate_contexts
+from ..bindings import (
     build_assignments,
     required_unmapped_null_flavor,
     target_default_values,
 )
-from .semantics import base_datatype
+from .model import ValueRepresentationKind
 
 HL7 = "urn:hl7-org:v3"
 XSI = "http://www.w3.org/2001/XMLSchema-instance"
@@ -30,14 +30,6 @@ def _qname(name: str) -> str:
     if name.startswith("xml:"):
         return f"{{http://www.w3.org/XML/1998/namespace}}{name.split(':', 1)[1]}"
     return name
-
-
-def _leaf(name: str) -> str:
-    return name.split(":", 1)[-1].split("[", 1)[0]
-
-
-def _base_datatype(value: Any) -> str:
-    return base_datatype(value)
 
 
 def _cda_timestamp(value: str) -> str:
@@ -95,48 +87,62 @@ def _subtree_has_assignment(
         for child in node.get("children", [])
     )
 
-def _set_xsi_type(element: ET.Element, node: Mapping[str, Any]) -> None:
-    if _leaf(str(node.get("name") or "")) != "value":
-        return
-    datatype = _base_datatype(node.get("datatype"))
-    if datatype and datatype not in {"ANY"}:
-        element.set(f"{{{XSI}}}type", datatype)
+def _set_xsi_type(element: ET.Element, representation: Mapping[str, Any]) -> None:
+    xsi_type = representation.get("xsi_type")
+    if xsi_type:
+        element.set(f"{{{XSI}}}type", str(xsi_type))
 
 
-def _write_value(element: ET.Element, value: Any, node: Mapping[str, Any]) -> None:
+def _write_value(
+    element: ET.Element,
+    value: Any,
+    target: Mapping[str, Any],
+    node: Mapping[str, Any],
+) -> None:
+    representation = target.get("value_representation")
+    if not isinstance(representation, Mapping) or not representation.get("kind"):
+        raise ValueError(
+            f"CDA value target {target.get('path') or node.get('name')} has no compiled value representation"
+        )
     if isinstance(value, Mapping) and value.get("nullFlavor"):
         element.set("nullFlavor", str(value["nullFlavor"]))
         return
-    if isinstance(value, Mapping):
-        if value.get("code") is not None:
-            _set_xsi_type(element, node)
-            element.set("code", str(value["code"]))
-            if value.get("codeSystem"):
-                element.set("codeSystem", str(value["codeSystem"]))
-            if value.get("displayName"):
-                element.set("displayName", str(value["displayName"]))
-            return
-        for key, item in value.items():
-            if item is not None and key not in {"canonical", "raw"}:
-                element.set(str(key), str(item))
-        return
-
-    datatype = _base_datatype(node.get("datatype"))
-    _set_xsi_type(element, node)
-    if datatype == "II":
-        element.set("extension", str(value))
-    elif datatype in {"TS", "IVL_TS"}:
-        element.set("value", _cda_timestamp(str(value)))
-    elif datatype in {"PQ", "REAL", "INT"}:
-        element.set("value", str(value))
-        if node.get("unit"):
-            element.set("unit", str(node["unit"]))
-    elif datatype in {"CD", "CE", "CV", "CS", "CO", "SC"}:
-        element.set("code", str(value))
-    elif datatype == "BL":
-        element.set("value", "true" if bool(value) else "false")
-    else:
+    kind = ValueRepresentationKind(str(representation["kind"]))
+    _set_xsi_type(element, representation)
+    if kind == ValueRepresentationKind.ELEMENT_TEXT:
         element.text = str(value)
+        return
+    if kind in {
+        ValueRepresentationKind.ATTRIBUTE,
+        ValueRepresentationKind.TIMESTAMP,
+        ValueRepresentationKind.BOOLEAN,
+    }:
+        attribute = str(representation.get("attribute") or "value")
+        rendered = (
+            _cda_timestamp(str(value))
+            if kind == ValueRepresentationKind.TIMESTAMP else
+            "true" if kind == ValueRepresentationKind.BOOLEAN and bool(value) else
+            "false" if kind == ValueRepresentationKind.BOOLEAN else str(value)
+        )
+        element.set(attribute, rendered)
+        return
+    attributes = [str(item) for item in representation.get("attributes", [])]
+    scalar_attribute = str(
+        representation.get("scalar_attribute") or representation.get("attribute") or ""
+    )
+    if isinstance(value, Mapping):
+        for key in attributes:
+            item = value.get(key)
+            if item is not None:
+                element.set(key, str(item))
+    elif scalar_attribute:
+        element.set(scalar_attribute, str(value))
+    else:
+        raise ValueError(
+            f"compiled representation {kind.value!r} cannot write a scalar value"
+        )
+    if kind == ValueRepresentationKind.QUANTITY and node.get("unit"):
+        element.set("unit", str(node["unit"]))
 
 
 def _active_target_locations(
@@ -202,32 +208,9 @@ def _repeat_count(
             prefix = occurrence[:depth]
             count = max(count, _nested_count(value, prefix))
             continue
-        # Compatibility for hand-compiled/older cda.json fixtures that predate
-        # repeat_ancestors: a list-valued assignment below this repeating node
-        # determines its occurrence count.
-        if not ancestors:
-            raw_locations = list(target.get("locations", []))
-            for raw in raw_locations:
-                try:
-                    target_location = tuple(int(part) for part in str(raw).split("."))
-                except ValueError:
-                    continue
-                if target_location and target_location[-1] >= 100000:
-                    target_location = target_location[:-1]
-                if target_location[:len(location)] == location:
-                    count = max(count, _nested_count(value, occurrence))
-                    break
     if isinstance(maximum, int):
         count = min(count, maximum)
     return count
-
-def _values_at_node(node: Mapping[str, Any], assignments: Mapping[str, Any]) -> list[Any]:
-    values: list[Any] = []
-    for name in node.get("targets", []):
-        if name in assignments:
-            values.append(assignments[name])
-    return values
-
 
 def _value_for_node(node: Mapping[str, Any], assignments: Mapping[str, Any]) -> tuple[Any, str | None]:
     for name in node.get("targets", []):
@@ -375,7 +358,16 @@ def _render_node_once(
         if value is None and attr.get("optional") is False:
             raise ValueError(f"required CDA attribute @{name} on {node.get('name')} has no fixed or assigned value")
         if value is not None:
-            if _base_datatype(attr.get("datatype")) == "BL" or name == "negationInd":
+            representation = None
+            if target_name is not None:
+                representation = cda.get("targets", {}).get(target_name, {}).get(
+                    "value_representation"
+                )
+            if (
+                isinstance(representation, Mapping)
+                and representation.get("kind") == ValueRepresentationKind.XML_ATTRIBUTE.value
+                and "boolean" in representation.get("logical_types", [])
+            ):
                 value = "true" if bool(value) else "false"
             element.set(_qname(name), str(value))
 
@@ -391,16 +383,36 @@ def _render_node_once(
         None,
     )
     if assigned is not None:
-        _write_value(element, assigned, node)
+        target = cda.get("targets", {}).get(str(target_name), {})
+        _write_value(element, assigned, target, node)
     elif node.get("codes"):
         codes = node.get("codes") or []
         if len(codes) == 1:
-            _set_xsi_type(element, node)
-            element.set("code", str(codes[0].get("code")))
-            if codes[0].get("code_system"):
-                element.set("codeSystem", str(codes[0]["code_system"]))
+            target = next(
+                (
+                    cda.get("targets", {}).get(str(name), {})
+                    for name in node.get("targets", [])
+                    if cda.get("targets", {}).get(str(name), {}).get("value_representation")
+                ),
+                {},
+            )
+            _write_value(
+                element,
+                {
+                    "code": codes[0].get("code"),
+                    "codeSystem": codes[0].get("code_system"),
+                },
+                target,
+                node,
+            )
     elif default is not None:
-        _write_value(element, default, node)
+        default_name = next(
+            (str(name) for name in node.get("targets", []) if str(name) in target_defaults),
+            "",
+        )
+        _write_value(
+            element, default, cda.get("targets", {}).get(default_name, {}), node
+        )
 
     child_count = 0
     for index, child in enumerate(node.get("children", [])):

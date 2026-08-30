@@ -285,6 +285,10 @@ class CliTests(unittest.TestCase):
                 "targets": {
                     "Document.note": {
                         "renderable": True, "prohibited": False, "locations": ["0.0"],
+                        "writable": True, "logical_types": ["text"],
+                        "value_representation": {
+                            "kind": "element_text", "logical_types": ["text"],
+                        },
                         "datatype": "ST", "path": "hl7:ClinicalDocument/hl7:text",
                         "repeat_ancestors": [],
                     }

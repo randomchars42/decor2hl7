@@ -13,4 +13,6 @@ Current focused implementation plans:
 - [`2026-08-30-medication-mapping-plan.md`](2026-08-30-medication-mapping-plan.md)
   records the medication gap plan and the completed IHE Medicine Entry artifact
   check.
-
+- [`2026-08-30-cda-datatype-expansion.md`](2026-08-30-cda-datatype-expansion.md)
+  records the current-template datatype inventory, the rewrite boundary and why
+  medication/pupil occurrence rules remain.
