@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 
 from .assertions import evaluate as evaluate_assertion
 from .bindings import (
+    for_each_target_positions,
     covered_shared_claims,
     structure_rules,
     validate_structures,
@@ -188,6 +189,12 @@ def check_config(
             compatible, reasons = transformed_compatibility(
                 compatibility_field, target, transform
             )
+            if for_each_target_positions(field, target, cda, cda_mapping) is not None:
+                reasons = [
+                    reason for reason in reasons
+                    if not reason.startswith("dataset has ")
+                ]
+                compatible = not reasons
             if not compatible:
                 wording = "not directly executable" if not transform else "not executable with configured transform"
                 errors.append(f"cda-mapping: {path} -> {target_name} is {wording}: " + "; ".join(reasons))
