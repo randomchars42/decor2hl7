@@ -49,6 +49,7 @@ from .resolution import (
     write_artifact_owners as _write_artifact_owners,
 )
 from ..workspace import load_json, write_json
+from ..cda.core import CORE_FILES, CORE_RAW_BASE, CORE_REVISION
 
 
 class RequestBudgetExceeded(RuntimeError):
@@ -1307,6 +1308,7 @@ def fetch_spec(
     progress: Progress | None = None,
     api_base: str = DEFAULT_API_BASE,
     source_hints: Mapping[str, Mapping[str, str]] | None = None,
+    cda_core: bool = False,
 ) -> dict[str, Any]:
     """Fetch the selected transaction and recursively close its dependencies.
 
@@ -1351,6 +1353,7 @@ def fetch_spec(
     phase = "roots"
     root_errors: list[str] = []
     root_status = {
+        "cda_core": "pending" if cda_core else "not-requested",
         "api_contract": "pending",
         "project_config": "pending",
         "transaction": "pending",
@@ -1423,6 +1426,8 @@ def fetch_spec(
             readiness_errors.append("selected transaction analysis form is unavailable")
         if root_status["transaction_source"] != "ok":
             readiness_errors.append("selected transaction source form is unavailable")
+        if cda_core and root_status["cda_core"] != "ok":
+            readiness_errors.append("pinned CDA core definition set is unavailable")
         degradation_warnings = [
             f"dependency unavailable: {key}" for key in required_failures
         ]
@@ -1493,6 +1498,25 @@ def fetch_spec(
         return closure
 
     try:
+        if cda_core:
+            core_ok = True
+            for filename, source_path in CORE_FILES.items():
+                path = _fetch_direct(
+                    release_dir, manifest,
+                    key=f"cda-core:{filename}@{CORE_REVISION}",
+                    relative_file=f"cda-core/{filename}",
+                    url=CORE_RAW_BASE + source_path, ipv4=ipv4,
+                    retry_missing=retry_missing, offline=offline, progress=progress,
+                    label=f"pinned CDA core {filename}",
+                    identity={
+                        "type": "cda-core", "id": filename,
+                        "effective_date": CORE_REVISION, "project": "HL7/CDA-core-2.0",
+                        "api_base": "https://github.com/HL7/CDA-core-2.0",
+                    },
+                )
+                core_ok = core_ok and path is not None
+            root_status["cda_core"] = "ok" if core_ok else "missing"
+
         contract = _fetch_openapi(
             release_dir, manifest, api_base=api_base, ipv4=ipv4,
             retry_missing=retry_missing, offline=offline, progress=progress,

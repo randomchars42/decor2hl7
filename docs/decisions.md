@@ -28,6 +28,7 @@ is not necessarily an accepted clinical policy.
 | DEC-011 | Mapping evidence and documentation | accepted | verified |
 | DEC-012 | External artifact supplements and waivers | open | partial |
 | DEC-013 | Compiled HL7 V3 datatype model | accepted | verified |
+| DEC-014 | Pinned CDA/RIM structural model expansion | accepted | implemented |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -281,6 +282,24 @@ legal XML value structure, not source/target occurrence semantics.
 
 Evidence: `src/decor2hl7/cda/`, `src/decor2hl7/semantics.py`,
 `tests/test_cda_datatypes.py`, `tests/test_core.py`.
+
+## DEC-014 — Pinned CDA/RIM structural model expansion
+
+**Decision:** accepted
+**Implementation:** implemented
+
+`fetch` caches the official HL7 CDA R2 normative XSD definition set pinned to
+commit `e922fc35586fd2629f0c8a021080bca9ab424e18`. CDA compilation indexes XSD
+definitions by name, follows extension inheritance, resolves structural element
+names procedurally, overlays ART-DECOR constraints, and then runs datatype/value
+representation expansion. Generated nodes retain `cda-rim`, `datatype`, or
+combined template provenance. Mapping and rendering contain no per-class rules.
+
+Medication `for_each` and pupil-side `fan_out` remain under DEC-007 because the
+model describes legal XML structure, not occurrence ownership or laterality.
+
+Evidence: `src/decor2hl7/cda/core.py`, `src/decor2hl7/cda/compile.py`,
+`tests/test_cda_datatypes.py`.
 
 ## Maintenance rule
 
