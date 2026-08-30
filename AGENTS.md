@@ -46,6 +46,29 @@ If sources disagree, identify the conflict explicitly. Do not merge different
 artifact revisions, infer clinical semantics from generic runtime capability,
 or replace an exact missing ART-DECOR artifact with another revision.
 
+## Demo workspace evidence
+
+The GitHub repository `randomchars42/decor2hl7-test-workspace` contains a
+complete demo workspace for the currently selected release and transaction. It
+includes the current generated state of:
+
+- `spec/<release>/` from `decor2hl7 fetch`;
+- `model/<release>/<transaction>/` from `decor2hl7 build`;
+- `mapping/<release>/<transaction>/` from
+  `decor2hl7 init-cda-mapping`;
+- `site/<release>/` and `site/<release>/<transaction>/` from
+  `decor2hl7 init-site-config`, together with the input proposal on which that
+  site configuration is based; and
+- `config/sources.json` where the demo needs repository-hint overrides.
+
+Use that workspace as the first concrete evidence source for questions about
+the selected templates, mappings, concepts, target locations and generated
+proposals—for example, why a dataset concept is not mapped. Check the exact
+release and transaction recorded there before drawing conclusions. The demo is
+generated evidence, not policy: resolve conflicts in favor of this repository's
+`main` branch, decision register and source code, and implement fixes here
+rather than editing generated demo outputs directly.
+
 ## Working rules
 
 - Preserve the three ownership boundaries: portable target mappings belong to
