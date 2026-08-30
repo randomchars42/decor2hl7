@@ -99,11 +99,21 @@ Phase 1 supports package-local `builtin` supplements and evidence-backed
   Medication Entry and no independent template body was located. The waiver is
   intentionally not an `ok` artifact and the build remains degraded.
 
-The Medicine Entry template `1.3.6.1.4.1.19376.1.9.1.3.1` and exact AKTIN/DIVI
-CodeSystem `1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00` remain unresolved.
-A fragment must not be promoted to a complete structural or formal terminology
-dependency. Future `download`, `fhir`, `mediawiki`, or licensed local-file modes
-must be added only for a concrete required artifact and reviewed separately.
+The exact IHE Medicine Entry analysis artifact
+`1.3.6.1.4.1.19376.1.9.1.3.1@2019-08-27T16:13:43` is resolved by the existing
+`ch-pharm-` source hint and is sufficient for cache/build availability under
+`DEC-004`; its optional source sidecar remains unavailable. It is not an
+external-artifact blocker and must not be duplicated as a builtin. In the
+selected AKTIN document its 49 named constraints are registry evidence only:
+none has a CDA location or is renderable. The effective medication branch uses
+`UV Medication Information (simple)` instead, so forcing the IHE constraints
+onto that branch would invent a template relationship.
+
+The exact AKTIN/DIVI CodeSystem
+`1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00` remains unresolved. A fragment
+must not be promoted to a complete formal terminology dependency. Future
+`download`, `fhir`, `mediawiki`, or licensed local-file modes must be added only
+for a concrete required artifact and reviewed separately.
 
 ## Repetition identifiers
 
