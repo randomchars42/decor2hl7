@@ -382,7 +382,7 @@ class CoreTests(unittest.TestCase):
                 "fields": {"referral": field},
             }
             target = compile_cda([project], model)
-            target_name = "Referral.act.participant.participantRole.code"
+            target_name = "Referral.code"
             self.assertTrue(target["targets"][target_name]["has_children"])
             self.assertEqual(
                 direct_compatibility(field, target["targets"][target_name]),
