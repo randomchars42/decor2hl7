@@ -1050,6 +1050,172 @@ class CoreTests(unittest.TestCase):
         )
         self.assertEqual(coalesced[1]["policy"], "equal_or_error")
 
+    def test_compiler_infers_shared_section_entry_occurrences(self) -> None:
+        model = {
+            "groups": {
+                "therapy": {
+                    "parent": None, "repeating": True, "min": 0, "max": None,
+                },
+                "therapy.medication": {
+                    "parent": "therapy", "repeating": False, "min": 0, "max": 1,
+                },
+            },
+            "fields": {
+                "therapy.medication.code": {
+                    "type": "code", "repeat_chain": ["therapy"],
+                },
+            },
+        }
+        cda_model = {"targets": {
+            "MedicationSection.section": {
+                "path": "hl7:section", "renderable": True,
+                "locations": ["0.0"], "repeatable": True,
+                "repeat_ancestors": [], "min": 0, "max": None,
+            },
+            "MedicationSection.entry": {
+                "path": "hl7:section/hl7:entry", "renderable": True,
+                "locations": ["0.0.0"], "repeatable": True,
+                "repeat_ancestors": ["0.0"], "min": 0, "max": None,
+            },
+            "MedicationStatement.substanceAdministration": {
+                "path": "hl7:substanceAdministration", "renderable": True,
+                "locations": ["0.0.0.0"], "repeatable": True,
+                "repeat_ancestors": ["0.0", "0.0.0"], "min": 0, "max": 1,
+            },
+            "Medication.code": {
+                "path": "hl7:substanceAdministration/hl7:code",
+                "renderable": True, "locations": ["0.0.0.0.0"],
+                "repeatable": True,
+                "repeat_ancestors": ["0.0", "0.0.0"], "min": 0, "max": 1,
+            },
+        }}
+        group_results = {
+            "therapy": {
+                "primary": {"target": "MedicationSection.section"},
+            },
+            "therapy.medication": {
+                "primary": {"target": "MedicationStatement.substanceAdministration"},
+            },
+        }
+        rules = mapping_compiler._for_each_rules(
+            model, cda_model,
+            {"therapy.medication.code": "Medication.code"}, group_results,
+        )
+        self.assertEqual(
+            rules["for-each-therapy"]["target_repeat"],
+            "MedicationSection.entry",
+        )
+        self.assertIn(
+            "shared section container with occurrence-aligned entries",
+            rules["for-each-therapy"]["evidence"],
+        )
+
+    def test_for_each_can_bind_source_repeat_below_shared_cda_container(self) -> None:
+        code_target = {
+            "kind": "element", "datatype": "CD",
+            "path": "hl7:substanceAdministration/hl7:code",
+            "renderable": True, "locations": ["0.0.0.0.0"],
+            "repeatable": True, "repeat_ancestors": ["0.0", "0.0.0"],
+            "min": 0, "max": 1, "fixed": {}, "value_sets": ["meds"],
+        }
+        compiled = {
+            "targets": {
+                "MedicationSection.entry": {
+                    "kind": "element", "path": "hl7:section/hl7:entry",
+                    "renderable": True, "locations": ["0.0.0"],
+                    "repeatable": True, "repeat_ancestors": ["0.0"],
+                    "min": 0, "max": None,
+                },
+                "Medication.code": code_target,
+            },
+            "document": [{
+                "kind": "element", "name": "hl7:ClinicalDocument",
+                "min": 1, "max": 1, "mandatory": True,
+                "attributes": [], "codes": [], "fixed": {}, "targets": [],
+                "children": [{
+                    "kind": "element", "name": "hl7:section",
+                    "min": 0, "max": None, "mandatory": False,
+                    "attributes": [], "codes": [], "fixed": {}, "targets": [],
+                    "children": [{
+                        "kind": "element", "name": "hl7:entry",
+                        "min": 0, "max": None, "mandatory": False,
+                        "attributes": [], "codes": [], "fixed": {},
+                        "targets": ["MedicationSection.entry"],
+                        "children": [{
+                            "kind": "element", "name": "hl7:substanceAdministration",
+                            "min": 0, "max": 1, "mandatory": False,
+                            "attributes": [], "codes": [], "fixed": {}, "targets": [],
+                            "children": [{
+                                "kind": "element", "name": "hl7:code", "datatype": "CD",
+                                "min": 0, "max": 1, "mandatory": False,
+                                "attributes": [], "codes": [], "fixed": {}, "children": [],
+                                "targets": ["Medication.code"], "target": "Medication.code",
+                            }],
+                        }],
+                    }],
+                }],
+            }],
+        }
+        model = {
+            "groups": {"therapy": {"repeating": True}},
+            "fields": {
+                "therapy.medication.code": {
+                    "type": "code", "repeat_chain": ["therapy"],
+                    "value_sets": ["meds"],
+                },
+            },
+        }
+        mapping_cfg = {
+            "fields": {"therapy.medication.code": "Medication.code"},
+            "structures": {"for-each-therapy": {
+                "type": "for_each", "source_group": "therapy",
+                "target_repeat": "MedicationSection.entry",
+            }},
+        }
+        record = {
+            "key": "P1", "values": {},
+            "instances": {"therapy": [
+                {"values": {"therapy.medication.code": {
+                    "code": "A", "codeSystem": "1.2.3",
+                }}},
+                {"values": {"therapy.medication.code": {
+                    "code": "B", "codeSystem": "1.2.3",
+                }}},
+            ]},
+        }
+        assignments, problems = build_assignments(
+            record, model, compiled, mapping_cfg, {}
+        )
+        self.assertEqual(
+            [[value["code"] for value in assignments["Medication.code"][0]]],
+            [["A", "B"]],
+        )
+        self.assertFalse(problems)
+        self.assertEqual(
+            validate.check_config(
+                model, compiled,
+                {"fields": {"therapy.medication.code": None}},
+                mapping_cfg,
+            ),
+            [],
+        )
+        payload, problems = cda.emit(record, model, compiled, mapping_cfg, {})
+        root = ET.fromstring(payload)
+        sections = root.findall("{urn:hl7-org:v3}section")
+        self.assertEqual(len(sections), 1)
+        entries = sections[0].findall("{urn:hl7-org:v3}entry")
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(
+            [
+                entry.find(
+                    "{urn:hl7-org:v3}substanceAdministration/{urn:hl7-org:v3}code"
+                ).get("code")
+                for entry in entries
+            ],
+            ["A", "B"],
+        )
+        self.assertFalse(problems)
+
     def test_transaction_model_keeps_human_explanations_and_synonyms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transaction = Path(tmp) / "transaction.xml"
