@@ -18,6 +18,14 @@ class Want(TypedDict, total=False):
     api_base: str
     publication_url: str
     source_hint: str
+    mode: str
+    artifact: str
+    source_url: str
+    source_version: str
+    completeness: str
+    license: str
+    sha256: str
+    reason: str
     dataset: str
     dataset_effective_date: str
     role: str

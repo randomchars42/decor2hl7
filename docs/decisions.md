@@ -26,6 +26,7 @@ is not necessarily an accepted clinical policy.
 | DEC-009 | Secondary ICD-10 diagnoses | open | none |
 | DEC-010 | Missing-artifact tolerance | accepted | verified |
 | DEC-011 | Mapping evidence and documentation | accepted | verified |
+| DEC-012 | External artifact supplements and waivers | open | partial |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -190,6 +191,40 @@ classes. Configuration is edited in JSON, never in generated Markdown or XML.
 Evidence: `src/decor2hl7/compile/mapping.py`,
 `src/decor2hl7/compile/reports.py`,
 `docs/mapping-documentation-format.md`.
+
+## DEC-012 — External artifact supplements and waivers
+
+**Decision:** open — review required
+**Implementation:** partial — provisional phase 1
+
+ART-DECOR references may identify specifications or terminologies whose content
+is maintained only by an external publisher. A provisional phase-1 mechanism
+extends the exact-identity source catalog with two deliberately small modes:
+
+- `builtin` materializes a reviewed package-local XML supplement, verifies its
+  catalog checksum and requested identity, and records external provenance and
+  completeness in `manifest.json`;
+- `waiver` settles a known absence with cited reasoning but never claims an
+  artifact is successful. It remains visible as unavailable compiler input and
+  therefore keeps the affected build degraded.
+
+Both modes work during `fetch --offline`. `spec/` remains a generated cache:
+the durable recipe and small redistributable supplement live in the repository,
+while `fetch` materializes them under the selected release. A missing manifest
+is rebuilt from valid deterministic cache files or package supplements; cached
+bytes are not trusted when an existing manifest checksum, a builtin catalog
+checksum, requested identity or static revision contradicts them.
+
+The implementation does not establish a generic scraper or publisher API
+framework. It also does not decide that every current catalog entry is
+authoritative. The initial completeness claim for CodeSystem
+`1.2.276.0.76.5.401`, the provisional split-dose waiver, redistribution terms,
+and the rules by which an external artifact may satisfy a required dependency
+must be reviewed before this decision can be accepted.
+
+Evidence: `docs/analyses/2026-08-30-external-artifact-phase-1.md`,
+`src/decor2hl7/retrieval/sources.py`,
+`src/decor2hl7/retrieval/fetch.py`, `tests/test_external_sources.py`.
 
 ## Maintenance rule
 

@@ -1,11 +1,28 @@
 {
-  "version": 1,
+  "version": 2,
   "artifacts": {
+    "template:1.3.6.1.4.1.19376.1.5.3.1.4.9": {
+      "mode": "waiver",
+      "source_url": "https://www.ihe.net/uploadedFiles/Documents/Pharmacy/IHE_Pharmacy_Suppl_MTP_Rev1.3_TI_2017-10-11.pdf",
+      "source_version": "IHE Pharmacy MTP Rev. 1.3, 2017-10-11",
+      "completeness": "spec-only",
+      "license": "IHE publication; external-artifact handling requires review",
+      "reason": "Provisional: IHE documents this OID as the split-dose discriminator under Medication Entry, but no independent template body was found. Keep the missing SPEC visible until this waiver is reviewed."
+    },
     "template:1.3.6.1.4.1.19376.1.9.1.3.1": {
       "api_base": "https://art-decor.org/exist/apps/api",
       "project": "ch-pharm-",
       "effective_date": "2019-08-27T16:13:43",
       "publication_url": "https://ehealthsuisse.art-decor.org/cdachemed-html-20220705T094514/tmp-1.3.6.1.4.1.19376.1.9.1.3.1-2019-08-27T161343.html"
+    },
+    "codesystem:1.2.276.0.76.5.401": {
+      "mode": "builtin",
+      "artifact": "external/metastasis-location.xml",
+      "source_url": "https://wiki.hl7.de/index.php?title=cdapad%3AMetastasen-Section_%28Template%29",
+      "source_version": "HL7 Germany template table, reviewed 2026-08-29",
+      "completeness": "complete",
+      "license": "Public HL7 Germany wiki table; packaged status requires review",
+      "sha256": "84fa1ebe1e65d778cd0e7ab34ca327411112bb85e8d20d1163fa93a07655d5cf"
     }
   }
 }

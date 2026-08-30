@@ -84,6 +84,27 @@ with an older or newer revision. The representing document template itself is
 still mandatory. Dynamic references remain explicitly dynamic and resolve to a
 frozen identity recorded in the manifest.
 
+## Provisional external artifact catalog
+
+Decision record: open `DEC-012` in [`decisions.md`](decisions.md).
+
+Phase 1 supports package-local `builtin` supplements and evidence-backed
+`waiver` entries. This mechanism and its first two concrete uses require review:
+
+- CodeSystem `1.2.276.0.76.5.401` is packaged as a ten-code builtin derived
+  from the public HL7 Germany metastasis table and provisionally marked
+  complete. Its completeness and redistribution basis must be confirmed.
+- IHE split-dose template `1.3.6.1.4.1.19376.1.5.3.1.4.9` has a provisional
+  spec-only waiver because the IHE text presents it as a discriminator under
+  Medication Entry and no independent template body was located. The waiver is
+  intentionally not an `ok` artifact and the build remains degraded.
+
+The Medicine Entry template `1.3.6.1.4.1.19376.1.9.1.3.1` and exact AKTIN/DIVI
+CodeSystem `1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00` remain unresolved.
+A fragment must not be promoted to a complete structural or formal terminology
+dependency. Future `download`, `fhir`, `mediawiki`, or licensed local-file modes
+must be added only for a concrete required artifact and reviewed separately.
+
 ## Repetition identifiers
 
 Nested repetitions are supported when every independent occurrence level has an
