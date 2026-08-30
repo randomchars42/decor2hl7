@@ -360,6 +360,21 @@ The report must distinguish:
 - **evidence only** — useful context, not a writable choice;
 - **no candidate** — no usable target evidence was found.
 
+Where available, unresolved rows should also state the compiled cause:
+
+- `datatype_component_available` — evidence reaches a complex datatype and a
+  value-bearing component must be chosen;
+- `structural_only` — evidence reaches a container with no identified writable
+  descendant;
+- `ambiguous_value_target` — more than one physical value target remains;
+- `incompatible_value_type` — a writable target exists but its compiled logical
+  type is incompatible;
+- `no_semantic_evidence` — no usable target evidence was found.
+
+The expanded CDA documentation must identify whether a node comes from an
+ART-DECOR template, an HL7 datatype part, or both. Datatype-derived optional
+parts are legal targets, not instructions to emit empty XML elements.
+
 ## Rules and reasoning
 
 Describe rules through observable behavior:
@@ -456,4 +471,3 @@ behavior.
 - State conflict, fallback and missing-value behavior explicitly.
 - Do not maintain duplicate hand-written mapping facts in the Markdown
   generator.
-

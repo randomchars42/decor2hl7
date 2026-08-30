@@ -16,7 +16,8 @@ from decor2hl7.build.model import compile_model
 from decor2hl7.build.target import collect_templates, compile_cda, select_template
 from decor2hl7.compile import mapping as mapping_compiler
 from decor2hl7.compile.artifacts import compiler_inputs, write_build_diagnostics
-from decor2hl7.compile.cda import compile_cda_model
+from decor2hl7.cda.compile import compile_cda_model
+from decor2hl7.cda.datatypes import value_representation
 from decor2hl7.compile.reports import (
     _outline_datapoint_lines, render_cda_mapping_markdown,
 )
@@ -54,6 +55,36 @@ API_CONTRACT = json.dumps({
     "info": {"title": "Test API", "version": "3.10.2"},
     "paths": {path: {} for path in REQUIRED_PATHS},
 }).encode()
+
+
+def complete_fixture_value_targets(cda_model: dict[str, object]) -> None:
+    """Apply the compiler's value-target pass to intentionally small fixtures."""
+    locations: dict[str, dict[str, object]] = {}
+
+    def walk(nodes: list[dict[str, object]], prefix: tuple[int, ...] = ()) -> None:
+        for index, node in enumerate(nodes):
+            here = prefix + (index,)
+            locations[".".join(map(str, here))] = node
+            for attr_index, attribute in enumerate(node.get("attributes", [])):  # type: ignore[union-attr]
+                locations[".".join(map(str, here + (100000 + attr_index,)))] = attribute
+            walk(node.get("children", []), here)  # type: ignore[arg-type,union-attr]
+
+    walk(cda_model.get("document", []))  # type: ignore[arg-type,union-attr]
+    for target in cda_model.get("targets", {}).values():  # type: ignore[union-attr]
+        location = str((target.get("locations") or [""])[0])
+        physical = locations.get(location, {})
+        datatype = target.get("datatype") or physical.get("datatype")
+        target["datatype"] = datatype
+        path = str(target.get("path") or "")
+        attribute_name = path.rsplit("/@", 1)[-1] if "/@" in path else None
+        representation = value_representation(
+            str(datatype or ""), attribute_name=attribute_name
+        )
+        if representation is None:
+            continue
+        target["value_representation"] = representation.to_dict()
+        target["logical_types"] = list(representation.logical_types)
+        target["writable"] = bool(target.get("renderable"))
 
 
 def api_path(url: str) -> str:
@@ -396,10 +427,11 @@ class CoreTests(unittest.TestCase):
                 "path": "hl7:section/hl7:code",
                 "value_sets": ["section-vs"],
                 "codes": [{"code": "11293-8", "code_system": "2.16.840.1.113883.6.1"}],
+                "writable": False,
             }
             compatible, reasons = direct_compatibility(field, section_code)
             self.assertFalse(compatible)
-            self.assertIn("not a direct code payload", reasons[0])
+            self.assertIn("structural, fixed, prohibited, or ambiguous", reasons[0])
 
     def test_mapping_outline_keeps_names_and_wraps_long_targets(self) -> None:
         short = _outline_datapoint_lines(
@@ -530,6 +562,7 @@ class CoreTests(unittest.TestCase):
                     "max": 1, "mandatory": False, "attributes": [], "codes": [], "fixed": {}, "children": [],
                     "targets": ["Doc.value"], "target": "Doc.value"}]}],
         }
+        complete_fixture_value_targets(compiled)
         payload, problems = cda.emit({"key": "1", "values": {"foo": "hello"}}, {"fields": {"foo": {}}}, compiled,
                                      {"fields": {"foo": "Doc.value"}}, {"null_flavor": {"missing_required": "NI"}})
         root = ET.fromstring(payload)
@@ -892,6 +925,7 @@ class CoreTests(unittest.TestCase):
                 ],
             }},
         }
+        complete_fixture_value_targets(cda_model)
         assignments, problems = build_assignments(
             {"values": {"pupil.right": "3", "pupil.left": "2"}, "instances": {}},
             model, cda_model, mapping_cfg, {},
@@ -1197,6 +1231,7 @@ class CoreTests(unittest.TestCase):
                 }}},
             ]},
         }
+        complete_fixture_value_targets(compiled)
         assignments, problems = build_assignments(
             record, model, compiled, mapping_cfg, {}
         )
@@ -1343,7 +1378,9 @@ class CoreTests(unittest.TestCase):
                 "diagnoses.end": "2026-08-28T12:00:00+02:00",
             }},
         ]}}
-        assignments, _ = build_assignments(record, {"fields": fields}, {"targets": targets}, mapping_cfg, {})
+        cda_model: dict[str, object] = {"targets": targets}
+        complete_fixture_value_targets(cda_model)
+        assignments, _ = build_assignments(record, {"fields": fields}, cda_model, mapping_cfg, {})
         self.assertEqual([item["code"] for item in assignments["Diagnosis.certainty"]], ["A", "Z", "Z"])
         self.assertEqual(assignments["Diagnosis.negation"], [True, None, None])
         self.assertEqual(assignments["Diagnosis.high"][0], None)
@@ -1439,6 +1476,7 @@ class CoreTests(unittest.TestCase):
             }},
             {"values": {"diagnoses.value": "B"}},
         ]}}
+        complete_fixture_value_targets(compiled)
         errors = validate.check_config(
             model, compiled,
             {"fields": {
@@ -1612,8 +1650,14 @@ class CoreTests(unittest.TestCase):
     def test_renderer_keeps_optional_repeat_value_with_its_occurrence(self) -> None:
         compiled = {
             "targets": {
-                "Drug.value": {"renderable": True, "locations": ["0.0.0"]},
-                "Route.value": {"renderable": True, "locations": ["0.0.1"]},
+                "Drug.value": {
+                    "renderable": True, "locations": ["0.0.0"],
+                    "repeat_ancestors": ["0.0"],
+                },
+                "Route.value": {
+                    "renderable": True, "locations": ["0.0.1"],
+                    "repeat_ancestors": ["0.0"],
+                },
             },
             "document": [{
                 "kind": "element", "name": "hl7:ClinicalDocument", "min": 1, "max": 1,
@@ -1642,6 +1686,7 @@ class CoreTests(unittest.TestCase):
                 {"values": {"med.drug": "B", "med.route": "oral"}},
             ]},
         }
+        complete_fixture_value_targets(compiled)
         payload, problems = cda.emit(
             record, model, compiled,
             {"fields": {"med.drug": "Drug.value", "med.route": "Route.value"}},
@@ -2416,6 +2461,7 @@ class CoreTests(unittest.TestCase):
             }],
         }
         model = {"fields": {"patient": {"type": "identifier"}}}
+        complete_fixture_value_targets(compiled)
         mapping = {"fields": {"patient": "PatientIdentifier.id"}}
         record = {"key": "P1", "values": {"patient": "123"}, "instances": {}}
         with self.assertRaisesRegex(ValueError, "no fixed/configured root"):
@@ -2606,6 +2652,7 @@ class CoreTests(unittest.TestCase):
             }],
         }
         model = {"fields": {"iso": {"type": "code"}, "rank": {"type": "code"}}}
+        complete_fixture_value_targets(compiled)
         mapping_cfg = {"fields": {
             "iso": [
                 {"target": "Iso.negationInd", "transform": {"type": "enum", "map": {"unknown": False}}},

@@ -1,3 +1,3 @@
-"""Compatibility wrapper for :mod:`decor2hl7.compile.cda`."""
+"""Transitional build entry point for :mod:`decor2hl7.cda.compile`."""
 
-from ..compile.cda import *  # noqa: F401,F403
+from ..cda.compile import *  # noqa: F401,F403

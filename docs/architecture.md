@@ -17,7 +17,7 @@ XML.
                               spec/
                          ┌───────┴────────┐
                          ▼                ▼
-               compile/transaction.py compile/cda.py
+               compile/transaction.py cda/compile.py
                          │                │
                          ▼                ▼
                      model.json        cda.json
@@ -27,7 +27,7 @@ XML.
                                  │
                          proposals + reports
 
-external INPUT/ CSV → data.py → validate.py → cda.py → transport.py
+external INPUT/ CSV → data.py → validate.py → cda/render.py → transport.py
             │ structured 1:n occurrences      │
             └──────────── state.py ────────────┘
 ```
@@ -50,17 +50,20 @@ src/decor2hl7/
         artifacts.py    build-ready compiler inputs
         transaction.py source + analysis → model.json
         terminology.py logical/formal domain accessors
-        cda.py          exact templates/SPEC → cda.json
         mapping.py      decisions → audit + proposal
         structural.py   cardinality/terminology → structural rules
         reports.py      readable effective CDA + mapping guide
-    build/              compatibility imports for one release
+    cda/
+        datatypes.py    deterministic HL7 V3 datatype catalogue
+        model.py        typed node/value-target/value-representation IR
+        compile.py      templates + datatypes → effective cda.json
+        render.py       compiled value representations → CDA XML
+    build/              transitional imports for one release
     data.py             CSV joining/normalization
     bindings.py         occurrence fan-out/coalescing + CDA assignments
     validate.py         config + record/source-constraint validation
     transforms.py       small declarative mapping transforms
     assertions.py       ART-DECOR assert evaluator + Schematron output
-    cda.py              CDA rendering from cda.json
     testing.py          synthetic fixture generation + isolated mapping test
     state.py            fingerprint/change/sent history
     transport.py        receiver transport
@@ -196,6 +199,14 @@ repeatable `Pupilsize.value` constraint and carrying their side discriminator.
 The same logical datapoints are used by configuration, reports, validation and
 runtime assignment. ART-DECOR identifiers are provenance, not runtime addresses.
 
+Compilation first resolves template relationships and specialization, then
+derives the effective datatype inventory. `cda/datatypes.py` recursively expands
+complex types and constrained aliases; explicit ART-DECOR constraints overlay
+the legal datatype structure. Structural targets remain navigation, evidence
+and repeat anchors. Scalar mapping sees only targets whose compiled
+`value_representation` marks them writable. The renderer executes that
+representation and does not contain a second datatype dispatch table.
+
 `SPEC` is recursive constraint refinement, not tree concatenation. Matching
 child constraints inherit omitted parent properties and override explicit ones;
 parent-only prototype choices are dropped at every depth. A specialized
@@ -204,10 +215,12 @@ structural node with the same ART-DECOR element ID replaces an inherited
 emitted together.
 
 Fixed text/attributes are executable constraints rather than writable data
-targets. `NP` nodes are prohibited. Named targets are renderable only when they
-resolve to exactly one physical node; ambiguity is retained as provenance but is
-a configuration/runtime error when selected. `validate.verify_compiled_cda()`
-checks these invariants before transformation.
+targets. `NP` nodes are prohibited. A target is writable only when its datatype
+defines a value representation and it resolves to exactly one unfixed,
+non-prohibited physical node. Ambiguity and structural-only targets remain as
+provenance/evidence but are configuration/runtime errors when selected as scalar
+destinations. `validate.verify_compiled_cda()` checks these invariants before
+transformation.
 
 Only fetched build-template forms participate in compilation. Live project
 evidence cannot fill a missing dependency. Static flexibility is exact; dynamic

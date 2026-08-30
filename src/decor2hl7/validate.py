@@ -22,6 +22,7 @@ from .data import mapping_locator
 from .retrieval.xml import local, parse_file
 from .semantics import direct_compatibility, transformed_compatibility, identifier_root_for_target, valid_oid
 from .transforms import mapping_rules, validate_transform
+from .cda.model import ValueRepresentationKind
 
 
 def check_site(site: Mapping[str, Any], cda: Mapping[str, Any] | None = None) -> list[str]:
@@ -75,7 +76,7 @@ def check_site(site: Mapping[str, Any], cda: Mapping[str, Any] | None = None) ->
         elif isinstance(values, Mapping):
             for name in values:
                 target = targets.get(name)
-                if not target or not target.get("renderable") or len(target.get("locations", [])) != 1:
+                if not target or not target.get("writable") or len(target.get("locations", [])) != 1:
                     errors.append(f"site: cda.values references unknown/prohibited/ambiguous target {name!r}")
     return errors
 
@@ -165,7 +166,7 @@ def check_config(
                 )
             if rule.get("mode") != "fallback":
                 claims[cda_target_name].append(path)
-            if target.get("prohibited") or not target.get("renderable"):
+            if target.get("prohibited") or not target.get("writable"):
                 errors.append(
                     f"cda-mapping: {path} references prohibited/non-renderable "
                     f"target {cda_target_name}"
@@ -198,7 +199,12 @@ def check_config(
             if not compatible:
                 wording = "not directly executable" if not transform else "not executable with configured transform"
                 errors.append(f"cda-mapping: {path} -> {target_name} is {wording}: " + "; ".join(reasons))
-            if str(target.get("datatype") or "").upper().startswith("II") and site is not None:
+            representation = target.get("value_representation", {})
+            if (
+                isinstance(representation, Mapping)
+                and representation.get("kind") == ValueRepresentationKind.IDENTIFIER.value
+                and site is not None
+            ):
                 if not identifier_root_for_target(cda_target_name, target, site):
                     errors.append(f"cda-mapping: {path} -> {target_name} is an II without a fixed/configured root")
     for target_name, paths in sorted(claims.items()):
@@ -269,6 +275,12 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
             errors.append(f"CDA target {name} is a fixed attribute but marked renderable")
         if target.get("renderable") and len(target_locations) != 1:
             errors.append(f"CDA target {name} is renderable but has {len(target_locations)} physical locations")
+        if target.get("writable") and not target.get("value_representation"):
+            errors.append(f"CDA target {name} is writable without a compiled value representation")
+        if target.get("writable") and len(target_locations) != 1:
+            errors.append(f"CDA value target {name} has {len(target_locations)} physical locations")
+        if target.get("writable") and not target.get("logical_types"):
+            errors.append(f"CDA value target {name} has no compiled logical types")
     # Error-level ART-DECOR assertions must be executable by the built-in
     # validator.  Evaluate them against an empty context only to distinguish
     # supported syntax from unsupported syntax; True/False is irrelevant here.

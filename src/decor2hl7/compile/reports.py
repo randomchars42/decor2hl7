@@ -361,6 +361,27 @@ def _review_reason(
             "The dataset and CDA represent the same information differently; review "
             "the proposed declarative transform before enabling it."
         )
+    reason = str(detail.get("unresolved_reason") or "")
+    if reason == "ambiguous_value_target":
+        return (
+            "The evidence reaches more than one physical CDA value target; select "
+            "or refine the structural occurrence explicitly."
+        )
+    if reason == "incompatible_value_type":
+        return (
+            "The evidence reaches a writable CDA value target, but its compiled "
+            "logical value type is incompatible with the dataset value."
+        )
+    if reason == "datatype_component_available":
+        return (
+            "The evidence reaches a complex datatype container. Choose one of its "
+            "compiled value-bearing datatype components."
+        )
+    if reason == "structural_only":
+        return (
+            "The evidence identifies a CDA container, but not a writable "
+            "value-bearing descendant."
+        )
     if candidates and all(row.get("result") == "context only" for row in candidates):
         return (
             "The evidence reaches this CDA structure, but not a writable value-bearing "
@@ -924,11 +945,21 @@ def _constraint_xml(
     mapped = sorted({path for target in targets for path in mappings.get(target, [])})
     if mapped:
         element.append(_comment("Mapped dataset path(s): " + ", ".join(mapped)))
-    sources = node.get("sources", [])
+    sources = node.get("provenance") or node.get("sources", [])
     if isinstance(sources, list):
         for source in sources:
             if not isinstance(source, Mapping):
                 continue
+            source_kind = str(source.get("source") or "template")
+            if source_kind in {"datatype", "template + datatype"}:
+                datatype = str(source.get("datatype") or node.get("datatype") or "")
+                part = str(source.get("datatype_part") or node.get("name") or "")
+                element.append(_comment(
+                    f"HL7 datatype {datatype} part {part}"
+                    + (" refined by ART-DECOR" if source_kind == "template + datatype" else "")
+                ))
+                if source_kind == "datatype":
+                    continue
             template = str(source.get("template_id") or "")
             effective = str(source.get("template_effective_date") or "dynamic")
             element_id = str(source.get("element_id") or "")
@@ -982,6 +1013,7 @@ def write_readable_cda(
         f"- Effective elements: {stats.get('elements', 0)}",
         f"- Effective attributes: {stats.get('attributes', 0)}",
         f"- Named targets: {stats.get('targets', 0)}",
+        f"- Writable value targets: {stats.get('writable_value_targets', 0)}",
         f"- Executable dataset mappings: {summary.get('executable_fields', 0)}",
         "",
         "The companion XML is the effective compiled constraint tree. It retains",

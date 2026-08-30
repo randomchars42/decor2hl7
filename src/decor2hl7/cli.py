@@ -292,7 +292,7 @@ def _compiler_inputs(root: Path) -> dict[str, Any]:
 def cmd_build(args: argparse.Namespace) -> int:
     from .compile.artifacts import write_build_diagnostics
     from .compile.mapping import write_code_mapping
-    from .compile.cda import write_cda_model
+    from .cda.compile import write_cda_model
     from .compile.mapping import write_mapping_model
     from .compile.transaction import write_transaction_model
 

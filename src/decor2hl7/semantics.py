@@ -9,19 +9,9 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
-DATATYPE_FAMILIES: dict[str, set[str]] = {
-    "quantity": {"PQ", "REAL", "INT"},
-    "decimal": {"REAL", "PQ"},
-    "integer": {"INT", "REAL", "PQ", "INT.POS"},
-    "ordinal": {"INT", "REAL", "PQ", "CO", "CE", "CV", "CD"},
-    "datetime": {"TS", "IVL_TS"},
-    "date": {"TS", "IVL_TS"},
-    "duration": {"PQ"},
-    "identifier": {"II"},
-    "code": {"CD", "CE", "CV", "CS", "CO", "SC"},
-    "boolean": {"BL"},
-    "text": {"ST", "ED", "SD.TEXT", "SC"},
-}
+from .cda.datatypes import base_datatype as _catalogue_base_datatype
+from .cda.datatypes import value_representation
+from .cda.model import ValueRepresentationKind
 
 
 def accepted_values(field: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -46,32 +36,24 @@ def logical_values(field: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def base_datatype(value: Any) -> str:
-    return str(value or "").upper().split(".", 1)[0]
+    if not value:
+        return ""
+    return _catalogue_base_datatype(str(value))
 
 
 def type_match(model_type: str, cda_type: str | None) -> bool:
-    if not cda_type:
-        return False
-    value = str(cda_type).upper()
-    return any(
-        value == family or value.startswith(family + ".")
-        for family in DATATYPE_FAMILIES.get(str(model_type), set())
-    )
+    representation = value_representation(cda_type)
+    return bool(representation and model_type in representation.logical_types)
+
+
+def target_type_match(model_type: str, target: Mapping[str, Any]) -> bool:
+    return model_type in {
+        str(item) for item in target.get("logical_types", [])
+    }
 
 
 def payload_match(model_type: str, target: Mapping[str, Any]) -> bool:
-    leaf = str(target.get("path") or "").rsplit("/", 1)[-1].replace("cda:", "hl7:")
-    if model_type in {"quantity", "decimal", "integer", "ordinal", "code", "duration"}:
-        return leaf in {"hl7:value", "hl7:originalText", "hl7:sequenceNumber"}
-    if model_type == "text":
-        return leaf in {"hl7:value", "hl7:originalText", "hl7:text"}
-    if model_type == "boolean":
-        return leaf in {"hl7:value", "@negationInd"}
-    if model_type in {"datetime", "date"}:
-        return leaf in {"hl7:effectiveTime", "hl7:time", "hl7:low", "hl7:high", "hl7:value"}
-    if model_type == "identifier":
-        return leaf.startswith("hl7:id")
-    return False
+    return bool(target.get("writable")) and target_type_match(model_type, target)
 
 
 def _value_set_ids(value: Any) -> set[str]:
@@ -93,8 +75,11 @@ def _shared_coded_element_payload(
     """Allow a code element only when formal terminology proves the payload."""
     if str(field.get("type") or "") != "code":
         return False
-    leaf = str(target.get("path") or "").rsplit("/", 1)[-1].replace("cda:", "hl7:")
-    if leaf != "hl7:code" or base_datatype(target.get("datatype")) not in DATATYPE_FAMILIES["code"]:
+    representation = target.get("value_representation", {})
+    if (
+        not isinstance(representation, Mapping)
+        or representation.get("kind") != ValueRepresentationKind.CODED.value
+    ):
         return False
     if target.get("fixed") or target.get("fixed_text") or target.get("codes"):
         return False
@@ -139,14 +124,17 @@ def direct_compatibility(
             isinstance(info, Mapping) and info.get("code")
             for info in accepted_values(field).values()
         )
-        target_base = base_datatype(target.get("datatype"))
-        allowed = {"CD", "CE", "CV", "CO", "SC"} if coded else {"INT", "REAL", "PQ"}
-        if target_base not in allowed:
+        representation = target.get("value_representation", {})
+        kind = representation.get("kind") if isinstance(representation, Mapping) else None
+        allowed = {ValueRepresentationKind.CODED.value} if coded else {ValueRepresentationKind.QUANTITY.value}
+        if kind not in allowed:
             return False, [
                 f"ordinal representation ({'coded' if coded else 'numeric'}) is incompatible with CDA {target.get('datatype') or 'container'}"
             ]
-    elif not type_match(model_type, target.get("datatype")):
+    elif not target_type_match(model_type, target):
         return False, [f"datatype {model_type} is incompatible with CDA {target.get('datatype') or 'container'}"]
+    if not target.get("writable"):
+        return False, [f"CDA target {target.get('path') or '?'} is structural, fixed, prohibited, or ambiguous"]
     if (
         not explicit_path
         and not payload_match(model_type, target)
@@ -196,30 +184,32 @@ def transformed_compatibility(
         return direct_compatibility(field, target)
     reasons: list[str] = []
     kind = str(transform.get("type") or "")
-    base = base_datatype(target.get("datatype"))
-    path = str(target.get("path") or "")
+    representation = target.get("value_representation", {})
+    kind_value = representation.get("kind") if isinstance(representation, Mapping) else None
+    logical_types = set(target.get("logical_types", []))
+    attribute = representation.get("attribute") if isinstance(representation, Mapping) else None
     if kind == "enum":
         table = transform.get("map", {})
         values = [item for item in table.values() if item is not None] if isinstance(table, Mapping) else []
-        if path.endswith("/@nullFlavor"):
+        if attribute == "nullFlavor":
             if not all(isinstance(item, str) for item in values):
                 reasons.append("nullFlavor enum transform must produce strings")
-        elif base == "BL" or path.endswith("/@negationInd"):
+        elif kind_value == ValueRepresentationKind.XML_ATTRIBUTE.value and "boolean" in logical_types:
             if not all(isinstance(item, bool) for item in values):
                 reasons.append("boolean CDA target requires boolean enum outputs")
-        elif base in {"INT", "REAL", "PQ"}:
+        elif kind_value == ValueRepresentationKind.QUANTITY.value:
             if not all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in values):
                 reasons.append(f"numeric CDA {target.get('datatype')} requires numeric enum outputs")
-        elif base in {"CD", "CE", "CV", "CS", "CO", "SC"}:
+        elif kind_value == ValueRepresentationKind.CODED.value:
             if not all(isinstance(item, (str, Mapping)) for item in values):
                 reasons.append("coded CDA target requires string/coded enum outputs")
         elif not values:
             reasons.append("enum transform has no non-null output")
     elif kind == "ordinal":
-        if base not in {"INT", "REAL", "PQ"}:
+        if kind_value != ValueRepresentationKind.QUANTITY.value:
             reasons.append(f"ordinal transform requires numeric CDA target, got {target.get('datatype') or 'container'}")
     elif kind == "not":
-        if str(field.get("type") or "") != "boolean" or base != "BL":
+        if str(field.get("type") or "") != "boolean" or "boolean" not in logical_types:
             reasons.append("not transform requires boolean dataset and CDA values")
     else:
         reasons.append(f"unknown transform type {kind!r}")
