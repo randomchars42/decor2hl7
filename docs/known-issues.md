@@ -123,6 +123,13 @@ be joined across CSV sources without positional guessing. A single one-file
 one-level `1:n` source may still use source order as its occurrence identity for
 backward convenience.
 
+An explicit `for_each` may bind a source repeat to a deeper CDA repeat node
+while leaving an enclosing repeat-capable CDA node as one shared container. The
+selected medication structure uses this to produce one medication section with
+one entry per `medikamentose_therapie` occurrence. This alignment does not
+license a join between independent source repetitions; those still require
+occurrence keys.
+
 If a future source format has no stable occurrence identifier for independent
 nested streams, the ambiguity must be resolved in source configuration; the
 runtime will not invent an association by zipping rows.

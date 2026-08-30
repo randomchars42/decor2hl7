@@ -118,7 +118,11 @@ Evidence: `src/decor2hl7/data.py`, `src/decor2hl7/bindings.py`,
 
 Structural semantics are explicit and declarative:
 
-- `for_each` preserves repetitions;
+- `for_each` preserves repetitions and explicitly binds each source repeat
+  group to a named CDA repeat node. Target repeat ancestors not bound by a
+  source group become one shared container; this permits one medication section
+  containing one entry per repeated dataset medication without positional
+  guessing;
 - `fan_out` creates discriminated target occurrences, including separate logical
   `Pupilsize_right.value` and `Pupilsize_left.value` datapoints backed by the
   repeatable physical `Pupilsize.value`;
@@ -128,7 +132,9 @@ Structural semantics are explicit and declarative:
   value.
 
 Evidence: `src/decor2hl7/compile/structural.py`,
-`src/decor2hl7/bindings.py`, `tests/test_core.py`.
+`src/decor2hl7/bindings.py`, `src/decor2hl7/validate.py`,
+`tests/test_core.py`,
+`docs/analyses/2026-08-30-medication-mapping-plan.md`.
 
 ## DEC-008 — Diagnosis certainty and effective time
 

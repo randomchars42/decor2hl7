@@ -5,8 +5,8 @@ Date: 2026-08-30
 ## Status
 
 This is the open implementation plan for closing the selected-dataset mapping
-gap for `Medikamentöse Therapie` (`medikamentose-therapie`). Step 1 is complete;
-steps 2 through 6 remain open. Any clinical mapping still requires formal
+gap for `Medikamentöse Therapie` (`medikamentose-therapie`). Steps 1 and 2 are
+complete; steps 3 through 6 remain open. Any clinical mapping still requires formal
 evidence and review under `DEC-003` and `DEC-011`.
 
 ## Step 1 — verify the exact IHE Medicine Entry artifact
@@ -44,13 +44,39 @@ cannot be made writable by importing or copying the IHE artifact. Injecting
 those constraints would invent a relationship not present in the selected CDA
 closure.
 
+## Step 2 — align medication occurrences
+
+The selected dataset has one repetition level:
+`masnahmen.medikamentose_therapie` is `0..*`, while its `medikation` child and
+all product, dose, time and reason groups are at most one within each occurrence.
+The active CDA path has two repetition-capable ancestors: the medication
+`section` and its `entry`; each entry contains at most one
+`Medikation.substanceAdministration`.
+
+The compiler now recognizes the unique section → repeated entry → singular
+statement shape from the mapped parent and child groups and proposes:
+
+```json
+{
+  "type": "for_each",
+  "source_group": "masnahmen.medikamentose_therapie",
+  "target_repeat": "medikamentose-therapie.entry"
+}
+```
+
+The runtime uses the named target repeat rather than positional list depth. Two
+source medication occurrences therefore render as one shared medication section
+with two entries, not as two sections. Validation rejects missing, duplicate,
+non-repeating or non-renderable repeat anchors. The inference is deliberately
+limited to a unique mapped section, one singular mapped child group and exactly
+one intervening repeated CDA entry; ambiguous structures produce no rule.
+
+This step establishes occurrence ownership only. It selects no clinical field
+mapping and does not resolve product identifiers, dose components, route,
+schedule, form or ingredient terminology.
+
 ## Remaining plan
 
-2. **Align medication occurrences.** Establish, from the selected transaction
-   and template relationships, how each dataset medication occurrence
-   corresponds to one active medication entry. Extend structural occurrence
-   handling only if the current `for_each` evidence cannot express that
-   relationship without positional inference.
 3. **Represent compound values.** Define target-neutral source structures for
    medication product/code, dose, route, schedule and duration, then bind only
    the parts exposed by the active CDA profile. Do not flatten compound clinical
@@ -70,9 +96,10 @@ closure.
 
 ## Immediate next question
 
-Step 2 should begin with the formal dataset-to-CDA occurrence relationship.
-Until that relationship is proven, assigning medication fields directly would
-risk joining repeated products, doses and schedules to the wrong CDA entry.
+Step 3 should determine which dataset medication values are genuinely scalar
+and which require compound target-neutral representations before field-level CDA
+bindings are reviewed. Occurrence ownership is now explicit, so that work can
+proceed without mixing sibling medications.
 
 ## Evidence
 

@@ -220,6 +220,81 @@ def _present(value: Any) -> bool:
     return True
 
 
+def for_each_target_positions(
+    field: Mapping[str, Any],
+    target: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    mapping: Mapping[str, Any],
+) -> list[int] | None:
+    """Map each source repeat dimension to an explicit CDA repeat ancestor.
+
+    ``None`` means that no complete explicit alignment exists and callers must
+    retain positional compatibility.  A returned list contains, for each source
+    repeat level, the index of its bound CDA repeat ancestor.
+    """
+    chain = list(
+        field.get("repeat_chain")
+        or ([] if not field.get("repeat") else [field.get("repeat")])
+    )
+    if not chain:
+        return []
+    ancestors = [str(value) for value in target.get("repeat_ancestors", [])]
+    rules_by_group: dict[str, list[Mapping[str, Any]]] = {}
+    for rule in structure_rules(mapping):
+        if str(rule.get("type") or "") != "for_each":
+            continue
+        rules_by_group.setdefault(str(rule.get("source_group") or ""), []).append(rule)
+    positions: list[int] = []
+    targets = cda.get("targets", {})
+    for group in chain:
+        rules = rules_by_group.get(str(group), [])
+        if len(rules) != 1:
+            return None
+        anchor_name = str(rules[0].get("target_repeat") or "")
+        anchor = targets.get(anchor_name, {})
+        locations = list(anchor.get("locations", [])) if isinstance(anchor, Mapping) else []
+        location = str(locations[0]) if len(locations) == 1 else anchor_name
+        if location not in ancestors:
+            return None
+        positions.append(ancestors.index(location))
+    if positions != sorted(set(positions)):
+        return None
+    return positions
+
+
+def _align_for_each_value(
+    value: Any, positions: list[int], target_depth: int
+) -> Any:
+    """Insert singleton CDA containers around source-shaped repeated values."""
+    bound = set(positions)
+
+    def align(current: Any, target_index: int) -> Any:
+        if target_index >= target_depth:
+            return current
+        if target_index in bound:
+            items = current if isinstance(current, list) else [current]
+            return [align(item, target_index + 1) for item in items]
+        return [align(current, target_index + 1)]
+
+    return align(value, 0)
+
+
+def align_for_each_value(
+    value: Any,
+    field: Mapping[str, Any],
+    target: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    mapping: Mapping[str, Any],
+) -> Any:
+    """Shape a source value according to explicit ``for_each`` bindings."""
+    positions = for_each_target_positions(field, target, cda, mapping)
+    if positions is None or not positions:
+        return value
+    return _align_for_each_value(
+        value, positions, len(target.get("repeat_ancestors", []))
+    )
+
+
 def _assign(assignments: dict[str, Any], name: str, value: Any) -> None:
     if not _present(value):
         return
@@ -342,7 +417,8 @@ def build_assignments(
     for path, selected in mapping.get("fields", {}).items():
         if selected is None or path in structural_sources:
             continue
-        value = field_value(record, path, model.get("fields", {}).get(path, {}))
+        field = model.get("fields", {}).get(path, {})
+        value = field_value(record, path, field)
         if not _present(value):
             continue
         for rule in mapping_rules(selected):
@@ -362,6 +438,9 @@ def build_assignments(
                 )
             transformed = apply_transform(value, rule.get("transform"))
             prepared = _prepare_identifier(name, target, transformed, site)
+            prepared = align_for_each_value(
+                prepared, field, target, cda, mapping
+            )
             if rule.get("mode") == "fallback":
                 fallback_assignments.append((name, prepared))
             else:
@@ -436,6 +515,8 @@ def validate_structures(
     fields = model.get("fields", {})
     targets = cda.get("targets", {})
     seen_ids: set[str] = set()
+    for_each_sources: dict[str, str] = {}
+    for_each_targets: dict[str, str] = {}
     for rule in structure_rules(mapping):
         rule_id = str(rule.get("id") or "")
         kind = str(rule.get("type") or "")
@@ -448,10 +529,40 @@ def validate_structures(
             continue
         if kind == "for_each":
             source_group = str(rule.get("source_group") or "")
-            if source_group not in model.get("groups", {}):
+            source = model.get("groups", {}).get(source_group)
+            if source is None:
                 errors.append(f"{prefix} references unknown source group {source_group!r}")
-            if not rule.get("target_repeat"):
+            elif not source.get("repeating"):
+                errors.append(f"{prefix} source group {source_group!r} is not repeating")
+            previous_source = for_each_sources.get(source_group)
+            if previous_source is not None:
+                errors.append(
+                    f"{prefix} duplicates source group {source_group!r} from {previous_source!r}"
+                )
+            for_each_sources[source_group] = rule_id
+            target_name = str(rule.get("target_repeat") or "")
+            if not target_name:
                 errors.append(f"{prefix} has no target_repeat")
+                continue
+            target = targets.get(target_name)
+            if (
+                not isinstance(target, Mapping)
+                or not target.get("renderable")
+                or not target.get("repeatable")
+                or len(target.get("locations", [])) != 1
+            ):
+                errors.append(f"{prefix} references non-renderable target repeat {target_name!r}")
+                continue
+            maximum = target.get("max")
+            if maximum is not None and (not isinstance(maximum, int) or maximum <= 1):
+                errors.append(f"{prefix} target {target_name!r} is not repeating")
+            location = str(target.get("locations", [""])[0])
+            previous_target = for_each_targets.get(location)
+            if previous_target is not None:
+                errors.append(
+                    f"{prefix} duplicates target repeat {target_name!r} from {previous_target!r}"
+                )
+            for_each_targets[location] = rule_id
             continue
         if kind == "coalesce":
             sources = [str(path) for path in rule.get("sources", [])]

@@ -378,6 +378,12 @@ diagnosis row. Values from one row stay in the same CDA occurrence.
 ```
 
 ```markdown
+`medication-occurrences`: create one medication-section `entry` for every input
+medication occurrence. All entries share one enclosing medication section, and
+values from one source occurrence stay in its own entry.
+```
+
+```markdown
 `pupils`: create a right-pupil occurrence when Pupillengröße rechts is present
 and a left-pupil occurrence when Pupillengröße links is present. Both use the
 physical CDA `Pupilsize.value`; fixed target-site codes distinguish the

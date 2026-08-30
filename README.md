@@ -455,12 +455,15 @@ and completion rules. The generated proposal currently derives only semantics
 supported by the specification itself:
 Tetanusschutz drives `negationInd` plus `nullFlavor=NI` for unknown status,
 Isolation drives `negationInd`, and modified Rankin labels map to their numeric
-`{score}` value. Diagnosis occurrences use `for_each`; V/A/Z/G certainty controls
-the formal qualifier and exclusion negation; left/right pupil fields use a
-terminology-backed `fan_out`; equivalent encounter start fields use conservative
-`equal_or_error` coalescing. The transform vocabulary is intentionally small
-(`identity`, `enum`, `ordinal`, `not`) and remains data rather than clinical
-Python code.
+`{score}` value. Diagnosis occurrences use `for_each`; medication occurrences
+use it to create repeated entries below one shared medication section; V/A/Z/G
+certainty controls the formal qualifier and exclusion negation; left/right pupil
+fields use a terminology-backed `fan_out`; equivalent encounter start fields
+use conservative `equal_or_error` coalescing. A `for_each` names the exact CDA
+repeat node driven by its source group, so additional repeat-capable target
+ancestors are not populated positionally. The transform vocabulary is
+intentionally small (`identity`, `enum`, `ordinal`, `not`) and remains data
+rather than clinical Python code.
 
 Completion belongs to the shareable CDA mapping rather than site configuration.
 `defaults.required_unmapped` supplies `nullFlavor="NI"` to an otherwise empty
