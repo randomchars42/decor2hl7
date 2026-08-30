@@ -207,6 +207,14 @@ and repeat anchors. Scalar mapping sees only targets whose compiled
 `value_representation` marks them writable. The renderer executes that
 representation and does not contain a second datatype dispatch table.
 
+Before datatype expansion, `cda/core.py` loads the pinned normative CDA R2 XSD
+set cached by `fetch`. It indexes structural definitions, follows XSD extension
+inheritance, and materializes omitted CDA/RIM children and attributes. Explicit
+ART-DECOR constraints overlay these generic nodes. One compiled path can
+therefore cross an ART-DECOR constraint, a CDA structural class, an HL7
+datatype, and its writable XML representation without class knowledge in
+mapping or rendering.
+
 `SPEC` is recursive constraint refinement, not tree concatenation. Matching
 child constraints inherit omitted parent properties and override explicit ones;
 parent-only prototype choices are dropped at every depth. A specialized

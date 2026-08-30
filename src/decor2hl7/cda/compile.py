@@ -29,6 +29,7 @@ from .datatypes import (
     expand_datatype,
     value_representation,
 )
+from .core import index_definitions, structural_definition
 from .model import CdaValueTarget, Provenance, ValueRepresentation
 
 TemplateKey = tuple[str, str]
@@ -729,17 +730,23 @@ def _expand_nodes(
     return out
 
 
-def _datatype_source(node: Mapping[str, Any], path: str, part: str) -> dict[str, Any]:
+def _model_source(
+    node: Mapping[str, Any], path: str, part: str, source: str = "datatype",
+) -> dict[str, Any]:
     origin = node.get("origin") if isinstance(node.get("origin"), Mapping) else {}
     return {
         "template_id": str(origin.get("template_id") or ""),
         "template_effective_date": str(origin.get("template_effective_date") or ""),
         "element_id": None,
         "path": path,
-        "source": "datatype",
+        "source": source,
         "datatype": str(node.get("datatype") or ""),
         "datatype_part": part,
     }
+
+
+def _datatype_source(node: Mapping[str, Any], path: str, part: str) -> dict[str, Any]:
+    return _model_source(node, path, part)
 
 
 def _datatype_child(
@@ -768,8 +775,12 @@ def _datatype_child(
         "contains": None,
         "contains_flexibility": None,
         "origin": source,
-        "sources": [source],
-        "provenance": [source],
+        "sources": [source] + (
+            list(parent.get("sources", [])) if parent.get("model_derived") else []
+        ),
+        "provenance": [source] + (
+            list(parent.get("provenance", [])) if parent.get("model_derived") else []
+        ),
         "targets": [],
         "asserts": [],
         "lets": {},
@@ -789,8 +800,12 @@ def _datatype_attribute(
         "value": None,
         "optional": optional,
         "value_sets": [],
-        "sources": [source],
-        "provenance": [source],
+        "sources": [source] + (
+            list(parent.get("sources", [])) if parent.get("model_derived") else []
+        ),
+        "provenance": [source] + (
+            list(parent.get("provenance", [])) if parent.get("model_derived") else []
+        ),
         "targets": [],
         "datatype_derived": True,
     }
@@ -848,11 +863,9 @@ def _expand_datatype_structure(
                     if attribute.name in node.get("fixed", {}):
                         derived_attribute["value"] = node["fixed"][attribute.name]
                     node.setdefault("attributes", []).append(derived_attribute)
-
             existing_children = {
                 _xml_key(str(item.get("name") or "")): item
-                for item in node.get("children", [])
-                if item.get("kind") == "element"
+                for item in node.get("children", []) if item.get("kind") == "element"
             }
             if normalized not in stack:
                 for part in definition.parts:
@@ -877,12 +890,86 @@ def _expand_datatype_structure(
         )
 
 
+def _expand_cda_model_structure(
+    nodes: list[dict[str, Any]], definitions: dict[str, Any],
+    stack: tuple[str, ...] = (),
+) -> None:
+    """Overlay ART-DECOR constraints on CDA structural class definitions."""
+    for node in nodes:
+        if node.get("kind") != "element":
+            _expand_cda_model_structure(
+                list(node.get("children", [])), definitions, stack
+            )
+            continue
+        definition = structural_definition(definitions, str(node.get("name") or ""))
+        current_path = str(
+            node.get("origin", {}).get("path") or node.get("name") or ""
+        )
+        if definition is not None and definition.name not in stack:
+            existing_children = {
+                _xml_key(str(item.get("name") or "")): item
+                for item in node.get("children", []) if item.get("kind") == "element"
+            }
+            for part in definition.parts:
+                part_path = current_path + "/" + part.name
+                key = _xml_key(part.name)
+                source = _model_source(node, part_path, part.name, "cda-rim")
+                if key in existing_children:
+                    child = existing_children[key]
+                    child.setdefault("datatype", part.datatype)
+                    child.setdefault("provenance", []).append({
+                        **source, "source": "template + cda-rim",
+                    })
+                else:
+                    child = _datatype_child(
+                        node, part.name, part.datatype, part.minimum, part.maximum,
+                        part_path,
+                    )
+                    child["datatype_derived"] = False
+                    child["model_derived"] = True
+                    child["origin"] = source
+                    child["sources"] = [source]
+                    child["provenance"] = [source]
+                    node.setdefault("children", []).append(child)
+            existing_attributes = {
+                _xml_key("@" + str(item.get("name") or "")): item
+                for item in node.get("attributes", [])
+            }
+            for attribute in definition.attributes:
+                key = _xml_key("@" + attribute.name)
+                path = current_path + "/@" + attribute.name
+                source = _model_source(node, path, "@" + attribute.name, "cda-rim")
+                if key in existing_attributes:
+                    existing_attributes[key].setdefault("datatype", attribute.datatype)
+                    existing_attributes[key].setdefault("provenance", []).append({
+                        **source, "source": "template + cda-rim",
+                    })
+                else:
+                    item = _datatype_attribute(
+                        node, attribute.name, attribute.datatype,
+                        attribute.optional, path,
+                    )
+                    item["datatype_derived"] = False
+                    item["model_derived"] = True
+                    item["origin"] = source
+                    item["sources"] = [source]
+                    item["provenance"] = [source]
+                    item["value"] = attribute.fixed or attribute.default
+                    node.setdefault("attributes", []).append(item)
+        _expand_cda_model_structure(
+            list(node.get("children", [])), definitions,
+            stack + ((definition.name,) if definition is not None else ()),
+        )
+
+
 def _raw_datatype_targets(document: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
     def walk(nodes: Iterable[Mapping[str, Any]]) -> None:
         for node in nodes:
-            if node.get("kind") == "element" and node.get("datatype_derived"):
+            if node.get("kind") == "element" and (
+                node.get("datatype_derived") or node.get("model_derived")
+            ):
                 origin = node.get("origin", {})
                 rows.append({
                     "template_id": origin.get("template_id"),
@@ -907,7 +994,7 @@ def _raw_datatype_targets(document: Iterable[Mapping[str, Any]]) -> list[dict[st
                     "datatype_derived": True,
                 })
             for attribute in node.get("attributes", []):
-                if not attribute.get("datatype_derived"):
+                if not (attribute.get("datatype_derived") or attribute.get("model_derived")):
                     continue
                 origin = (attribute.get("sources") or [{}])[0]
                 rows.append({
@@ -1127,6 +1214,7 @@ def compile_cda(
     cutoff: str | None = None,
     *,
     strict: bool = True,
+    core_definition_paths: Iterable[Path] = (),
 ) -> dict[str, Any]:
     template_id = str(model.get("meta", {}).get("template_id") or "")
     if not template_id:
@@ -1146,6 +1234,9 @@ def compile_cda(
     memo: dict[TemplateKey, list[dict[str, Any]]] = {}
     effective = _effective_template(selected, templates, memo)
     document = _expand_nodes(effective, templates, memo, (_key(selected),))
+    definitions = index_definitions(core_definition_paths)
+    if definitions:
+        _expand_cda_model_structure(document, definitions)
     inventory = datatype_inventory(document)
     if inventory["unsupported"]:
         raise ValueError(
@@ -1214,6 +1305,10 @@ def compile_cda(
         "document": document,
         "unresolved_templates": missing,
         "datatype_inventory": inventory,
+        "cda_model": {
+            "definitions": len(definitions),
+            "source": "HL7 CDA R2 normative XSD" if definitions else None,
+        },
         "stats": {
             "reachable_templates": len(reachable),
             "targets": len(targets),
@@ -1248,9 +1343,13 @@ def compile_cda_model(
 
 def write_cda_model(
     templates: Iterable[Path], model_dir: Path, model: dict[str, Any],
+    core_definition_paths: Iterable[Path] = (),
 ) -> dict[str, Any]:
     """Write ``cda.json`` while retaining unresolved nested references."""
-    cda = compile_cda(templates, model, strict=False)
+    cda = compile_cda(
+        templates, model, strict=False,
+        core_definition_paths=core_definition_paths,
+    )
     write_json(model_dir / "cda.json", cda)
     (model_dir / "cda-assertions.sch").write_text(
         schematron(cda), encoding="utf-8"

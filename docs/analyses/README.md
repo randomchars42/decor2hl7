@@ -16,3 +16,5 @@ Current focused implementation plans:
 - [`2026-08-30-cda-datatype-expansion.md`](2026-08-30-cda-datatype-expansion.md)
   records the current-template datatype inventory, the rewrite boundary and why
   medication/pupil occurrence rules remain.
+- [`2026-08-30-cda-structural-expansion.md`](2026-08-30-cda-structural-expansion.md)
+  records the normative XSD source and structural-to-datatype acceptance cases.

@@ -230,6 +230,11 @@ work with `fetch --offline`; waivers are never reported as successful artifacts
 and keep the affected build visibly degraded. This mechanism and the initial
 entries remain open for review; it is not a generic web scraper.
 
+`fetch` also caches the official normative CDA R2 XSD definition set at a
+pinned HL7 repository commit under `spec/<release>/cda-core/`. It is compiler
+input for generic CDA/RIM structural expansion and is reused by later
+`--offline` runs.
+
 Deleting `manifest.json` does not by itself discard the cache. On the next
 fetch, valid files at their deterministic `spec/` paths are revalidated,
 re-hashed and registered in a new manifest instead of being downloaded again.

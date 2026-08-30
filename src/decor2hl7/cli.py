@@ -234,6 +234,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         progress=_say,
         api_base=api_base,
         source_hints=load_source_hints(root / "config" / "sources.json"),
+        cda_core=True,
     )
     closure = result["closure"]
     summary = closure.get("summary", {})
@@ -293,6 +294,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     from .compile.artifacts import write_build_diagnostics
     from .compile.mapping import write_code_mapping
     from .cda.compile import write_cda_model
+    from .cda.core import core_paths
     from .compile.mapping import write_mapping_model
     from .compile.transaction import write_transaction_model
 
@@ -318,7 +320,10 @@ def cmd_build(args: argparse.Namespace) -> int:
     }
     write_json(model_dir / "model.json", model)
     code_mapping = write_code_mapping(model_dir, model)
-    cda = write_cda_model(inputs["templates"], model_dir, model)
+    cda = write_cda_model(
+        inputs["templates"], model_dir, model,
+        core_definition_paths=core_paths(release_spec_dir(root, release)),
+    )
     cda_mapping = write_mapping_model(
         inputs["mapping_evidence"], model_dir, model, cda
     )

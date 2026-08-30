@@ -164,6 +164,10 @@ _CATALOGUE: dict[str, DatatypeDefinition] = {
         "IVL_PQ", kind=DatatypeKind.COMPLEX,
         parts=tuple(DatatypePart(f"hl7:{name}", "PQ") for name in ("low", "high", "center", "width")),
     ),
+    "IVL_INT": _definition(
+        "IVL_INT", kind=DatatypeKind.COMPLEX,
+        parts=tuple(DatatypePart(f"hl7:{name}", "INT") for name in ("low", "high", "center", "width")),
+    ),
     "RTO_PQ_PQ": _definition(
         "RTO_PQ_PQ", kind=DatatypeKind.COMPLEX,
         parts=(DatatypePart("hl7:numerator", "PQ"), DatatypePart("hl7:denominator", "PQ")),
