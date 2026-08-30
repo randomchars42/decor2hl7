@@ -74,6 +74,40 @@ def payload_match(model_type: str, target: Mapping[str, Any]) -> bool:
     return False
 
 
+def _value_set_ids(value: Any) -> set[str]:
+    items = value if isinstance(value, (list, tuple, set)) else [value]
+    result: set[str] = set()
+    for item in items:
+        if isinstance(item, Mapping):
+            oid = item.get("id") or item.get("value_set")
+        else:
+            oid = item
+        if oid:
+            result.add(str(oid))
+    return result
+
+
+def _shared_coded_element_payload(
+    field: Mapping[str, Any], target: Mapping[str, Any]
+) -> bool:
+    """Allow a code element only when formal terminology proves the payload."""
+    if str(field.get("type") or "") != "code":
+        return False
+    leaf = str(target.get("path") or "").rsplit("/", 1)[-1].replace("cda:", "hl7:")
+    if leaf != "hl7:code" or base_datatype(target.get("datatype")) not in DATATYPE_FAMILIES["code"]:
+        return False
+    if target.get("fixed") or target.get("fixed_text") or target.get("codes"):
+        return False
+
+    field_sets = _value_set_ids(field.get("value_sets"))
+    field_sets.update(_value_set_ids(field.get("value_set_refs")))
+    formal = field.get("formal_terminology")
+    if isinstance(formal, Mapping):
+        field_sets.update(_value_set_ids(formal.get("value_sets")))
+    target_sets = _value_set_ids(target.get("value_sets"))
+    return bool(field_sets & target_sets)
+
+
 def _unit_key(value: Any) -> str:
     text = str(value or "").strip().casefold().replace(" ", "")
     aliases = {
@@ -113,7 +147,11 @@ def direct_compatibility(
             ]
     elif not type_match(model_type, target.get("datatype")):
         return False, [f"datatype {model_type} is incompatible with CDA {target.get('datatype') or 'container'}"]
-    if not explicit_path and not payload_match(model_type, target):
+    if (
+        not explicit_path
+        and not payload_match(model_type, target)
+        and not _shared_coded_element_payload(field, target)
+    ):
         return False, [f"CDA target {target.get('path') or '?'} is not a direct {model_type} payload"]
     if not unit_match(field, target):
         return False, [f"unit {field.get('unit')} is incompatible with CDA unit {target.get('unit')}"]
