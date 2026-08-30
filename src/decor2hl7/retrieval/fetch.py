@@ -34,7 +34,7 @@ from .api import (
 )
 from .client import DEFAULT_API_BASE, FINAL_STATUS, get
 from .artifacts import REQUIRED_ROLES
-from .sources import apply_source_hint
+from .sources import apply_source_hint, builtin_payload
 from .xml import local, parse_text
 from .references import (
     KIND_ORDER, KINDS, Want, display_references, hard_references,
@@ -291,6 +291,38 @@ def _resolved_effective_date(payload: bytes, want: Mapping[str, str]) -> str:
     return max(rows) if rows else ""
 
 
+def _payload_matches_request(payload: bytes, want: Mapping[str, str]) -> bool:
+    """Return whether cached XML contains the exact requested artifact.
+
+    Deterministic filenames make an orphan cache discoverable after the
+    manifest is deleted, but the filename alone is not evidence that the
+    contents have the requested kind, identifier and (for static requests)
+    revision.
+    """
+    try:
+        root, _ = parse_text(payload.decode("utf-8", "replace"))
+    except (ET.ParseError, ValueError):
+        return False
+    tag_for = {
+        "dataset": "dataset",
+        "concept": "concept",
+        "template": "template",
+        "valueset": "valueSet",
+        "codesystem": "codeSystem",
+    }
+    wanted_tag = tag_for.get(want.get("kind", ""))
+    wanted_id = want.get("id") or ""
+    wanted_date = want.get("effective_date") or ""
+    if not wanted_tag or not wanted_id:
+        return False
+    return any(
+        local(node.tag) == wanted_tag
+        and node.get("id") == wanted_id
+        and (not wanted_date or node.get("effectiveDate") == wanted_date)
+        for node in root.iter()
+    )
+
+
 def _repositories(*roots: ET.Element | None, own: str) -> list[str]:
     result = [own]
     for root in roots:
@@ -412,6 +444,191 @@ def _existing_cache_payload(target: Path, old: Mapping[str, Any]) -> bytes | Non
     if old.get("status") == "ok" and expected and _digest(payload) != expected:
         return None
     return payload
+
+
+def _external_manifest_fields(want: Mapping[str, str]) -> dict[str, str]:
+    source_url = want.get("source_url") or want.get("publication_url") or ""
+    return {
+        "origin": "bundled-supplement" if want.get("mode") == "builtin" else "waiver",
+        "completeness": want.get("completeness") or (
+            "spec-only" if want.get("mode") == "waiver" else ""
+        ),
+        "source_url": source_url,
+        "source_version": want.get("source_version") or "",
+        "license": want.get("license") or "",
+        **({"source_hint": want["source_hint"]} if want.get("source_hint") else {}),
+    }
+
+
+def _materialize_external(
+    release_dir: Path,
+    manifest: dict[str, Any],
+    want: Mapping[str, str],
+    *,
+    key: str,
+    relative: str,
+    progress: Progress | None = None,
+    save_manifest: Callable[[], None] | None = None,
+) -> tuple[bool, Path | None]:
+    """Apply one explicitly catalogued phase-1 fallback.
+
+    Builtins are reviewed package resources and therefore work in offline
+    mode. Waivers are deliberately not successful artifacts: they settle a
+    known absence, retain its evidence and keep the build visibly degraded.
+    """
+    mode = want.get("mode") or ""
+    if mode not in {"builtin", "waiver"}:
+        return False, None
+    resources = manifest.setdefault("resources", {})
+    display = _resource_label(want)
+    requested_date = want.get("effective_date") or ""
+    identity = {
+        "type": want.get("kind") or "",
+        "id": want.get("id") or "",
+        "effective_date": requested_date or "dynamic",
+        "project": "",
+        "api_base": "",
+        "origin": "external",
+    }
+    metadata = _external_manifest_fields(want)
+    if mode == "waiver":
+        resources[key] = {
+            "status": "waived",
+            "settled": True,
+            "reason": want.get("reason") or "",
+            "requested_effective_date": requested_date or "dynamic",
+            "resolved_effective_date": "",
+            "identity": identity,
+            **metadata,
+        }
+        if save_manifest is not None:
+            save_manifest()
+        _emit(progress, f"fetch: {display}: waived by reviewed source catalog entry")
+        return True, None
+
+    target = release_dir / relative
+    try:
+        payload = builtin_payload(want)
+    except (OSError, ValueError) as error:
+        resources[key] = {
+            "status": "error",
+            "settled": True,
+            "reason": str(error),
+            "identity": identity,
+            **metadata,
+        }
+        if save_manifest is not None:
+            save_manifest()
+        _emit(progress, f"fetch: {display}: builtin error ({error})")
+        return True, None
+    digest = _digest(payload)
+    expected = want.get("sha256") or ""
+    if expected and digest != expected:
+        resources[key] = {
+            "status": "error",
+            "settled": True,
+            "reason": f"builtin checksum mismatch: expected {expected}, found {digest}",
+            "identity": identity,
+            **metadata,
+        }
+        if save_manifest is not None:
+            save_manifest()
+        _emit(progress, f"fetch: {display}: builtin checksum mismatch")
+        return True, None
+    payload_status, detail = classify_payload(payload)
+    if payload_status != "ok":
+        resources[key] = {
+            "status": "error",
+            "settled": True,
+            "reason": f"builtin payload is {payload_status}: {detail}",
+            "identity": identity,
+            **metadata,
+        }
+        if save_manifest is not None:
+            save_manifest()
+        _emit(progress, f"fetch: {display}: invalid builtin ({detail})")
+        return True, None
+    try:
+        root, _ = parse_text(payload.decode("utf-8", "replace"))
+    except (ET.ParseError, ValueError) as error:
+        resources[key] = {
+            "status": "error", "settled": True, "reason": str(error),
+            "identity": identity, **metadata,
+        }
+        if save_manifest is not None:
+            save_manifest()
+        return True, None
+    tag_for_kind = {
+        "dataset": "dataset", "concept": "concept", "template": "template",
+        "valueset": "valueSet", "codesystem": "codeSystem",
+    }
+    expected_tag = tag_for_kind.get(want.get("kind") or "")
+    matching = next((
+        node for node in root.iter()
+        if local(node.tag) == expected_tag and node.get("id") == want.get("id")
+    ), None)
+    if matching is None:
+        resources[key] = {
+            "status": "error",
+            "settled": True,
+            "reason": "builtin payload does not contain the requested artifact identity",
+            "identity": identity,
+            **metadata,
+        }
+        if save_manifest is not None:
+            save_manifest()
+        _emit(progress, f"fetch: {display}: builtin identity mismatch")
+        return True, None
+    resolved_date = matching.get("effectiveDate") or ""
+    if requested_date and resolved_date != requested_date:
+        resources[key] = {
+            "status": "error",
+            "settled": True,
+            "reason": (
+                f"builtin revision mismatch: requested {requested_date}, "
+                f"found {resolved_date or 'no effective date'}"
+            ),
+            "identity": identity,
+            **metadata,
+        }
+        if save_manifest is not None:
+            save_manifest()
+        _emit(progress, f"fetch: {display}: builtin revision mismatch")
+        return True, None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    previous = target.read_bytes() if target.is_file() else None
+    if previous != payload:
+        target.write_bytes(payload)
+    completeness = want.get("completeness") or "fragment"
+    status = "ok" if completeness == "complete" else "partial"
+    representation = {
+        "status": status,
+        "file": relative,
+        "url": metadata.get("source_url", ""),
+        "bytes": len(payload),
+        "sha256": digest,
+        "origin": "bundled-supplement",
+        "completeness": completeness,
+    }
+    resources[key] = {
+        "status": status,
+        "settled": True,
+        "file": relative,
+        "url": metadata.get("source_url", ""),
+        "bytes": len(payload),
+        "sha256": digest,
+        "requested_effective_date": requested_date or "dynamic",
+        "resolved_effective_date": resolved_date,
+        "identity": {**identity, "effective_date": resolved_date or requested_date or "dynamic"},
+        "representations": {"analysis": representation},
+        "source_warning": "upstream publication is cited but not cached",
+        **metadata,
+    }
+    if save_manifest is not None:
+        save_manifest()
+    action = "cached" if previous == payload else "materialized"
+    _emit(progress, f"fetch: {display}: builtin {action} ({completeness})")
+    return True, target if status == "ok" else None
 
 
 def _fetch_direct(
@@ -596,7 +813,27 @@ def _fetch_want(
     relative = str(old.get("file") or _filename(resolved_want))
     target = release_dir / relative
     display = _resource_label(resolved_want)
+    external_mode = resolved_want.get("mode") or ""
+
+    def external_resolution() -> tuple[bool, Path | None]:
+        return _materialize_external(
+            release_dir, manifest, resolved_want, key=key, relative=relative,
+            progress=progress, save_manifest=save_manifest,
+        )
+
+    # A waiver is an explicit settled decision, not a network fallback. A
+    # previously materialized builtin is likewise reconstructed from its
+    # package checksum before generic cache adoption, preserving provenance
+    # even after manifest.json has been deleted.
+    if external_mode == "waiver" or (
+        external_mode == "builtin" and target.is_file()
+    ):
+        handled, external_path = external_resolution()
+        if handled:
+            return external_path
     existing = _existing_cache_payload(target, old)
+    if existing is not None and not _payload_matches_request(existing, resolved_want):
+        existing = None
     old_representations = (
         old.get("representations", {})
         if isinstance(old.get("representations"), Mapping) else {}
@@ -672,6 +909,9 @@ def _fetch_want(
                 save_manifest()
             return target
     if old.get("status") == "missing" and not retry_missing:
+        handled, external_path = external_resolution()
+        if handled:
+            return external_path
         _emit(progress, f"fetch: {display}: known missing")
         return None
 
@@ -697,6 +937,9 @@ def _fetch_want(
     }
 
     if offline:
+        handled, external_path = external_resolution()
+        if handled:
+            return external_path
         manifest["resources"][key] = {
             "status": "unavailable",
             "reason": "not cached; network disabled by --offline",
@@ -968,6 +1211,9 @@ def _fetch_want(
         or str(item.get("error") or "").startswith("<")
         for item in relevant_attempts
     )
+    handled, external_path = external_resolution()
+    if handled:
+        return external_path
     final_status = "missing" if settled else "error"
     owner = _owner(resolved_want["id"], owners)
     attempted_projects = list(dict.fromkeys(
@@ -1153,6 +1399,14 @@ def fetch_spec(
             key for key in current_keys
             if manifest.get("resources", {}).get(key, {}).get("status") == "unavailable"
         )
+        current_waived = sorted(
+            key for key in current_keys
+            if manifest.get("resources", {}).get(key, {}).get("status") == "waived"
+        )
+        current_partial = sorted(
+            key for key in current_keys
+            if manifest.get("resources", {}).get(key, {}).get("status") == "partial"
+        )
         build_pending = pending_keys("build")
         evidence_pending = pending_keys("evidence")
         crawl_complete = complete
@@ -1204,6 +1458,8 @@ def fetch_spec(
             },
             "missing": current_missing,
             "unavailable": current_unavailable,
+            "waived": current_waived,
+            "partial": current_partial,
             "errors": current_errors + root_errors,
             "root_status": dict(root_status),
             "summary": {
@@ -1213,6 +1469,8 @@ def fetch_spec(
                 ) + int(root_status["project_config"] == "ok") + int(root_status["transaction"] == "ok"),
                 "missing": len(current_missing),
                 "unavailable": len(current_unavailable),
+                "waived": len(current_waived),
+                "partial": len(current_partial),
                 "error": len(current_errors) + len(root_errors),
             },
             "resources_considered": resources_considered,
@@ -1226,6 +1484,8 @@ def fetch_spec(
             "ok": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "ok"),
             "missing": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "missing"),
             "unavailable": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "unavailable"),
+            "waived": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "waived"),
+            "partial": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "partial"),
             "error": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "error"),
         }
         write_json(manifest_path, manifest)
@@ -1530,6 +1790,8 @@ def fetch_spec(
             f"{closure['summary']['ok']} ok/cached, "
             f"{closure['summary']['missing']} missing, "
             f"{closure['summary']['unavailable']} unavailable, "
+            f"{closure['summary'].get('waived', 0)} waived, "
+            f"{closure['summary'].get('partial', 0)} partial, "
             f"{closure['summary']['error']} error(s), "
             f"{closure['recursive_http_requests']} recursive HTTP request(s)",
         )

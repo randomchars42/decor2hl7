@@ -135,12 +135,23 @@ Important rules retained from the prototype:
 14. In `--offline` mode, perform closure discovery from cached files without any
     HTTP attempt and record uncached references as retryable unavailable
     dependencies.
+15. Provisionally, consult exact catalog entries for package-local `builtin`
+    supplements and cited `waiver` decisions. Builtins verify their package
+    checksum and can be materialized offline; waivers are settled but remain
+    non-successful and degraded. This phase is open for review under `DEC-012`.
 
 `manifest.json` answers “what is cached for this release?”; transaction
 `closure.json` answers “which cached resources belong to this transaction?” It
 also separates crawler settlement (`crawl_complete`) from availability of the
 selected transaction pair (`build_ready`) and records unavailable recursive
 dependencies as degraded resources.
+
+`manifest.json` is reconstructible metadata rather than the sole index of
+deterministically named cache files. If it is deleted, `fetch` validates and
+reuses existing expected files, recalculates their checksums and rewrites the
+manifest. Missing, invalid, modified-against-a-known-checksum or wrong-revision
+files are fetched again when online. Bundled supplements restore their external
+origin and completeness metadata from the durable package catalog.
 
 ## Artifact and terminology contracts
 

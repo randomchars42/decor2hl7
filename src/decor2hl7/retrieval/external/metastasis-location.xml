@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<return>
+  <codeSystem id="1.2.276.0.76.5.401"
+              name="MetastasisLocationTNM"
+              displayName="Metastasenlokalisation nach TNM"
+              statusCode="active">
+    <desc language="en-US">Curated external CodeSystem supplement; review status is tracked by DEC-012.</desc>
+    <conceptList>
+      <codedConcept code="PUL" level="0"><designation language="de-DE" type="preferred" displayName="Lunge"/><designation language="en-US" type="preferred" displayName="Lung"/></codedConcept>
+      <codedConcept code="OSS" level="0"><designation language="de-DE" type="preferred" displayName="Knochen"/><designation language="en-US" type="preferred" displayName="Bone"/></codedConcept>
+      <codedConcept code="HEP" level="0"><designation language="de-DE" type="preferred" displayName="Leber"/><designation language="en-US" type="preferred" displayName="Liver"/></codedConcept>
+      <codedConcept code="BRA" level="0"><designation language="de-DE" type="preferred" displayName="Hirn"/><designation language="en-US" type="preferred" displayName="Brain"/></codedConcept>
+      <codedConcept code="LYM" level="0"><designation language="de-DE" type="preferred" displayName="Lymphknoten"/><designation language="en-US" type="preferred" displayName="Lymph nodes"/></codedConcept>
+      <codedConcept code="OTH" level="0"><designation language="de-DE" type="preferred" displayName="Andere"/><designation language="en-US" type="preferred" displayName="Other"/></codedConcept>
+      <codedConcept code="MAR" level="0"><designation language="de-DE" type="preferred" displayName="Knochenmark"/><designation language="en-US" type="preferred" displayName="Bone marrow"/></codedConcept>
+      <codedConcept code="PLE" level="0"><designation language="de-DE" type="preferred" displayName="Pleura"/><designation language="en-US" type="preferred" displayName="Pleura"/></codedConcept>
+      <codedConcept code="ADR" level="0"><designation language="de-DE" type="preferred" displayName="Nebennieren"/><designation language="en-US" type="preferred" displayName="Adrenals"/></codedConcept>
+      <codedConcept code="SKI" level="0"><designation language="de-DE" type="preferred" displayName="Haut"/><designation language="en-US" type="preferred" displayName="Skin"/></codedConcept>
+    </conceptList>
+  </codeSystem>
+</return>

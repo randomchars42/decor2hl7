@@ -5,7 +5,16 @@ from __future__ import annotations
 import json
 from importlib.resources import files
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Mapping
+
+
+SOURCE_MODES = {"builtin", "waiver"}
+RESOLUTION_FIELDS = ("effective_date", "project", "api_base", "publication_url")
+EXTERNAL_FIELDS = (
+    "mode", "artifact", "source_url", "source_version", "completeness",
+    "license", "sha256", "reason",
+)
 
 
 def _read(path: Path | None) -> dict[str, Any]:
@@ -31,11 +40,26 @@ def load_source_hints(override: Path | None = None) -> dict[str, dict[str, str]]
         for key, value in artifacts.items():
             if not isinstance(value, Mapping):
                 raise ValueError(f"source hint {key!r} must contain an object")
-            result[str(key)] = {
+            normalized = {
                 str(name): str(item)
                 for name, item in value.items()
                 if item not in (None, "")
             }
+            mode = normalized.get("mode", "")
+            if mode and mode not in SOURCE_MODES:
+                raise ValueError(
+                    f"source hint {key!r} has unsupported mode {mode!r}; "
+                    f"supported phase-1 modes are {sorted(SOURCE_MODES)}"
+                )
+            if mode == "builtin":
+                for required in ("artifact", "sha256", "completeness"):
+                    if not normalized.get(required):
+                        raise ValueError(
+                            f"builtin source hint {key!r} requires {required!r}"
+                        )
+            if mode == "waiver" and not normalized.get("reason"):
+                raise ValueError(f"waiver source hint {key!r} requires 'reason'")
+            result[str(key)] = normalized
     return result
 
 
@@ -50,9 +74,26 @@ def apply_source_hint(
     hint = hints.get(f"{base}@{effective}") if effective else None
     if hint is None:
         hint = hints.get(base, {})
-    for name in ("effective_date", "project", "api_base", "publication_url"):
+    for name in RESOLUTION_FIELDS:
         if not result.get(name) and hint.get(name):
+            result[name] = str(hint[name])
+    # External acquisition metadata describes the catalog entry itself.  XML
+    # references do not carry these properties, so a matching exact artifact
+    # hint may add them without changing the requested artifact identity.
+    for name in EXTERNAL_FIELDS:
+        if hint.get(name):
             result[name] = str(hint[name])
     if hint:
         result["source_hint"] = f"{base}@{effective}" if effective and f"{base}@{effective}" in hints else base
     return result
+
+
+def builtin_payload(artifact: Mapping[str, str]) -> bytes:
+    """Read one reviewed package-local supplement without network access."""
+    relative = PurePosixPath(str(artifact.get("artifact") or ""))
+    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"unsafe builtin artifact path: {relative}")
+    resource = files("decor2hl7.retrieval").joinpath(*relative.parts)
+    if not resource.is_file():
+        raise ValueError(f"builtin artifact is missing from the package: {relative}")
+    return resource.read_bytes()

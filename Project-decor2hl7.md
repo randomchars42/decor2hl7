@@ -290,6 +290,14 @@ remain explicitly unavailable and retryable by a later online fetch.
 
 Dynamic and exact request aliases that resolve to one artifact should point to one canonical stored artifact record.
 
+External publisher content is currently an open, provisional boundary
+(`DEC-012`). A small exact-identity catalog may materialize a reviewed bundled
+supplement or record an evidence-backed waiver during `fetch`, including in
+cache-only mode. Such provenance must remain distinguishable from ART-DECOR;
+waivers and partial content may not masquerade as successful complete artifacts.
+The package must not grow a generic web-scraping subsystem without a reviewed
+decision.
+
 ### Resolution order
 
 Repository/project resolution should prefer strong context before probing:

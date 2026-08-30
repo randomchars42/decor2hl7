@@ -222,6 +222,20 @@ base, project, and exact effective date that an XML reference omits. Once the
 source is resolved, recursive template analysis is identical for local and
 external artifacts; no template-specific special case exists in the compiler.
 
+The source catalog also has a provisional external-artifact phase (`DEC-012`).
+An exact entry may use `mode: "builtin"` to materialize a small reviewed XML
+supplement shipped with the package, or `mode: "waiver"` to retain a cited
+decision that no complete external artifact is currently available. Builtins
+work with `fetch --offline`; waivers are never reported as successful artifacts
+and keep the affected build visibly degraded. This mechanism and the initial
+entries remain open for review; it is not a generic web scraper.
+
+Deleting `manifest.json` does not by itself discard the cache. On the next
+fetch, valid files at their deterministic `spec/` paths are revalidated,
+re-hashed and registered in a new manifest instead of being downloaded again.
+Files that are absent, invalid, checksum-incompatible or inconsistent with an
+exact requested revision are retrieved again when network access is allowed.
+
 Dynamic external references are frozen after their first resolution: the
 manifest records both the requested `dynamic` binding and the resolved
 `effectiveDate`, project, API base, source and expanded representation URLs, and

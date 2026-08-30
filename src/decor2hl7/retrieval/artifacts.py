@@ -140,6 +140,11 @@ def artifact_record(
         "resolution": {
             "source_hint": str(entry.get("source_hint") or ""),
             "publication_url": str(entry.get("publication_url") or ""),
+            "origin": str(entry.get("origin") or "art-decor"),
+            "source_url": str(entry.get("source_url") or ""),
+            "source_version": str(entry.get("source_version") or ""),
+            "completeness": str(entry.get("completeness") or ""),
+            "reason": str(entry.get("reason") or ""),
             "owner": str(entry.get("owner") or resolved.get("project") or ""),
         },
     }
@@ -194,8 +199,24 @@ def artifact_unavailable_reasons(record: Mapping[str, Any]) -> list[str]:
     key = str(record.get("request_key") or "artifact")
     status = str(record.get("status") or "unknown")
     reasons: list[str] = []
+    resolution = record.get("resolution", {})
+    reason = str(resolution.get("reason") or "") if isinstance(resolution, Mapping) else ""
+    completeness = (
+        str(resolution.get("completeness") or "")
+        if isinstance(resolution, Mapping) else ""
+    )
+    if status == "waived":
+        reasons.append(
+            f"{key}: external artifact absence is provisionally waived"
+            + (f" ({reason})" if reason else "")
+        )
+    elif status == "partial":
+        reasons.append(
+            f"{key}: external artifact is only {completeness or 'partial'}"
+        )
     if status != "ok":
-        reasons.append(f"{key}: artifact status is {status}")
+        if status not in {"waived", "partial"}:
+            reasons.append(f"{key}: artifact status is {status}")
     forms = record.get("forms", {})
     analysis = forms.get("analysis", {}) if isinstance(forms, Mapping) else {}
     path = analysis.get("path") if isinstance(analysis, Mapping) else None

@@ -241,6 +241,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         f"selected transaction fetch: {summary.get('ok', 0)} cached/ok, "
         f"{summary.get('missing', 0)} missing, "
         f"{summary.get('unavailable', 0)} unavailable, "
+        f"{summary.get('waived', 0)} waived, "
+        f"{summary.get('partial', 0)} partial, "
         f"{summary.get('error', 0)} errors"
     )
     _say(
