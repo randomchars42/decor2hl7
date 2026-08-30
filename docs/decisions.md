@@ -188,6 +188,12 @@ Evidence: `src/decor2hl7/compile/artifacts.py`, `docs/architecture.md`,
 human names, exact keys, contextual read-only XML and explicit candidate/result
 classes. Configuration is edited in JSON, never in generated Markdown or XML.
 
+A dataset code may map directly to an unfixed writable CDA `hl7:code` element
+when both sides use coded datatypes and share an explicit ValueSet. This permits
+formally associated payloads such as the referral source while preventing a
+dataset value from replacing a fixed or differently bound structural section
+code.
+
 Evidence: `src/decor2hl7/compile/mapping.py`,
 `src/decor2hl7/compile/reports.py`,
 `docs/mapping-documentation-format.md`.

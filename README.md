@@ -445,6 +445,10 @@ mapping or transform proves the runtime semantics.
 
 Direct `implementation/@xpath` declarations are treated as explicit technical
 mapping evidence when they uniquely resolve to a current writable CDA target.
+A formally coded dataset field can also map directly to an unfixed writable
+CDA `hl7:code` element when both sides share an explicit ValueSet. Fixed or
+differently bound structural codes, such as a section's identifying LOINC code,
+remain unavailable as dataset payload targets.
 
 `cda-mapping.json` version 5 may also contain declarative scalar, structural,
 and completion rules. The generated proposal currently derives only semantics
