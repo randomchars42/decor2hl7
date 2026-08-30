@@ -228,7 +228,17 @@ authoritative. The initial completeness claim for CodeSystem
 and the rules by which an external artifact may satisfy a required dependency
 must be reviewed before this decision can be accepted.
 
+The IHE Medicine Entry
+`1.3.6.1.4.1.19376.1.9.1.3.1@2019-08-27T16:13:43` is not a candidate for a
+builtin: its exact analysis form is already resolved through the `ch-pharm-`
+source hint and satisfies dependency availability under `DEC-004`. The missing
+source form is optional evidence. Its constraints remain unlocated in the
+selected AKTIN document, whose effective medication branch uses
+`UV Medication Information (simple)`; external-artifact handling must not be
+used to alter that template relationship.
+
 Evidence: `docs/analyses/2026-08-30-external-artifact-phase-1.md`,
+`docs/analyses/2026-08-30-medication-mapping-plan.md`,
 `src/decor2hl7/retrieval/sources.py`,
 `src/decor2hl7/retrieval/fetch.py`, `tests/test_external_sources.py`.
 
