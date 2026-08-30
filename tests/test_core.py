@@ -29,7 +29,7 @@ from decor2hl7.retrieval.fetch import (
 )
 from decor2hl7.retrieval.api import REQUIRED_PATHS, artifact_representations
 from decor2hl7.retrieval.sources import apply_source_hint, load_source_hints
-from decor2hl7.semantics import accepted_values
+from decor2hl7.semantics import accepted_values, direct_compatibility
 from decor2hl7.workspace import load_json
 from decor2hl7.workspace import (
     init_workspace, input_dir, load_json, release_spec_dir, set_release, set_transaction,
@@ -321,6 +321,85 @@ class CoreTests(unittest.TestCase):
                 guide.index("Resulting CDA placement"),
             )
             self.assertNotIn("Put the value", guide)
+
+
+    def test_ta_selects_formally_bound_hl7_code_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.xml"
+            project.write_text('''
+<project>
+  <templateAssociation templateId="entry" effectiveDate="2026-01-01">
+    <concept ref="referral" elementId="referral-code"/>
+  </templateAssociation>
+  <template id="entry" effectiveDate="2026-01-01" name="Referral">
+    <element name="hl7:act" id="act" minimumMultiplicity="1" maximumMultiplicity="1">
+      <element name="hl7:participant" id="participant" minimumMultiplicity="1" maximumMultiplicity="1">
+        <element name="hl7:participantRole" id="role" minimumMultiplicity="1" maximumMultiplicity="1">
+          <element name="hl7:code" id="referral-code" datatype="CE"
+                   minimumMultiplicity="1" maximumMultiplicity="1" conformance="R">
+            <vocabulary valueSet="referral-vs"/>
+            <element name="hl7:originalText" id="referral-text" datatype="ST"
+                     minimumMultiplicity="0" maximumMultiplicity="1"/>
+          </element>
+        </element>
+      </element>
+    </element>
+  </template>
+</project>''', encoding="utf-8")
+            field = {
+                "name": "Zuweisung",
+                "concept": "referral",
+                "type": "code",
+                "value_sets": ["referral-vs"],
+                "value_set_refs": [{"id": "referral-vs", "effective_date": "2025-01-01"}],
+                "formal_terminology": {
+                    "value_sets": [{"id": "referral-vs", "effective_date": "2025-01-01"}],
+                    "members": {
+                        "Notarzt": {
+                            "code": "NA",
+                            "code_system": "1.2.3",
+                            "display_name": "Notarzt",
+                        }
+                    },
+                    "complete": True,
+                },
+                "accepted_values": {
+                    "Notarzt": {
+                        "code": "NA",
+                        "code_system": "1.2.3",
+                        "display_name": "Notarzt",
+                    }
+                },
+                "codes": [],
+                "parent": None,
+            }
+            model = {
+                "meta": {
+                    "template_id": "entry",
+                    "template_effective_date": "2026-01-01",
+                },
+                "groups": {},
+                "fields": {"referral": field},
+            }
+            target = compile_cda([project], model)
+            target_name = "Referral.act.participant.participantRole.code"
+            self.assertTrue(target["targets"][target_name]["has_children"])
+            self.assertEqual(
+                direct_compatibility(field, target["targets"][target_name]),
+                (True, []),
+            )
+            proposal, _ = cda_mapping_proposal(model, target, [project])
+            self.assertEqual(proposal["fields"]["referral"], target_name)
+
+            section_code = {
+                **target["targets"][target_name],
+                "path": "hl7:section/hl7:code",
+                "value_sets": ["section-vs"],
+                "codes": [{"code": "11293-8", "code_system": "2.16.840.1.113883.6.1"}],
+            }
+            compatible, reasons = direct_compatibility(field, section_code)
+            self.assertFalse(compatible)
+            self.assertIn("not a direct code payload", reasons[0])
 
     def test_mapping_outline_keeps_names_and_wraps_long_targets(self) -> None:
         short = _outline_datapoint_lines(
