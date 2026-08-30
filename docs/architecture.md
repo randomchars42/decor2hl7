@@ -250,7 +250,10 @@ may control more than one target (for example Tetanusschutz `negationInd` and
 and CDA completion policy. The compiler emits only rules supported by explicit
 cardinality, terminology, and template evidence:
 
-- `for_each` preserves one source-group occurrence as one CDA occurrence;
+- `for_each` binds one source-group repeat dimension to an explicit CDA repeat
+  node. Unbound target repeat ancestors are rendered as one shared container;
+  for example, repeated medication records bind to section `entry` while the
+  enclosing medication section is emitted once;
 - `fan_out` turns sibling fields such as right/left measurements into separate
   logical CDA datapoints and occurrences, retaining their shared physical
   target and writing the discriminator required by the target ValueSet;
