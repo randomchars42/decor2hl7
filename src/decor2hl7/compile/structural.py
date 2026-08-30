@@ -273,10 +273,15 @@ def for_each_rules(
             if len(repeat_locations) != 1:
                 continue
             location = next(iter(repeat_locations))
-            anchor = next((
+            anchors = [
                 name for name, target in targets.items()
                 if target.get("locations") == [location]
-            ), location)
+                and target.get("renderable") is True
+                and target.get("repeatable") is True
+            ]
+            if len(anchors) != 1:
+                continue
+            anchor = anchors[0]
             result[rule_name] = {
                 "type": "for_each",
                 "source_group": group_path,
