@@ -126,12 +126,14 @@ valid discharge document with no transfer branch and one valid transfer
 document with no discharge disposition. Together those scenarios exercise all
 69 proposed fields.
 
-Generated XML was parsed independently and inspected for:
+Generated artifacts and XML were inspected for:
 
 - postcode element text below `recordTarget/patientRole/addr/postalCode`;
 - pupil observations discriminated by AKTIN `R`/`L` codes from code system
   `1.2.276.0.76.3.1.195.5.48`, with no SNOMED laterality constants;
-- preserved medication `for_each` and diagnosis/vital-sign occurrence rules;
+- preservation of medication `for_each` in the generated mapping and focused
+  occurrence regression; diagnosis and vital-sign repetitions were additionally
+  exercised in the production XML fixture;
 - mutually exclusive discharge/transfer structures;
 - absence of XPath predicates in emitted XML element names.
 
