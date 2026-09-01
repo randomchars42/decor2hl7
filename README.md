@@ -267,7 +267,10 @@ analysis.
   options, formal transaction terminology, direct terminology associations and
   executable accepted values are distinct; formal transaction membership wins
   when both domains exist. An unavailable formal binding is marked incomplete;
-  logical labels are not promoted into formal codes.
+  logical labels are not promoted into formal codes. Owned inline coded domains
+  retain their list identity and distinguish enumerated, unconstrained and
+  referenced lists, so an intentional empty list is not reported as a missing
+  standalone ValueSet.
 - `build-diagnostics.json` / `build-diagnostics.md`: unavailable dependency
   identities, their expected build effect, and unresolved CDA template links.
 - `cda.json`: reachable CDA template constraints plus XSD-derived CDA/RIM and
@@ -474,6 +477,12 @@ CDA `hl7:code` element when both sides share an explicit ValueSet. Fixed or
 differently bound structural codes, such as a section's identifying LOINC code,
 remain unavailable as dataset payload targets.
 
+An explicitly unconstrained source code can use a target-governed fallback only
+below an already mapped container and only when one unique compatible CDA code
+target binds an exact ValueSet with an `OTH` exception plus a compiled
+`originalText` companion. Exact admitted code/code-system pairs are preserved;
+other values render as `nullFlavor="OTH"` with their wording in `originalText`.
+
 `cda-mapping.json` version 6 may also contain declarative scalar, structural,
 and completion rules. The generated proposal currently derives only semantics
 supported by the specification itself:
@@ -487,7 +496,8 @@ bound AKTIN L/R eye ValueSet; equivalent encounter start fields use conservative
 `equal_or_error` coalescing. A `for_each` names the exact CDA
 repeat node driven by its source group, so additional repeat-capable target
 ancestors are not populated positionally. The transform vocabulary is
-intentionally small (`identity`, `enum`, `ordinal`, `not`, `code_system`) and remains data
+intentionally small (`identity`, `enum`, `ordinal`, `not`, `code_system`,
+`coded_fallback`) and remains data
 rather than clinical Python code.
 
 Existing reviewed version-5 `fan_out` rules remain executable. During

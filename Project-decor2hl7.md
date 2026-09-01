@@ -332,6 +332,7 @@ The compiled model preserves distinctions such as:
 - groups and fields;
 - repeat chains / occurrence identity;
 - logical value domains;
+- owned inline coded-domain identity and open/enumerated/reference status;
 - exact formal terminology bindings;
 - option associations;
 - concept associations;
@@ -399,7 +400,10 @@ The built-in transform language stays deliberately small and declarative. Curren
 - `identity`;
 - `enum`;
 - `ordinal`;
-- `not`.
+- `not`;
+- `code_system`;
+- `coded_fallback` — preserve only exact target-member code/system pairs and
+  otherwise carry source wording through a target-defined `OTH` fallback.
 
 Clinical semantics should not accumulate as target-specific Python conditionals when a small declarative rule can express them.
 
@@ -581,10 +585,10 @@ The exact module split may evolve. The important invariant is the direction of d
 
 ## Development priorities
 
-1. Resolve the allergy payload mappings from the mapped allergy section through
-   Allergy Concern Act / Allergy Intolerance Observation to narrative and the
-   bound allergen `playingEntity/code`, without treating derived diagnosis flags
-   as substance codes.
+1. Continue the remaining allergy payload work after the generic open-domain
+   mapping made `Agens` executable at the bound allergen `playingEntity/code`:
+   decide description/narrative placement and represent the derived diagnosis
+   flags without treating them as substance codes.
 2. Continue the remaining medication work after the common-slot projection:
    retain the now executable product name/code, dosage narrative and route;
    establish formal lot-number evidence; represent detailed dose/rate/schedule

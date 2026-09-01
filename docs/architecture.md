@@ -176,10 +176,14 @@ records contained additions separately.
 
 `logical_domain` records dataset choices, `formal_terminology` records the exact
 transaction ValueSet binding and members, and `terminology_associations` retains
-direct links with their source concept IDs. `accepted_values` is the executable
-domain. When a formal binding exists, only known formal members are executable;
-an unavailable or partly expanded binding is explicitly incomplete and does not
-fall back to logical-only labels.
+direct links with their source concept IDs. An owned inline `conceptList` is
+also retained as `coded_domain`, including its identifier, member count and
+whether it is enumerated, referenced or explicitly unconstrained. This prevents
+an intentional empty/open domain from being confused with an unavailable
+external ValueSet. `accepted_values` is the executable source domain. When a
+formal binding exists, only known formal members are executable; an unavailable
+or partly expanded binding is explicitly incomplete and does not fall back to
+logical-only labels.
 
 The compiler boundary separates unavailability from contradiction. Missing
 auxiliary datasets, terminology and nested templates are omitted and listed in
@@ -298,6 +302,15 @@ profile-associated manufactured-material name remain renderer-independent.
 When a coded source has an explicit open target code system but no enumerated
 ValueSet, the proposal carries a declarative `code_system` transform that
 normalizes the source code and supplies that code-system OID.
+
+An explicitly unconstrained source coded domain has a different contract. It
+may map inside an already established container only when exactly one compatible
+CDA descendant binds an exact ValueSet revision with an `OTH` exception and has
+a datatype-derived `coded_original_text` companion. The declarative
+`coded_fallback` transform preserves an exact admitted code/code-system pair;
+all other values become `nullFlavor="OTH"` while retaining source wording for
+the companion text. ValueSet membership, structure and datatype roles are
+compiled evidence; the renderer has no domain- or template-specific branch.
 
 Identity-style lineage may enrich omitted dataset constraints. `ADAPT` and other
 derivation relationships are deliberately not treated as automatic identity

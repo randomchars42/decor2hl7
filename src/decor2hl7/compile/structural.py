@@ -35,7 +35,8 @@ def value_set_members(
             oid = value_set.get("id") or ""
             effective = value_set.get("effectiveDate") or ""
             for concept in value_set.iter():
-                if local(concept.tag) not in {"concept", "items"}:
+                kind = local(concept.tag)
+                if kind not in {"concept", "exception", "items"}:
                     continue
                 code = concept.get("code") or ""
                 system = concept.get("codeSystem") or ""
@@ -54,6 +55,7 @@ def value_set_members(
                     "code": code,
                     "codeSystem": system,
                     "displayName": display,
+                    "kind": kind,
                     "designations": designations,
                     "valueSet": oid,
                     "valueSetEffectiveDate": effective,
@@ -89,7 +91,7 @@ def _member_tokens(member: Mapping[str, Any]) -> set[str]:
     return set().union(*(_tokens(value) for value in values))
 
 
-def _members_for_target(
+def members_for_target(
     target: Mapping[str, Any],
     value_sets: Mapping[ValueSetKey, list[dict[str, Any]]],
 ) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
@@ -233,7 +235,7 @@ def repeat_by_discriminator_rule(
             continue
         if int(candidate.get("min") or 0) < 1 or candidate.get("max") != 1:
             continue
-        members, binding = _members_for_target(candidate, value_sets)
+        members, binding = members_for_target(candidate, value_sets)
         assignments = _facet_assignments(paths, fields, members)
         unique_codes = _schematron_unique_codes(cda, candidate)
         selected_codes = {

@@ -152,6 +152,44 @@ def _scalar(value: Any, transform: Mapping[str, Any]) -> Any:
             if value.get("raw") is not None:
                 result["raw"] = value.get("raw")
         return result
+    if kind == "coded_fallback":
+        configured_allowed = transform.get("allowed", [])
+        allowed = [
+            item for item in configured_allowed
+            if isinstance(item, Mapping)
+        ] if isinstance(configured_allowed, list) else []
+        code = value.get("code") if isinstance(value, Mapping) else None
+        system = None
+        if isinstance(value, Mapping):
+            system = value.get("codeSystem") or value.get("code_system")
+        matches = [
+            item for item in allowed
+            if str(item.get("code") or "") == str(code or "")
+            and str(item.get("codeSystem") or "") == str(system or "")
+        ]
+        if code not in (None, "") and system not in (None, "") and len(matches) == 1:
+            result = {
+                key: matches[0][key]
+                for key in ("code", "codeSystem", "displayName")
+                if matches[0].get(key) not in (None, "")
+            }
+            if isinstance(value, Mapping) and value.get("raw") not in (None, ""):
+                result["raw"] = value["raw"]
+            return result
+        raw = value
+        if isinstance(value, Mapping):
+            raw = next((
+                value.get(key) for key in (
+                    "raw", "canonical", "displayName", "display_name", "code",
+                )
+                if value.get(key) not in (None, "")
+            ), None)
+        result = {
+            "nullFlavor": str(transform.get("null_flavor") or "OTH"),
+        }
+        if raw not in (None, ""):
+            result["raw"] = raw
+        return result
     raise ValueError(f"unknown mapping transform {kind!r}")
 
 
@@ -176,12 +214,26 @@ def validate_transform(transform: Any) -> list[str]:
     if not isinstance(transform, Mapping):
         return ["transform must be an object"]
     kind = str(transform.get("type") or "")
-    if kind not in {"identity", "enum", "ordinal", "not", "code_system"}:
+    if kind not in {
+        "identity", "enum", "ordinal", "not", "code_system",
+        "coded_fallback",
+    }:
         return [f"unknown transform type {kind!r}"]
     if kind in {"enum", "ordinal"} and not isinstance(transform.get("map"), Mapping):
         return [f"{kind} transform requires an object map"]
     if kind == "code_system" and not str(transform.get("code_system") or ""):
         return ["code_system transform requires code_system"]
+    if kind == "coded_fallback":
+        allowed = transform.get("allowed")
+        if not isinstance(allowed, list) or not all(
+            isinstance(item, Mapping)
+            and item.get("code")
+            and item.get("codeSystem")
+            for item in allowed
+        ):
+            return ["coded_fallback transform requires coded allowed members"]
+        if not str(transform.get("null_flavor") or ""):
+            return ["coded_fallback transform requires null_flavor"]
     selector = transform.get("select")
     if selector is not None and selector not in {
         "value", "canonical", "code", "displayName", "display_name",

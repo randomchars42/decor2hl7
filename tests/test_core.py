@@ -2348,9 +2348,172 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(accepted_values(field), {})
             self.assertFalse(field["formal_terminology"]["complete"])
             self.assertEqual(
+                field["formal_terminology"]["status"], "unresolved"
+            )
+            self.assertEqual(
                 field["formal_terminology"]["missing_value_sets"][0]["id"],
                 "missing-vs",
             )
+
+    def test_empty_owned_concept_list_is_explicitly_unconstrained(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transaction = Path(tmp) / "transaction.xml"
+            transaction.write_text('''<dataset>
+              <concept id="c" shortName="agent" type="item">
+                <name>Agent</name>
+                <valueDomain type="code">
+                  <conceptList id="owned-empty-list"/>
+                </valueDomain>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            field = compile_model(transaction)["fields"]["agent"]
+            self.assertEqual(field["coded_domain"], {
+                "kind": "inline_concept_list",
+                "id": "owned-empty-list",
+                "status": "unconstrained",
+                "member_count": 0,
+                "references": [],
+                "unrecognized_children": [],
+            })
+            self.assertEqual(
+                field["formal_terminology"]["status"], "unconstrained"
+            )
+            self.assertFalse(field["formal_terminology"]["bound"])
+            self.assertTrue(field["formal_terminology"]["complete"])
+            self.assertEqual(field["formal_terminology"]["missing_value_sets"], [])
+            self.assertEqual(accepted_values(field), {})
+
+    def test_open_coded_domain_uses_unique_oth_original_text_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            transaction = directory / "transaction.xml"
+            project = directory / "project.xml"
+            transaction.write_text('''<dataset templateId="doc" templateEffectiveDate="2026">
+              <concept id="allergies" shortName="allergies" type="group">
+                <name>Allergies</name>
+                <concept id="agent" shortName="agent" type="item">
+                  <name>Agent</name>
+                  <valueDomain type="code">
+                    <conceptList id="owned-empty-list"/>
+                  </valueDomain>
+                </concept>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            project.write_text('''<project>
+              <templateAssociation templateId="doc" effectiveDate="2026">
+                <concept ref="allergies" elementId="section"/>
+              </templateAssociation>
+              <template id="doc" effectiveDate="2026" name="ExampleDocument">
+                <element name="hl7:ClinicalDocument" id="root"
+                         minimumMultiplicity="1" maximumMultiplicity="1">
+                  <element name="hl7:section" id="section"
+                           minimumMultiplicity="0" maximumMultiplicity="1">
+                    <element name="hl7:observation" id="observation"
+                             minimumMultiplicity="0" maximumMultiplicity="*">
+                      <element name="hl7:code" id="observation-code" datatype="CE"
+                               minimumMultiplicity="1" maximumMultiplicity="1">
+                        <vocabulary valueSet="status-vs"/>
+                      </element>
+                      <element name="hl7:participant" id="participant"
+                               minimumMultiplicity="1" maximumMultiplicity="1">
+                        <element name="hl7:playingEntity" id="entity"
+                                 minimumMultiplicity="1" maximumMultiplicity="1">
+                          <element name="hl7:code" id="agent-code" datatype="CE"
+                                   minimumMultiplicity="1" maximumMultiplicity="1">
+                            <vocabulary valueSet="agent-vs" flexibility="2025"/>
+                            <element name="hl7:originalText" id="agent-text" datatype="ED"
+                                     minimumMultiplicity="0" maximumMultiplicity="1"/>
+                          </element>
+                        </element>
+                      </element>
+                    </element>
+                  </element>
+                </element>
+              </template>
+              <valueSet id="status-vs" effectiveDate="2025"><conceptList>
+                <concept code="active" codeSystem="1.2.3" displayName="Active"/>
+              </conceptList></valueSet>
+              <valueSet id="agent-vs" effectiveDate="2025"><conceptList>
+                <concept code="KNOWN" codeSystem="9.8.7" displayName="Known agent"/>
+                <exception code="OTH" codeSystem="2.16.840.1.113883.5.1008"
+                           displayName="Other"/>
+              </conceptList></valueSet>
+            </project>''', encoding="utf-8")
+            model = compile_model(transaction, [project], [project])
+            compiled = compile_cda([project], model)
+            proposal, report = cda_mapping_proposal(model, compiled, [project])
+            rule = proposal["fields"]["allergies.agent"]
+            self.assertIsInstance(rule, dict)
+            self.assertEqual(rule["transform"]["type"], "coded_fallback")
+            self.assertEqual(rule["transform"]["null_flavor"], "OTH")
+            self.assertIn("OPEN_CODED_DOMAIN", report)
+            self.assertIn("UNIQUE_DESCENDANT", report)
+            self.assertIn("YES · STRONG · INDIRECT · TRANSFORM", report)
+            _, audit, _, _ = mapping_compiler.cda_mapping_audit(
+                model, compiled, [project]
+            )
+            guide = render_cda_mapping_markdown(
+                model, compiled, proposal, audit
+            )
+            self.assertIn("Target-governed coded fallback", guide)
+            self.assertIn('`nullFlavor="OTH"`', guide)
+            self.assertIn("1 exact code/code-system pairs", guide)
+
+            field = model["fields"]["allergies.agent"]
+            raw = data.normalize_value(
+                "Latex", field, {},
+                {"null_flavor": {"unmapped_code": "UNK"}},
+            )
+            record = {
+                "key": "P1", "values": {"allergies.agent": raw},
+                "instances": {},
+            }
+            payload, problems = cda.emit(
+                record, model, compiled, proposal,
+                {"null_flavor": {"unmapped_code": "UNK"}},
+            )
+            self.assertEqual(problems, [])
+            root = ET.fromstring(payload)
+            code = root.find(
+                ".//{urn:hl7-org:v3}playingEntity/{urn:hl7-org:v3}code"
+            )
+            self.assertIsNotNone(code)
+            self.assertEqual(code.get("nullFlavor"), "OTH")
+            self.assertIsNone(code.get("code"))
+            original_text = code.find("{urn:hl7-org:v3}originalText")
+            self.assertEqual(original_text.text, "Latex")
+
+            known = apply_transform({
+                "code": "KNOWN", "codeSystem": "9.8.7", "raw": "Known agent",
+            }, rule["transform"])
+            self.assertEqual(known["code"], "KNOWN")
+            self.assertEqual(known["codeSystem"], "9.8.7")
+
+            target_name = rule["target"]
+            target_path = compiled["targets"][target_name]["path"]
+            original_text_name = next(
+                name for name, target in compiled["targets"].items()
+                if target.get("content_role") == "coded_original_text"
+                and str(target.get("path") or "").rsplit("/", 1)[0]
+                == target_path
+            )
+            ambiguous = {**compiled, "targets": dict(compiled["targets"])}
+            duplicate = {
+                **compiled["targets"][target_name],
+                "path": "hl7:ClinicalDocument/hl7:section/hl7:other/hl7:code",
+                "locations": ["0.0.999.0"],
+            }
+            duplicate_text = {
+                **compiled["targets"][original_text_name],
+                "path": duplicate["path"] + "/hl7:originalText",
+                "locations": ["0.0.999.0.0"],
+            }
+            ambiguous["targets"]["Alternative.code"] = duplicate
+            ambiguous["targets"]["Alternative.code.originalText"] = duplicate_text
+            ambiguous_proposal, _ = cda_mapping_proposal(
+                model, ambiguous, [project]
+            )
+            self.assertIsNone(ambiguous_proposal["fields"]["allergies.agent"])
 
     def test_dynamic_and_exact_requests_share_one_canonical_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

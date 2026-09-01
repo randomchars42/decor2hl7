@@ -29,6 +29,8 @@ is not necessarily an accepted clinical policy.
 | DEC-012 | External artifact supplements and waivers | open | partial |
 | DEC-013 | Compiled HL7 V3 datatype model | accepted | verified |
 | DEC-014 | Pinned CDA/RIM structural model expansion | accepted | verified |
+| DEC-015 | Project ART-DECOR associations through common CDA/RIM slots | accepted | verified |
+| DEC-016 | Empty owned coded domains and target-governed fallback | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -376,6 +378,45 @@ Evidence: `src/decor2hl7/compile/mapping.py`,
 `src/decor2hl7/transforms.py`, `tests/test_core.py`,
 `tests/test_cda_datatypes.py`,
 `docs/analyses/2026-09-01-medication-common-base-slot.md`.
+
+## DEC-016 — Empty owned coded domains and target-governed fallback
+
+**Decision:** accepted
+**Implementation:** verified
+
+An inline ART-DECOR `conceptList` is subordinate to its dataset concept. An
+empty owned list with no external reference is therefore compiled as an
+explicit `unconstrained` coded domain, not as an unresolved standalone
+ValueSet. `model.json` retains the list identifier, status and member count;
+`formal_terminology.status` distinguishes `bound`, `unconstrained`, `logical`,
+`unbound` and `unresolved` domains. Missing or incomplete external ValueSets
+remain unresolved and are never reclassified as open.
+
+An unconstrained source code may become executable below a formally mapped CDA
+container only when one unique compatible descendant:
+
+1. binds one exact target ValueSet revision;
+2. contains an explicit `OTH` exception; and
+3. exposes the coded datatype's compiled `originalText` companion.
+
+The generated `coded_fallback` transform admits a supplied code only when its
+code/code-system pair exactly matches a non-exception target member. Otherwise
+it emits `nullFlavor="OTH"` and preserves the source wording for the compiled
+`coded_original_text` role. The mapper contains no allergy field, template,
+class, ValueSet or path constant, and the renderer remains representation-
+driven. Because there is no source-to-target ConceptMap, the proposal is STRONG
+indirect evidence rather than EXACT evidence.
+
+For the selected AKTIN snapshot this resolves `Agens` to Allergy Intolerance
+Observation `playingEntity/code` through the already mapped allergy section and
+ValueSet `1.2.276.0.76.11.52`. The antibiotic and contrast-derived flags remain
+unmapped because they are diagnosis/disorder assertions rather than allergen
+identities.
+
+Evidence: `src/decor2hl7/compile/transaction.py`,
+`src/decor2hl7/compile/mapping.py`, `src/decor2hl7/compile/structural.py`,
+`src/decor2hl7/transforms.py`, `tests/test_core.py`,
+`docs/analyses/2026-09-01-open-coded-allergy.md`.
 
 ## Maintenance rule
 

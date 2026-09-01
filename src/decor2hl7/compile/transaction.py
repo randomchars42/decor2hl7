@@ -298,6 +298,48 @@ def _value_domain(domain: ET.Element, node: dict[str, Any]) -> None:
         elif kind == "conceptList":
             options: list[str] = []
             details: dict[str, dict[str, Any]] = {}
+            members = [
+                item for item in child
+                if local(item.tag) in {"concept", "exception"}
+            ]
+            references = [
+                {
+                    "kind": local(item.tag),
+                    "ref": item.get("ref") or "",
+                    "code": item.get("code") or "",
+                    "code_system": item.get("codeSystem") or "",
+                    "effective_date": (
+                        item.get("effectiveDate")
+                        or item.get("flexibility")
+                        or ""
+                    ),
+                }
+                for item in child
+                if local(item.tag) in {"include", "valueSet"}
+            ]
+            unrecognized = sorted({
+                local(item.tag) for item in child
+                if local(item.tag) not in {
+                    "concept", "exception", "include", "valueSet",
+                }
+            })
+            # A conceptList is owned by its dataset concept.  Preserve that
+            # identity even when it intentionally has no members: an empty
+            # owned list is an explicit open coded domain, not a missing
+            # standalone ValueSet artifact.
+            node["coded_domain"] = {
+                "kind": "inline_concept_list",
+                "id": child.get("id") or "",
+                "status": (
+                    "enumerated" if members else
+                    "referenced" if references else
+                    "unresolved" if unrecognized else
+                    "unconstrained"
+                ),
+                "member_count": len(members),
+                "references": references,
+                "unrecognized_children": unrecognized,
+            }
             for item in child:
                 if local(item.tag) not in {"concept", "exception"}:
                     continue
@@ -743,9 +785,30 @@ def _formal_domain_status(
             unresolved.extend(
                 dict(include) for include in value_set.get("unresolved_includes", [])
             )
+    coded_domain = field.get("coded_domain", {})
+    inline_status = (
+        str(coded_domain.get("status") or "")
+        if isinstance(coded_domain, Mapping) else ""
+    )
+    if refs:
+        status = "unresolved" if missing or unresolved else "bound"
+        complete = not missing and not unresolved
+    elif inline_status == "unconstrained":
+        status = "unconstrained"
+        complete = True
+    elif inline_status == "enumerated":
+        status = "logical"
+        complete = False
+    elif inline_status in {"referenced", "unresolved"}:
+        status = "unresolved"
+        complete = False
+    else:
+        status = "unbound"
+        complete = False
     return {
         "bound": bool(refs),
-        "complete": bool(refs) and not missing and not unresolved,
+        "status": status,
+        "complete": complete,
         "missing_value_sets": missing,
         "unresolved_includes": unresolved,
     }
@@ -882,6 +945,8 @@ def compile_model(
             "codes": node.get("codes", []),
             "terminology_associations": node.get("terminology_associations", []),
         }
+        if node.get("coded_domain"):
+            field["coded_domain"] = node["coded_domain"]
         for name in ("unit", "precision", "min_value", "max_value", "min_length", "max_length"):
             if name in node:
                 field[name] = node[name]
@@ -896,6 +961,8 @@ def compile_model(
             "value_sets": list(node.get("value_set_refs", [])),
             "members": formal_values,
             "source": "transaction-binding",
+            "status": formal_status["status"],
+            "bound": formal_status["bound"],
             "complete": formal_status["complete"],
             "missing_value_sets": formal_status["missing_value_sets"],
             "unresolved_includes": formal_status["unresolved_includes"],
