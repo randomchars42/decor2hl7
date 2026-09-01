@@ -287,7 +287,9 @@ depth. A specialized constraint inherits omitted constraints from a matching
 parent node, while parent-only prototype choices are dropped. Reused ART-DECOR
 element IDs provide structural identity when a specialization replaces a
 `contains` target; the old containment therefore cannot survive as a duplicate
-branch.
+branch. `include` and `contains` nodes preserve template provenance but add no
+XML level. An explicit element reached through them satisfies the enclosing
+CDA/RIM content particle, so the compiler does not add a second generic sibling.
 
 Fixed element text and fixed attributes are compiled as template constraints,
 not writable targets. `conformance="NP"` nodes are prohibited and never emitted.
@@ -303,6 +305,9 @@ The compiler can also retain exact, terminology-validated construction
 fallbacks from neutral template examples and compiled companion-content roles.
 Explicit mapped values take precedence. ART-DECOR XPath predicates continue to
 identify constraint branches but are never serialized as part of an XML tag.
+Generated target names keep their compact flattened form for stable mappings;
+use target `path`/`locations` or the expanded readable model when inspecting the
+actual nested CDA structure.
 
 ## Mapping configuration
 

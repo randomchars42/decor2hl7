@@ -1197,6 +1197,25 @@ def _expand_datatype_structure(
         )
 
 
+def _transparent_element_children(
+    nodes: Iterable[dict[str, Any]],
+) -> Iterable[dict[str, Any]]:
+    """Yield XML children through non-XML template expansion wrappers.
+
+    ``include`` and ``contains`` retain transparent nodes in the compiled tree
+    so their template identity and occurrence metadata remain reviewable.  They
+    do not create an XML level, however, so a CDA/RIM particle supplied by a
+    referenced template is already a child of the surrounding XML element.
+    """
+    for node in nodes:
+        if node.get("kind") == "element":
+            yield node
+        elif node.get("kind") in {"include", "template"}:
+            yield from _transparent_element_children(
+                list(node.get("children", []))
+            )
+
+
 def _expand_cda_model_structure(
     nodes: list[dict[str, Any]], definitions: dict[str, Any],
     stack: tuple[str, ...] = (),
@@ -1229,21 +1248,24 @@ def _expand_cda_model_structure(
             node.get("origin", {}).get("path") or node.get("name") or ""
         )
         if definition is not None and definition.name not in stack:
-            existing_children = {
-                _xml_key(str(item.get("name") or "")): item
-                for item in node.get("children", []) if item.get("kind") == "element"
-            }
+            existing_children: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for item in _transparent_element_children(
+                list(node.get("children", []))
+            ):
+                existing_children[
+                    _xml_key(str(item.get("name") or ""))
+                ].append(item)
             for part in definition.parts:
                 part_path = current_path + "/" + part.name
                 key = _xml_key(part.name)
                 source = _model_source(node, part_path, part.name, "cda-rim")
                 if key in existing_children:
-                    child = existing_children[key]
-                    if not child.get("datatype"):
-                        child["datatype"] = part.datatype
-                    child.setdefault("provenance", []).append({
-                        **source, "source": "template + cda-rim",
-                    })
+                    for child in existing_children[key]:
+                        if not child.get("datatype"):
+                            child["datatype"] = part.datatype
+                        child.setdefault("provenance", []).append({
+                            **source, "source": "template + cda-rim",
+                        })
                 else:
                     child = _datatype_child(
                         node, part.name, part.datatype, part.minimum, part.maximum,
@@ -1255,7 +1277,7 @@ def _expand_cda_model_structure(
                     child["sources"] = [source]
                     child["provenance"] = [source]
                     node.setdefault("children", []).append(child)
-                    existing_children[key] = child
+                    existing_children[key].append(child)
             existing_attributes = {
                 _xml_key("@" + str(item.get("name") or "")): item
                 for item in node.get("attributes", [])

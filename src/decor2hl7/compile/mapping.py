@@ -446,16 +446,25 @@ def _principal_target(
         return None
     model_type = str(field.get("type") or "")
     if not model_type:
+        # Dataset groups describe placement/occurrence structure.  A CDA/RIM
+        # container may now carry its structural class as ``datatype`` after
+        # model expansion, so datatype presence no longer distinguishes a
+        # container from a scalar value.  Use the compiled representation
+        # instead: explicit, non-writable elements with children are structural
+        # candidates; generated datatype descendants and writable endpoints are
+        # not.  The template root is the shallowest such candidate.
         containers = [
             item for item in candidates
-            if not item[1].get("datatype")
-            and re.search(
-                r"(section|observation|act|procedure|organizer|substanceAdministration|supply|encounter)$",
-                str(item[1].get("path") or ""),
-            )
+            if item[1].get("kind") == "element"
+            and item[1].get("renderable")
+            and not item[1].get("writable")
+            and not item[1].get("datatype_derived")
+            and item[1].get("has_children")
         ]
-        pool = containers or [item for item in candidates if not item[1].get("datatype")]
-        return min(pool, key=lambda item: len(str(item[1].get("path") or ""))) if pool else None
+        return min(
+            containers,
+            key=lambda item: len(str(item[1].get("path") or "")),
+        ) if containers else None
     typed = [
         item for item in candidates
         if _is_payload(model_type, item[1]) and _type_match(model_type, item[1].get("datatype"))

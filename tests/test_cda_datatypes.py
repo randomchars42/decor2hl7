@@ -750,6 +750,103 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(len(observation_value), 1)
             self.assertFalse(observation_value[0].get("writable"))
 
+    def test_contained_template_satisfies_structural_child_without_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "POCD_MT000040.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="ClinicalDocument" type="POCD_MT000040.ClinicalDocument"/>
+  <xs:complexType name="POCD_MT000040.ClinicalDocument"><xs:sequence>
+    <xs:element name="component" type="POCD_MT000040.Component3" minOccurs="1" maxOccurs="unbounded"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Component3"><xs:sequence>
+    <xs:element name="section" type="POCD_MT000040.Section"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Section"><xs:sequence>
+    <xs:element name="title" type="ST"/>
+    <xs:element name="text" type="ST" minOccurs="0"/>
+  </xs:sequence></xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            template = root / "template.xml"
+            template.write_text('''<project>
+  <template id="special-section" effectiveDate="2026" name="SpecialSection">
+    <element name="hl7:section" minimumMultiplicity="1" maximumMultiplicity="1">
+      <element name="hl7:title" datatype="ST" minimumMultiplicity="1"
+          maximumMultiplicity="1"><text>Special section</text></element>
+      <element name="hl7:text" datatype="ST" minimumMultiplicity="0"
+          maximumMultiplicity="1"/>
+    </element>
+  </template>
+  <template id="doc" effectiveDate="2026" name="Document">
+    <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+      <element name="hl7:component" contains="special-section"
+          minimumMultiplicity="1" maximumMultiplicity="1"/>
+    </element>
+  </template>
+</project>''', encoding="utf-8")
+            compiled = compile_cda(
+                [template],
+                {
+                    "meta": {
+                        "template_id": "doc",
+                        "template_effective_date": "2026",
+                    },
+                    "groups": {},
+                    "fields": {
+                        "note": {"type": "text", "repeat_chain": []},
+                    },
+                },
+                core_definition_paths=[schema],
+            )
+
+            sections: list[dict[str, object]] = []
+
+            def collect(nodes: list[dict[str, object]]) -> None:
+                for node in nodes:
+                    if node.get("name") == "hl7:section":
+                        sections.append(node)
+                    collect(list(node.get("children", [])))
+
+            collect(compiled["document"])
+            self.assertEqual(len(sections), 1)
+            self.assertEqual(sections[0]["datatype"], "POCD_MT000040.Section")
+            self.assertTrue(any(
+                item.get("source") == "template + cda-rim"
+                for item in sections[0]["provenance"]
+            ))
+            text_target, _ = target_at(
+                compiled, "hl7:section/hl7:text"
+            )
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P1",
+                    "values": {"note": "Rendered once"},
+                    "instances": {},
+                },
+                {
+                    "groups": {},
+                    "fields": {
+                        "note": {"type": "text", "repeat_chain": []},
+                    },
+                },
+                compiled,
+                {"fields": {"note": text_target}},
+                {},
+            )
+            self.assertEqual(problems, [])
+            rendered = ET.fromstring(payload)
+            rendered_sections = rendered.findall(f".//{{{HL7}}}section")
+            self.assertEqual(len(rendered_sections), 1)
+            self.assertEqual(
+                rendered_sections[0].find(f"{{{HL7}}}title").text,
+                "Special section",
+            )
+            self.assertEqual(
+                rendered_sections[0].find(f"{{{HL7}}}text").text,
+                "Rendered once",
+            )
+
     def test_catalogue_resolves_aliases_and_complex_inheritance(self) -> None:
         self.assertEqual(base_datatype("TS.DATE.MIN"), "TS")
         self.assertEqual(classify_datatype("TS.DATETIME.MIN"), "alias")

@@ -7,6 +7,44 @@ repetitions. The remaining items are boundaries where
 external protocol information or broader ART-DECOR expression coverage is
 needed; they are not silent runtime fallbacks.
 
+## Allergy payload mapping — priority 1
+
+The dataset allergy group maps structurally to Allergies and Intolerances
+section `1.2.276.0.76.10.3051`, whose effective branch contains Allergy Concern
+Act `1.2.276.0.76.10.4065` and Allergy Intolerance Observation
+`1.2.276.0.76.10.4066`. The observation fixes `code=ASSERTION` and `value=OINT`;
+the required allergen is represented at
+`participant/participantRole/playingEntity/code`, bound to ValueSet
+`1.2.276.0.76.11.52`. The section narrative is also a legal writable target.
+
+The current source fields—description, agent, antibiotic-allergy flag and
+contrast-agent-allergy flag—remain contextual rather than executable. The
+source agent concept list has no resolved members in the compiled snapshot, so
+the source-to-allergen terminology mapping cannot yet be verified. The two
+derived flags carry diagnosis/disorder concepts (`Z88.1` and `293637006`), not
+allergenic-substance codes, and must not be written directly as
+`playingEntity/code`. The next implementation must resolve agent terminology,
+choose reviewed narrative/originalText placement, and model those derived flags
+explicitly rather than pretending they are allergen identities.
+
+## Medication payload mapping — priority 2
+
+The medication section `1.2.276.0.76.3.1.195.10.64` and Medikation template
+`1.2.276.0.76.3.1.195.10.67` are structurally selected. The existing
+`for_each` correctly binds each repeated source medication to one section
+`entry` and remains required occurrence semantics.
+
+Scalar medication mappings remain open. Source association evidence points to
+PMP Material `1.2.276.0.76.10.90022`, while the effective document branch uses
+UV Medication Information (simple) `2.16.840.1.113883.10.21.4.10`. The outer
+Medikation template prohibits direct `effectiveTime`, `doseQuantity`,
+`rateQuantity` and `administrationUnitCode`; dosage belongs to repeatable UV
+Subordinate administration `2.16.840.1.113883.10.21.4.6`. Compound product,
+dose, route and schedule values, cross-template field evidence, exact
+terminology and nested occurrence alignment must therefore be resolved before
+field mappings are proposed. See
+[`analyses/2026-08-30-medication-mapping-plan.md`](analyses/2026-08-30-medication-mapping-plan.md).
+
 ## Transform vocabulary
 
 `cda-mapping.json` version 6 accepts direct target names, small declarative

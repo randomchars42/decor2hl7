@@ -353,10 +353,13 @@ The current CDA target compiles exact reachable templates, recursive `SPEC` refi
 
 It also expands CDA/RIM structural classes and the HL7 V3 datatypes declared by
 that effective template from the pinned CDA R2 XSD graph cached under `spec/`.
-ART-DECOR constraints refine the generic structure. Structural CDA nodes and
-explicit writable value targets remain distinct; mapping and rendering consume
-each target's compiled value representation instead of guessing from XML path
-names, class names, or datatype names.
+ART-DECOR constraints refine the generic structure. Transparent `include` and
+`contains` wrappers retain provenance but do not create an XML level: an
+explicit child supplied through either wrapper satisfies the corresponding
+CDA/RIM particle and is not accompanied by a second generic child. Structural
+CDA nodes and explicit writable value targets remain distinct; mapping and
+rendering consume each target's compiled value representation instead of
+guessing from XML path names, class names, or datatype names.
 
 It distinguishes:
 
@@ -578,12 +581,20 @@ The exact module split may evolve. The important invariant is the direction of d
 
 ## Development priorities
 
-1. Keep retrieval closure bounded while improving strong owner/project resolution.
-2. Stabilize artifact/form and transaction/terminology compiler contracts.
-3. Keep target-neutral dataset semantics separate from CDA semantics.
-4. Make `mapping-audit.json` the single evidence/decision source for generated mapping products.
-5. Keep the concise CDA mapping guide aligned with
+1. Resolve the allergy payload mappings from the mapped allergy section through
+   Allergy Concern Act / Allergy Intolerance Observation to narrative and the
+   bound allergen `playingEntity/code`, without treating derived diagnosis flags
+   as substance codes.
+2. Continue medication steps 3–6: represent compound source values, bind only
+   fields exposed by the active UV medication/subordinate-administration branch,
+   resolve terminology, and verify repeated output while preserving the current
+   section-entry `for_each` rule.
+3. Keep retrieval closure bounded while improving strong owner/project resolution.
+4. Stabilize artifact/form and transaction/terminology compiler contracts.
+5. Keep target-neutral dataset semantics separate from CDA semantics.
+6. Make `mapping-audit.json` the single evidence/decision source for generated mapping products.
+7. Keep the concise CDA mapping guide aligned with
    `docs/mapping-documentation-format.md` and `mapping-audit.json`.
-6. Resolve remaining diagnosis semantics without undocumented inference.
-7. Harden synthetic mapping coverage and runtime validation.
-8. Keep the target boundary suitable for a future FHIR implementation.
+8. Resolve remaining diagnosis semantics without undocumented inference.
+9. Harden synthetic mapping coverage and runtime validation.
+10. Keep the target boundary suitable for a future FHIR implementation.
