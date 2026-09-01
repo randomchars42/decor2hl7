@@ -323,6 +323,9 @@ def cmd_build(args: argparse.Namespace) -> int:
     cda = write_cda_model(
         inputs["templates"], model_dir, model,
         core_definition_paths=core_paths(release_spec_dir(root, release)),
+        value_set_paths=[
+            *inputs["model_resources"], *inputs["terminology_resources"],
+        ],
     )
     cda_mapping = write_mapping_model(
         inputs["mapping_evidence"], model_dir, model, cda
@@ -450,6 +453,76 @@ def _merge_code_mapping_defaults(source: Path, destination: Path) -> int:
     return added
 
 
+def _migrate_repeat_by_discriminator(source: Path, destination: Path) -> int:
+    """Replace generated legacy fan-out rules with their bound successor.
+
+    Migration is deliberately narrow: source fields and the shared physical
+    CDA value target must match exactly.  Hand-written fan-out rules without a
+    uniquely corresponding proposal remain untouched.
+    """
+    proposed = load_json(source)
+    current = load_json(destination)
+    proposed_structures = proposed.get("structures", {})
+    current_structures = current.get("structures", {})
+    if not isinstance(proposed_structures, Mapping) or not isinstance(current_structures, dict):
+        return 0
+
+    def identity(rule: Mapping[str, Any]) -> tuple[frozenset[str], frozenset[str]]:
+        branches = [
+            branch for branch in rule.get("branches", [])
+            if isinstance(branch, Mapping)
+        ]
+        return (
+            frozenset(str(branch.get("source") or "") for branch in branches),
+            frozenset(
+                str(branch.get("cda_target") or branch.get("target") or "")
+                for branch in branches
+            ),
+        )
+
+    replacements: dict[str, tuple[str, dict[str, Any]]] = {}
+    proposed_by_identity = {
+        identity(rule): (str(name), dict(rule))
+        for name, rule in proposed_structures.items()
+        if isinstance(rule, Mapping)
+        and rule.get("type") == "repeat_by_discriminator"
+    }
+    for old_name, old_rule in list(current_structures.items()):
+        if not isinstance(old_rule, Mapping) or old_rule.get("type") != "fan_out":
+            continue
+        replacement = proposed_by_identity.get(identity(old_rule))
+        if replacement is not None:
+            replacements[str(old_name)] = replacement
+    if not replacements:
+        return 0
+
+    fields = current.get("fields", {})
+    for old_name, (new_name, new_rule) in replacements.items():
+        del current_structures[old_name]
+        current_structures[new_name] = new_rule
+        branches = {
+            str(branch.get("source") or ""): branch
+            for branch in new_rule.get("branches", [])
+            if isinstance(branch, Mapping)
+        }
+        if isinstance(fields, dict):
+            for path, selection in list(fields.items()):
+                if not isinstance(selection, Mapping) or selection.get("structure") != old_name:
+                    continue
+                branch = branches.get(str(path))
+                if branch is None:
+                    continue
+                fields[path] = {
+                    "target": str(branch.get("target") or ""),
+                    "cda_target": str(branch.get("cda_target") or ""),
+                    "structure": new_name,
+                    **({"branch": branch["branch"]} if branch.get("branch") else {}),
+                }
+    current["version"] = max(int(current.get("version") or 0), 6)
+    write_json(destination, current)
+    return len(replacements)
+
+
 def _copy_generated_guide(source: Path, destination: Path) -> None:
     """Keep generated, read-only guidance beside the configuration it explains."""
     source = _require(source)
@@ -492,10 +565,23 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         root, release, transaction, getattr(args, "cda_mapping", None)
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if copy_if_missing(source, destination):
+    created = copy_if_missing(source, destination)
+    if created:
         _say("created " + str(destination))
     else:
-        _say("kept    " + str(destination))
+        migrated = _migrate_repeat_by_discriminator(source, destination)
+        suffix = f" (migrated {migrated} discriminator rule(s))" if migrated else ""
+        _say("kept    " + str(destination) + suffix)
+        from .compile.mapping import mapping_field_delta
+        delta = mapping_field_delta(load_json(destination), load_json(source))
+        _say(
+            "proposal coverage: "
+            f"{len(delta['preserved'])}/{delta['baseline']} accepted mappings retained, "
+            f"{len(delta['gained'])} gained, {len(delta['lost'])} proposal regression(s); "
+            "the accepted mapping remains authoritative"
+        )
+        for path in delta["lost"]:
+            _say("review  " + str(path))
     for guide_name in ("cda-mapping.md", "cda-mapping-details.md"):
         _copy_generated_guide(model_dir / guide_name, destination.parent / guide_name)
     model = load_json(_require(model_dir / "model.json"))

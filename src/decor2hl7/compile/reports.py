@@ -861,7 +861,7 @@ def render_cda_mapping_markdown(
         ]
         for name, rule in structures.items():
             kind = str(rule.get("type") or "unknown")
-            if kind == "fan_out":
+            if kind in {"fan_out", "repeat_by_discriminator"}:
                 branches = [
                     f"`{branch.get('source')}` → `{{{branch.get('target')}}}`"
                     for branch in rule.get("branches", []) if isinstance(branch, Mapping)

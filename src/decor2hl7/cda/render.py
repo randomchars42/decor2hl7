@@ -6,6 +6,8 @@ ids are provenance only; an element does not need an id to be writable.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
 import re
 import xml.etree.ElementTree as ET
 from typing import Any, Mapping
@@ -25,6 +27,10 @@ ET.register_namespace("xsi", XSI)
 
 
 def _qname(name: str) -> str:
+    # ART-DECOR uses XPath-like predicates to distinguish sibling constraint
+    # branches (for example ``hl7:id[1]`` or a coded qualifier).  The predicate
+    # selects the effective constraint; it is never part of the XML QName.
+    name = name.split("[", 1)[0]
     if name.startswith(("hl7:", "cda:")):
         return f"{{{HL7}}}{name.split(':', 1)[1]}"
     if name.startswith("xml:"):
@@ -145,6 +151,23 @@ def _write_value(
         element.set("unit", str(node["unit"]))
 
 
+def _generated_identifier(
+    marker: Mapping[str, Any], target_name: str, occurrence: tuple[int, ...]
+) -> dict[str, str]:
+    identity = "|".join((
+        str(marker.get("record_key") or ""),
+        target_name,
+        str(marker.get("document_version") or 1),
+        ".".join(str(item) for item in occurrence),
+    ))
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+    root = str(marker.get("root") or "")
+    if root:
+        return {"root": root, "extension": digest}
+    # UUID-derived OIDs are legal without a locally configured assigning root.
+    return {"root": "2.25." + str(int(digest, 16))}
+
+
 def _active_target_locations(
     cda: Mapping[str, Any], assignments: Mapping[str, Any]
 ) -> set[tuple[int, ...]]:
@@ -152,6 +175,11 @@ def _active_target_locations(
     targets = cda.get("targets", {})
     for name in assignments:
         target = targets.get(name, {})
+        if target.get("system_value") == "generated_identifier":
+            # Completion values never activate an otherwise unused optional
+            # branch; they are consumed only after an explicit descendant has
+            # selected that branch.
+            continue
         for raw in target.get("locations", []):
             try:
                 location = tuple(int(part) for part in str(raw).split("."))
@@ -162,6 +190,128 @@ def _active_target_locations(
             for length in range(1, len(location) + 1):
                 active.add(location[:length])
     return active
+
+
+def _node_target_names(node: Mapping[str, Any]) -> set[str]:
+    names = {str(name) for name in node.get("targets", [])}
+    for attr in node.get("attributes", []):
+        names.update(str(name) for name in attr.get("targets", []))
+    for child in node.get("children", []):
+        names.update(_node_target_names(child))
+    return names
+
+
+def _narrative_scalars(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [item for nested in value for item in _narrative_scalars(nested)]
+    if isinstance(value, Mapping):
+        for key in ("displayName", "display", "value", "code", "extension", "root"):
+            if value.get(key) not in (None, ""):
+                return [str(value[key])]
+        return [item for nested in value.values() for item in _narrative_scalars(nested)]
+    if value is None:
+        return []
+    if isinstance(value, bool):
+        return ["true" if value else "false"]
+    return [str(value)]
+
+
+def _complete_content_roles(
+    document: list[Mapping[str, Any]],
+    targets: Mapping[str, Mapping[str, Any]],
+    assignments: dict[str, Any],
+    explicit_names: set[str],
+) -> None:
+    """Complete compiled section roles for explicitly active sections."""
+    def assign_role(section: Mapping[str, Any], role: str, value: str) -> None:
+        def walk(nodes: list[Mapping[str, Any]]) -> None:
+            for node in nodes:
+                if node.get("content_role") == role:
+                    for raw_name in node.get("targets", []):
+                        name = str(raw_name)
+                        target = targets.get(name, {})
+                        if target.get("writable") and len(target.get("locations", [])) == 1:
+                            assignments.setdefault(name, value)
+                            return
+                walk(list(node.get("children", [])))
+        walk(list(section.get("children", [])))
+
+    def visit(nodes: list[Mapping[str, Any]]) -> None:
+        for node in nodes:
+            local_name = str(node.get("name") or "").split(":", 1)[-1].split("[", 1)[0]
+            if node.get("kind") == "element" and local_name == "section":
+                names = _node_target_names(node)
+                assigned_names = sorted(names & explicit_names)
+                if assigned_names:
+                    label = next(
+                        (
+                            str(targets[name].get("template_display_name")
+                                or targets[name].get("template_name") or "Section")
+                            for name in node.get("targets", [])
+                            if name in targets
+                        ),
+                        "Section",
+                    )
+                    values: list[str] = []
+                    for name in assigned_names:
+                        values.extend(_narrative_scalars(assignments.get(name)))
+                    narrative = "; ".join(dict.fromkeys(item for item in values if item))
+                    assign_role(node, "section_title", label)
+                    assign_role(node, "section_narrative", narrative or label)
+            visit(list(node.get("children", [])))
+    visit(document)
+
+
+def _coded_original_text(value: Any) -> Any:
+    """Preserve occurrence shape while extracting a coded value's wording."""
+    if isinstance(value, list):
+        return [_coded_original_text(item) for item in value]
+    if not isinstance(value, Mapping):
+        return None
+    for key in ("raw", "canonical", "displayName", "display"):
+        if value.get(key) not in (None, ""):
+            return value[key]
+    return None
+
+
+def _complete_value_companions(
+    document: list[Mapping[str, Any]],
+    targets: Mapping[str, Mapping[str, Any]],
+    assignments: dict[str, Any],
+) -> None:
+    """Complete datatype-defined companion values from mapped parent values.
+
+    The compiler records the relationship as a content role.  Runtime code
+    therefore remains independent of CD/CE child names and template identity.
+    """
+    def visit(nodes: list[Mapping[str, Any]]) -> None:
+        for node in nodes:
+            parent_value = next(
+                (
+                    assignments[str(name)]
+                    for name in node.get("targets", [])
+                    if str(name) in assignments
+                ),
+                None,
+            )
+            if parent_value is not None:
+                for child in node.get("children", []):
+                    if child.get("content_role") != "coded_original_text":
+                        continue
+                    value = _coded_original_text(parent_value)
+                    if value is None:
+                        continue
+                    for raw_name in child.get("targets", []):
+                        name = str(raw_name)
+                        target = targets.get(name, {})
+                        if (
+                            target.get("writable")
+                            and len(target.get("locations", [])) == 1
+                        ):
+                            assignments.setdefault(name, value)
+                            break
+            visit(list(node.get("children", [])))
+    visit(document)
 
 
 def _nested_count(value: Any, occurrence: tuple[int, ...]) -> int:
@@ -235,6 +385,17 @@ def _has_required_content(node: Mapping[str, Any]) -> bool:
     if bool(node.get("mandatory")) or int(node.get("min") or 0) >= 1:
         return True
     return False
+
+
+def _permits_null_flavor(node: Mapping[str, Any]) -> bool:
+    """Return whether the compiled representation exposes legal nullFlavor."""
+    if node.get("mandatory") or str(node.get("conformance") or "").upper() == "M":
+        return False
+    return any(
+        str(attr.get("name") or "").split(":", 1)[-1] == "nullFlavor"
+        and attr.get("optional") is not False
+        for attr in node.get("attributes", [])
+    )
 
 
 def _render_transparent(
@@ -329,6 +490,12 @@ def _render_node_once(
     occurrence: tuple[int, ...],
 ) -> list[ET.Element]:
     required = _has_required_content(node)
+    source = node.get("origin", {})
+    node_identity = str(
+        source.get("path") or node.get("name") or "CDA element"
+    )
+    if source.get("template_id"):
+        node_identity += f" [{source.get('template_id')}@{source.get('template_effective_date') or 'dynamic'}]"
 
     element = (
         ET.Element(_qname(str(node.get("name") or "element")))
@@ -339,24 +506,67 @@ def _render_node_once(
     if node.get("asserts"):
         assertion_contexts.append((element, list(node.get("asserts", [])), dict(node.get("lets", {}))))
 
+    conditional_fixed_attributes = {
+        str(attr.get("name") or "")
+        for attr in node.get("attributes", [])
+        if attr.get("conditional_fixed")
+    }
     for key, value in node.get("fixed", {}).items():
+        if str(key) in conditional_fixed_attributes:
+            continue
         if value is not None:
             element.set(_qname(str(key)), str(value))
     if node.get("fixed_text") is not None:
         element.text = str(node.get("fixed_text"))
 
+    node_representation = next(
+        (
+            cda.get("targets", {}).get(str(name), {}).get("value_representation")
+            for name in node.get("targets", [])
+            if cda.get("targets", {}).get(str(name), {}).get(
+                "value_representation"
+            )
+        ),
+        {},
+    )
+    represented_attributes = {
+        str(name)
+        for name in (
+            list(node_representation.get("attributes", []))
+            + [node_representation.get("attribute")]
+            + [node_representation.get("scalar_attribute")]
+        )
+        if name
+    }
     for attr in node.get("attributes", []):
         name = str(attr.get("name") or "")
         if not name:
             continue
-        value = attr.get("value")
+        fixed_value = attr.get("value")
+        value = None if attr.get("conditional_fixed") else fixed_value
         assigned, target_name = _value_for_attribute(attr, assignments)
         if target_name is not None:
             value = _at(assigned, occurrence)
         if isinstance(value, Mapping) and value.get("nullFlavor"):
             value = None
+        if (
+            value is not None
+            and attr.get("conditional_fixed")
+            and str(value) != str(fixed_value)
+        ):
+            raise ValueError(
+                f"CDA attribute @{name} on {node.get('name')} is fixed to "
+                f"{fixed_value!r}, not {value!r}"
+            )
         if value is None and attr.get("optional") is False:
-            raise ValueError(f"required CDA attribute @{name} on {node.get('name')} has no fixed or assigned value")
+            # Composite representations write their own scalar/metadata
+            # attributes after this loop.  Defer those checks until the
+            # representation, fixed code, or compiled fallback has executed.
+            if name not in represented_attributes:
+                raise ValueError(
+                    f"required CDA attribute @{name} on {node_identity} has no "
+                    "fixed or assigned value"
+                )
         if value is not None:
             representation = None
             if target_name is not None:
@@ -373,7 +583,15 @@ def _render_node_once(
 
     assigned, target_name = _value_for_node(node, assignments)
     if target_name is not None:
-        assigned = _at(assigned, occurrence)
+        target = cda.get("targets", {}).get(str(target_name), {})
+        if (
+            target.get("system_value") == "generated_identifier"
+            and isinstance(assigned, Mapping)
+            and assigned.get("__generated_identifier__")
+        ):
+            assigned = _generated_identifier(assigned, str(target_name), occurrence)
+        else:
+            assigned = _at(assigned, occurrence)
     default = next(
         (
             target_defaults[str(name)]
@@ -385,26 +603,28 @@ def _render_node_once(
     if assigned is not None:
         target = cda.get("targets", {}).get(str(target_name), {})
         _write_value(element, assigned, target, node)
-    elif node.get("codes"):
+    elif len(node.get("codes") or []) == 1:
         codes = node.get("codes") or []
-        if len(codes) == 1:
-            target = next(
-                (
-                    cda.get("targets", {}).get(str(name), {})
-                    for name in node.get("targets", [])
-                    if cda.get("targets", {}).get(str(name), {}).get("value_representation")
+        target = next(
+            (
+                cda.get("targets", {}).get(str(name), {})
+                for name in node.get("targets", [])
+                if cda.get("targets", {}).get(str(name), {}).get("value_representation")
+            ),
+            {},
+        )
+        _write_value(
+            element,
+            {
+                "code": codes[0].get("code"),
+                **(
+                    {"codeSystem": codes[0].get("code_system")}
+                    if codes[0].get("code_system") else {}
                 ),
-                {},
-            )
-            _write_value(
-                element,
-                {
-                    "code": codes[0].get("code"),
-                    "codeSystem": codes[0].get("code_system"),
-                },
-                target,
-                node,
-            )
+            },
+            target,
+            node,
+        )
     elif default is not None:
         default_name = next(
             (str(name) for name in node.get("targets", []) if str(name) in target_defaults),
@@ -413,6 +633,30 @@ def _render_node_once(
         _write_value(
             element, default, cda.get("targets", {}).get(default_name, {}), node
         )
+    elif isinstance(node.get("compiled_default"), Mapping):
+        compiled_default = node.get("compiled_default", {})
+        target = next(
+            (
+                cda.get("targets", {}).get(str(name), {})
+                for name in node.get("targets", [])
+                if cda.get("targets", {}).get(str(name), {}).get(
+                    "value_representation"
+                )
+            ),
+            {},
+        )
+        _write_value(element, compiled_default.get("value"), target, node)
+
+    for attr in node.get("attributes", []):
+        name = str(attr.get("name") or "")
+        if (
+            name and attr.get("optional") is False
+            and _qname(name) not in element.attrib
+        ):
+            raise ValueError(
+                f"required CDA attribute @{name} on {node_identity} has no "
+                "fixed or assigned value"
+            )
 
     child_count = 0
     for index, child in enumerate(node.get("children", [])):
@@ -430,14 +674,18 @@ def _render_node_once(
     ):
         if node.get("mandatory") or str(node.get("conformance") or "").upper() == "M":
             raise ValueError(
-                f"mandatory CDA element {node.get('name')} has no fixed, mapped, "
+                f"mandatory CDA element {node_identity} has no fixed, mapped, "
                 "or default value and cannot use nullFlavor"
             )
-        if node.get("children"):
+        if node.get("children") and not _permits_null_flavor(node):
             raise ValueError(
-                f"required complex CDA element {node.get('name')} has no fixed, "
+                f"required complex CDA element {node_identity} has no fixed, "
                 "mapped, or child value; configure a required leaf instead"
             )
+        # Scalar CDA values have always used the configured required-value
+        # nullFlavor fallback.  A complex structural value is stricter: its
+        # compiled datatype/model expansion must expose @nullFlavor before the
+        # renderer may use it in place of required child content.
         element.set("nullFlavor", null_flavor)
     return [element]
 
@@ -454,6 +702,29 @@ def emit(
     targets = cda.get("targets", {})
     assignments, problems = build_assignments(record, model, cda, mapping, site)
     target_defaults = target_default_values(cda, mapping)
+    explicit_assignment_names = set(assignments)
+
+    generation_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    organization = site.get("organization", {})
+    system_values = {
+        "document_generation_time": generation_time,
+        "custodian_organization_identifier": (
+            {"root": organization.get("oid")}
+            if isinstance(organization, Mapping) and organization.get("oid") else None
+        ),
+        "custodian_organization_name": (
+            organization.get("name") if isinstance(organization, Mapping) else None
+        ),
+    }
+    for name, target in targets.items():
+        role = str(target.get("system_value") or "")
+        value = system_values.get(role)
+        if (
+            value is not None
+            and target.get("writable")
+            and len(target.get("locations", [])) == 1
+        ):
+            assignments.setdefault(str(name), value)
 
     variables = {"key": record.get("key"), "document_version": document_version}
     document_root = site.get("identifiers", {}).get("document_root")
@@ -473,9 +744,29 @@ def emit(
         else:
             problems.append(f"site configuration references unknown, prohibited or ambiguous CDA target {name!r}")
 
+    identifier_root = str(
+        site.get("identifiers", {}).get("document_root") or ""
+    )
+    for name, target in targets.items():
+        if (
+            target.get("system_value") == "generated_identifier"
+            and target.get("writable")
+            and len(target.get("locations", [])) == 1
+        ):
+            assignments.setdefault(str(name), {
+                "__generated_identifier__": True,
+                "root": identifier_root,
+                "record_key": record.get("key"),
+                "document_version": document_version,
+            })
+
     document = cda.get("document", [])
     if not document:
         raise ValueError("compiled CDA model contains no document element")
+    _complete_value_companions(list(document), targets, assignments)
+    _complete_content_roles(
+        list(document), targets, assignments, explicit_assignment_names
+    )
     active_locations = _active_target_locations(cda, assignments)
     null_flavor = required_unmapped_null_flavor(mapping)
     roots: list[ET.Element] = []

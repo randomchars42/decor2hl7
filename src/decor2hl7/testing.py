@@ -67,7 +67,11 @@ def synthetic_value(path: str, field: Mapping[str, Any], occurrence: int = 0) ->
     if kind in {"integer", "count", "ordinal"}:
         low = field.get("min_value")
         high = field.get("max_value")
-        number = int(low) if low is not None else 1
+        # Repeating numeric fields should exercise distinct legal values.  In
+        # particular this prevents the generated fixture from manufacturing
+        # several occurrences of an order/sequence discriminator with the
+        # same value while remaining entirely model- and bound-driven.
+        number = (int(low) if low is not None else 1) + occurrence
         if high is not None:
             number = min(number, int(high))
         return str(number)

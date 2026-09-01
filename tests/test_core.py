@@ -31,6 +31,7 @@ from decor2hl7.retrieval.fetch import (
 from decor2hl7.retrieval.api import REQUIRED_PATHS, artifact_representations
 from decor2hl7.retrieval.sources import apply_source_hint, load_source_hints
 from decor2hl7.semantics import accepted_values, direct_compatibility
+from decor2hl7.transforms import apply_transform
 from decor2hl7.workspace import load_json
 from decor2hl7.workspace import (
     init_workspace, input_dir, load_json, release_spec_dir, set_release, set_transaction,
@@ -883,7 +884,7 @@ class CoreTests(unittest.TestCase):
             )
             self.assertFalse(record["problems"])
 
-    def test_fan_out_creates_side_discriminated_occurrences(self) -> None:
+    def test_repeat_by_discriminator_creates_side_discriminated_occurrences(self) -> None:
         model = {"fields": {
             "pupil.right": {"type": "text", "repeat_chain": []},
             "pupil.left": {"type": "text", "repeat_chain": []},
@@ -898,6 +899,7 @@ class CoreTests(unittest.TestCase):
                 "datatype": "CD", "path": "hl7:observation/hl7:targetSiteCode",
                 "renderable": True, "locations": ["0.0.1"],
                 "repeat_ancestors": ["0.0"],
+                "value_set_bindings": [{"id": "eye-sides", "effective_date": "2015-11-17"}],
             },
         }}
         mapping_cfg = {
@@ -912,7 +914,16 @@ class CoreTests(unittest.TestCase):
                 },
             },
             "structures": {"pupils": {
-                "type": "fan_out",
+                "type": "repeat_by_discriminator",
+                "discriminator": {
+                    "target": "Pupil.side",
+                    "value_set": {"id": "eye-sides", "effective_date": "2015-11-17"},
+                    "members": [
+                        {"code": "R", "codeSystem": "1.2.276.0.76.3.1.195.5.48"},
+                        {"code": "L", "codeSystem": "1.2.276.0.76.3.1.195.5.48"},
+                    ],
+                    "evidence_level": "STRONG",
+                },
                 "branches": [
                     {"source": "pupil.right", "target": "Pupil_right.value",
                      "cda_target": "Pupil.value", "constants": {
@@ -974,6 +985,18 @@ class CoreTests(unittest.TestCase):
             ),
             [],
         )
+        invalid = json.loads(json.dumps(mapping_cfg))
+        invalid["structures"]["pupils"]["branches"][0]["constants"]["Pupil.side"] = {
+            "code": "X", "codeSystem": "1.2.276.0.76.3.1.195.5.48",
+        }
+        self.assertTrue(any(
+            "outside the selected bound ValueSet" in error
+            for error in validate.check_config(
+                model, cda_model,
+                {"fields": {"pupil.right": None, "pupil.left": None}},
+                invalid,
+            )
+        ))
 
     def test_compiler_infers_data_driven_structural_and_certainty_rules(self) -> None:
         pupil_model = {"fields": {
@@ -994,19 +1017,26 @@ class CoreTests(unittest.TestCase):
             "Pupil.targetSiteCode": {
                 "path": "hl7:observation/hl7:targetSiteCode", "renderable": True,
                 "locations": ["0.0.1"], "repeat_ancestors": ["0", "0.0"],
-                "value_sets": ["eye-sides"],
+                "min": 1, "max": 1, "value_sets": ["eye-sides"],
+                "value_set_bindings": [{
+                    "id": "eye-sides", "effective_date": "2015-11-17",
+                }],
             },
-        }}
+        }, "assertions": [
+            {"test": "count(hl7:targetSiteCode[@code='R']) &lt;= 1"},
+            {"test": "count(hl7:targetSiteCode[@code='L']) &lt;= 1"},
+        ]}
         inferred = mapping_compiler._fanout_rule(
             ["vitals.pupil_right", "vitals.pupil_left"], "Pupil.value",
             pupil_model, pupil_cda,
-            {"eye-sides": [
-                {"code": "362502000", "codeSystem": "2.16.840.1.113883.6.96", "displayName": "Entire right eye"},
-                {"code": "362503005", "codeSystem": "2.16.840.1.113883.6.96", "displayName": "Entire left eye"},
+            {("eye-sides", "2015-11-17"): [
+                {"code": "R", "codeSystem": "1.2.276.0.76.3.1.195.5.48", "displayName": "Auge rechts", "designations": [{"language": "en-US", "displayName": "Right eye"}]},
+                {"code": "L", "codeSystem": "1.2.276.0.76.3.1.195.5.48", "displayName": "Auge links", "designations": [{"language": "en-US", "displayName": "Left eye"}]},
             ]},
         )
         self.assertIsNotNone(inferred)
         _, fanout = inferred
+        self.assertEqual(fanout["type"], "repeat_by_discriminator")
         self.assertEqual(
             [branch["target"] for branch in fanout["branches"]],
             ["Pupil_right.value", "Pupil_left.value"],
@@ -1017,7 +1047,7 @@ class CoreTests(unittest.TestCase):
         )
         self.assertEqual(
             [branch["constants"]["Pupil.targetSiteCode"]["code"] for branch in fanout["branches"]],
-            ["362502000", "362503005"],
+            ["R", "L"],
         )
 
         certainty_field = {
@@ -1083,6 +1113,88 @@ class CoreTests(unittest.TestCase):
             {"targets": {"Encounter.low": {"repeat_ancestors": []}}},
         )
         self.assertEqual(coalesced[1]["policy"], "equal_or_error")
+
+    def test_exact_bound_value_set_enum_and_field_delta(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp) / "values.xml"
+            evidence.write_text('''
+              <decor>
+                <valueSet id="angiography" effectiveDate="2024-07-22">
+                  <concept code="0" codeSystem="9.8.7" displayName="nein"/>
+                  <concept code="1" codeSystem="9.8.7" displayName="vor Aufnahme"/>
+                </valueSet>
+              </decor>
+            ''', encoding="utf-8")
+            model = {"groups": {}, "fields": {"diagnostics.angiography": {
+                "name": "Angiographie", "type": "code", "repeat_chain": [],
+                "accepted_values": {
+                    "nein": {"synonyms": ["0"]},
+                    "vor Aufnahme": {"synonyms": ["1"]},
+                },
+            }}}
+            target = {
+                "template_id": "observation", "path": "hl7:observation/hl7:value",
+                "datatype": "CV", "renderable": True, "writable": True,
+                "locations": ["0.0"], "repeat_ancestors": [],
+                "logical_types": ["code", "ordinal"],
+                "value_representation": {"kind": "coded"},
+                "value_sets": ["angiography"],
+            }
+            proposal, _ = mapping_compiler.cda_mapping_proposal(
+                model, {"targets": {"Observation.value": target}}, [evidence]
+            )
+            rule = proposal["fields"]["diagnostics.angiography"]
+            self.assertEqual(rule["target"], "Observation.value")
+            self.assertEqual(
+                rule["transform"]["map"]["vor Aufnahme"]["code"], "1"
+            )
+            delta = mapping_compiler.mapping_field_delta(
+                {"fields": {"a": "A", "b": "B", "c": None}},
+                {"fields": {"a": "A2", "b": None, "c": "C"}},
+            )
+            self.assertEqual(delta["preserved"], ["a"])
+            self.assertEqual(delta["lost"], ["b"])
+            self.assertEqual(delta["gained"], ["c"])
+
+    def test_semantic_negation_transform_beats_unrelated_named_code_slot(self) -> None:
+        model = {"groups": {}, "fields": {"measures.isolation": {
+            "name": "Isolation", "short_name": "Isolation", "concept": "isolation",
+            "type": "code", "repeat_chain": [], "value_sets": [], "codes": [],
+            "accepted_values": {
+                "Patient muss isoliert werden": {"synonyms": []},
+                "Patient muss nicht isoliert werden": {"synonyms": []},
+            },
+        }}}
+        common = {
+            "template_id": "isolation", "template_name": "isolation",
+            "template_display_name": "Isolation", "renderable": True,
+            "writable": True, "locations": ["0.0"], "repeat_ancestors": [],
+            "datatype_derived": False,
+        }
+        cda_model = {"targets": {
+            "isolation.statusCode": {
+                **common, "path": "hl7:observation/hl7:statusCode", "datatype": "CS",
+                "value_representation": {"kind": "coded"}, "logical_types": ["code"],
+            },
+            "isolation.negationInd": {
+                **common, "path": "hl7:observation/@negationInd", "datatype": "BL",
+                "value_representation": {"kind": "boolean"}, "logical_types": ["boolean"],
+            },
+        }}
+        proposal, audit, _, _ = mapping_compiler.cda_mapping_audit(
+            model, cda_model, []
+        )
+        self.assertEqual(proposal["fields"]["measures.isolation"], [{
+            "target": "isolation.negationInd",
+            "transform": {"type": "enum", "map": {
+                "Patient muss isoliert werden": False,
+                "Patient muss nicht isoliert werden": True,
+            }},
+        }])
+        self.assertEqual(
+            audit["fields"]["measures.isolation"]["alternatives"][0]["target"],
+            "isolation.statusCode",
+        )
 
     def test_compiler_infers_shared_section_entry_occurrences(self) -> None:
         model = {
@@ -2572,7 +2684,14 @@ class CoreTests(unittest.TestCase):
     def test_uncoded_code_option_becomes_oth_until_mapped_to_real_code(self) -> None:
         field = {"type": "code", "values": {"Label": {"display_name": "Label"}, "Coded": {"code": "A", "code_system": "9", "display_name": "Coded"}}}
         site = {"null_flavor": {"unmapped_code": "OTH"}}
-        self.assertEqual(data.normalize_value("Label", field, {}, site)["nullFlavor"], "OTH")
+        logical = data.normalize_value("Label", field, {}, site)
+        self.assertEqual(logical["nullFlavor"], "OTH")
+        self.assertEqual(
+            apply_transform(logical, {
+                "type": "ordinal", "map": {"Label": 2},
+            }),
+            2,
+        )
         coded = data.normalize_value("Label", field, {"Label": "Coded"}, site)
         self.assertEqual(coded["code"], "A")
         self.assertEqual(coded["codeSystem"], "9")

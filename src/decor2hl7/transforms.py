@@ -55,10 +55,13 @@ def selected_cda_targets(value: Any) -> list[str]:
 def _selected_value(value: Any, transform: Mapping[str, Any]) -> Any:
     """Select the part of a normalized value used as a transform key.
 
-    The old implicit order is retained when ``select`` is absent.  An explicit
-    selector is important for terminology transforms: a user-facing canonical
-    label may change while the formal code (for example ``A`` or ``Z``) does
-    not.
+    The old implicit order is retained when ``select`` is absent.  If a known
+    logical choice has no formal terminology code, normalization represents it
+    as ``nullFlavor=OTH`` but preserves its raw label; use that label as the
+    final implicit key so reviewed legacy enum/ordinal transforms remain
+    executable.  An explicit selector is important for terminology transforms:
+    a user-facing canonical label may change while the formal code (for example
+    ``A`` or ``Z``) does not.
     """
     selector = str(transform.get("select") or "")
     if selector:
@@ -80,6 +83,7 @@ def _selected_value(value: Any, transform: Mapping[str, Any]) -> Any:
             or value.get("displayName")
             or value.get("display_name")
             or value.get("code")
+            or value.get("raw")
         )
     return value
 

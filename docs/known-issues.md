@@ -1,20 +1,22 @@
 # Known boundaries after the 0.1.0 correctness pass
 
 The 0.1.0 rewrite now supports declarative semantic transforms, formal
-ART-DECOR assertion enforcement, transitive identity-lineage enrichment and
-explicitly keyed nested repetitions. The remaining items are boundaries where
+ART-DECOR assertion enforcement, transitive identity-lineage enrichment,
+explicitly keyed nested repetitions and specification-derived discriminated
+repetitions. The remaining items are boundaries where
 external protocol information or broader ART-DECOR expression coverage is
 needed; they are not silent runtime fallbacks.
 
 ## Transform vocabulary
 
-`cda-mapping.json` version 5 accepts direct target names, small declarative
+`cda-mapping.json` version 6 accepts direct target names, small declarative
 rules, and explicit structural bindings. The built-in scalar transform vocabulary is deliberately limited to `identity`,
 `enum`, `ordinal`, and `not`. The generated proposal uses it for the currently
 proven AKTIN semantics for Tetanusschutz, Isolation, modified Rankin, and
-diagnosis certainty. Structural `for_each`, `fan_out`, and `coalesce` behavior is
-implemented in the generic binding layer and is generated only from formal
-repeat/discriminator evidence.
+diagnosis certainty. Structural `for_each`, `repeat_by_discriminator`, and
+`coalesce` behavior is implemented in the generic binding layer and is generated
+only from formal repeat/discriminator evidence. Legacy reviewed `fan_out`
+configuration remains executable for compatibility.
 
 A future concept whose ART-DECOR representation needs a different structural or
 computed transformation remains evidence-linked but non-executable until an
@@ -134,12 +136,16 @@ If a future source format has no stable occurrence identifier for independent
 nested streams, the ambiguity must be resolved in source configuration; the
 runtime will not invent an association by zipping rows.
 
-HL7 datatype expansion (`DEC-013`) does not replace these occurrence rules. It
+HL7/CDA model expansion (`DEC-013`/`DEC-014`) does not replace these occurrence rules. It
 can expose legal value components below the active medication template, but it
 does not establish which repeated dataset medication owns which CDA entry. The
-reviewed medication `for_each` and pupil-side `fan_out` therefore remain in the
-generated mapping unless later specification evidence provides an equivalent
-explicit occurrence binding.
+reviewed medication `for_each` therefore remains. Pupil laterality is now a
+`repeat_by_discriminator` instance derived from the repeatable pupil templates,
+required `targetSiteCode`, exact AKTIN L/R ValueSet revision, unique German
+designation matches and Schematron uniqueness assertions. The remaining
+right/left source-facet correspondence is STRONG terminology evidence rather
+than an explicit ConceptMap; if that match ceases to be unique, generation must
+stop and require review.
 
 ## CDA narrative
 

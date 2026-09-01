@@ -28,7 +28,7 @@ is not necessarily an accepted clinical policy.
 | DEC-011 | Mapping evidence and documentation | accepted | verified |
 | DEC-012 | External artifact supplements and waivers | open | partial |
 | DEC-013 | Compiled HL7 V3 datatype model | accepted | verified |
-| DEC-014 | Pinned CDA/RIM structural model expansion | accepted | implemented |
+| DEC-014 | Pinned CDA/RIM structural model expansion | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -125,13 +125,18 @@ Structural semantics are explicit and declarative:
   source group become one shared container; this permits one medication section
   containing one entry per repeated dataset medication without positional
   guessing;
-- `fan_out` creates discriminated target occurrences, including separate logical
-  `Pupilsize_right.value` and `Pupilsize_left.value` datapoints backed by the
-  repeatable physical `Pupilsize.value`;
+- `repeat_by_discriminator` creates discriminated target occurrences only from
+  a shared repeatable target, one required coded discriminator, its exact bound
+  ValueSet revision and a unique terminology-supported source-facet/member
+  correspondence. Pupil size/reaction use the AKTIN L/R eye ValueSet and retain
+  Schematron uniqueness as evidence;
 - `coalesce` shares equivalent singleton targets and defaults to
   `equal_or_error`;
 - `mode: fallback` fills an absent leaf per occurrence without replacing a real
   value.
+
+Legacy reviewed `fan_out` remains executable. `init-cda-mapping` migrates it only
+when a generated replacement proves the same sources and physical CDA target.
 
 Evidence: `src/decor2hl7/compile/structural.py`,
 `src/decor2hl7/bindings.py`, `src/decor2hl7/validate.py`,
@@ -250,18 +255,18 @@ Evidence: `docs/analyses/2026-08-30-external-artifact-phase-1.md`,
 `src/decor2hl7/retrieval/sources.py`,
 `src/decor2hl7/retrieval/fetch.py`, `tests/test_external_sources.py`.
 
-## DEC-013 — Compiled HL7 V3 datatype model
+## DEC-013 — Compiled HL7 V3 datatype/value model
 
 **Decision:** accepted
 **Implementation:** verified
 
-CDA compilation combines the fully resolved ART-DECOR constraint tree with a
-deterministic HL7 V3 datatype catalogue before mapping begins. The catalogue is
-compiler knowledge derived from HL7 Version 3 Data Types Release 2 and CDA R2;
-it is package-local and requires no build-time network access. The effective
-template produces its datatype inventory automatically. Every declared type is
-classified as a datatype, constrained alias, structural model type, or explicit
-unsupported error.
+CDA compilation combines the fully resolved ART-DECOR constraint tree with the
+pinned CDA R2 XSD definition graph before mapping begins. The graph supplies
+datatype structure, aliases and inheritance; the package-local datatype module
+retains only scalar XML serialization policy. The effective template produces
+its model inventory automatically. Every declared type is classified as a
+datatype, constrained alias, structural model type, or explicit unsupported
+error.
 
 The compiled target model distinguishes structural nodes from writable value
 targets. Every writable target carries a compiled value representation (element
@@ -277,8 +282,9 @@ CDA-specific compilation, datatype modelling and rendering live in
 `decor2hl7.cda`. Generated `cda.json`, mappings and documentation are rebuilt;
 no compatibility adapter for the former generated representation is retained.
 Structural occurrence rules from `DEC-007`, including medication `for_each` and
-pupil-side `fan_out`, remain authoritative because datatype expansion supplies
-legal XML value structure, not source/target occurrence semantics.
+specification-derived pupil `repeat_by_discriminator`, remain authoritative
+because datatype expansion supplies legal XML value structure, not
+source/target occurrence semantics.
 
 Evidence: `src/decor2hl7/cda/`, `src/decor2hl7/semantics.py`,
 `tests/test_cda_datatypes.py`, `tests/test_core.py`.
@@ -286,7 +292,7 @@ Evidence: `src/decor2hl7/cda/`, `src/decor2hl7/semantics.py`,
 ## DEC-014 — Pinned CDA/RIM structural model expansion
 
 **Decision:** accepted
-**Implementation:** implemented
+**Implementation:** verified
 
 `fetch` caches the official HL7 CDA R2 normative XSD definition set pinned to
 commit `e922fc35586fd2629f0c8a021080bca9ab424e18`. CDA compilation indexes XSD
@@ -295,11 +301,28 @@ names procedurally, overlays ART-DECOR constraints, and then runs datatype/value
 representation expansion. Generated nodes retain `cda-rim`, `datatype`, or
 combined template provenance. Mapping and rendering contain no per-class rules.
 
-Medication `for_each` and pupil-side `fan_out` remain under DEC-007 because the
-model describes legal XML structure, not occurrence ownership or laterality.
+Medication `for_each` remains under DEC-007 because the model describes legal
+XML structure, not occurrence ownership. Pupil laterality is derived separately
+as `repeat_by_discriminator` from repeat cardinality, required
+`targetSiteCode`, the exact bound L/R ValueSet, terminology designations and
+Schematron uniqueness evidence.
+
+ART-DECOR element ids are not assumed unique inside one template. Physical
+source identity also includes the effective date and template-local path,
+preventing fixed constraints from distinct revisions or sibling branches from
+being overlaid or verified against each other.
+
+Neutral example codes become construction fallbacks only when scoped to that
+same exact template/path identity and uniquely admitted by the exact effective
+terminology constraint. Coded source wording and other companion content are
+carried by compiled roles. ART-DECOR XPath predicates remain constraint
+identity, never serialized QName text. These rules preserve the compiled-model
+boundary: the renderer consumes representations, fallbacks and roles without
+class-, datatype- or template-specific dispatch.
 
 Evidence: `src/decor2hl7/cda/core.py`, `src/decor2hl7/cda/compile.py`,
-`tests/test_cda_datatypes.py`.
+`tests/test_cda_datatypes.py`,
+`docs/analyses/2026-08-31-cda-mapping-recovery.md`.
 
 ## Maintenance rule
 
