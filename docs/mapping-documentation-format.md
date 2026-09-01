@@ -133,6 +133,8 @@ Use execution-oriented status labels:
 - **Transform** — executable after a declarative transformation;
 - **Structural rule** — repetition, repeat-by-discriminator or coalescing
   controls assignment;
+- **Presence rule** — a boolean activates an optional statement whose payload
+  is fixed by the target template; false omits the statement;
 - **Rule** — another executable multi-target or fallback rule;
 - **Review required** — no executable mapping has been approved.
 

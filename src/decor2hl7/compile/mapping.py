@@ -14,7 +14,7 @@ from typing import Any, Iterable, Mapping
 from ..retrieval.xml import child_text, local, parse_file
 from ..workspace import write_json
 from ..semantics import (
-    accepted_values, direct_compatibility, payload_match,
+    accepted_values, base_datatype, direct_compatibility, payload_match,
     transformed_compatibility, type_match,
 )
 from ..transforms import cda_target_name, mapping_rules
@@ -403,7 +403,7 @@ def _association_slots(
         for target in references if target.get("path")
     }
     reference_types = {
-        str(target.get("datatype") or "").upper()
+        base_datatype(target.get("datatype"))
         for target in references if target.get("datatype")
     }
     for target in cda.get("targets", {}).values():
@@ -413,7 +413,7 @@ def _association_slots(
             for path in reference_paths
         ):
             continue
-        if reference_types and str(target.get("datatype") or "").upper() not in reference_types:
+        if reference_types and base_datatype(target.get("datatype")) not in reference_types:
             continue
         slots.update(_rim_slots(target))
     return slots
@@ -1082,6 +1082,95 @@ def _semantic_transform_candidates(
                 ))
                 break
 
+    # 1b) A boolean dataset field can represent presence/absence of a uniquely
+    # located coded act.  The target template supplies the clinical code; CDA
+    # negationInd supplies the boolean representation.
+    if str(field.get("type") or "") == "boolean":
+        from ..bindings import presence_target_complete
+
+        found_negation = False
+        for tid, confidence in template_ids:
+            negations = [
+                (name, target) for name, target in targets.items()
+                if target.get("writable") and len(target.get("locations", [])) == 1
+                and str(target.get("template_id") or "") == tid
+                and str(target.get("path") or "").endswith("/@negationInd")
+            ]
+            explicit_negations = [
+                item for item in negations if not item[1].get("datatype_derived")
+            ]
+            if explicit_negations:
+                negations = explicit_negations
+            if len(negations) != 1:
+                continue
+            name, target = negations[0]
+            transform = {"type": "not"}
+            compatible, reasons = transformed_compatibility(
+                field, target, transform,
+            )
+            if compatible:
+                result.append(_candidate(
+                    name, target,
+                    ["SEMANTIC_ACT", "TRANSFORM(boolean→negationInd)"],
+                    confidence, 97 if confidence == "MEDIUM" else 73,
+                    kind="BOOLEAN_PRESENCE", actionable=True,
+                    mapping={"target": name, "transform": transform},
+                    warnings=[
+                        "coded act presence represented by inverse CDA negationInd"
+                    ],
+                ))
+                found_negation = True
+                break
+
+        # Some optional statements express a boolean solely through their
+        # occurrence: when present, every clinical payload is fixed by the
+        # template.  A direct source terminology association may locate that
+        # template even though it deliberately exposes no writable value.
+        # Keep this as an explicit presence assignment to the structural root;
+        # it is not a scalar CDA value target.
+        if not found_negation:
+            exact_terms = {
+                (str(code.get("code") or ""), str(code.get("code_system") or ""))
+                for code in field.get("codes", [])
+                if isinstance(code, Mapping)
+                and str(code.get("equivalence") or "equal") == "equal"
+                and code.get("code") and code.get("code_system")
+            }
+            for tid, _ in template_ids:
+                fixed_terms = {
+                    (str(code.get("code") or ""), str(code.get("code_system") or ""))
+                    for target in targets.values()
+                    if str(target.get("template_id") or "") == tid
+                    for code in target.get("codes", [])
+                    if isinstance(code, Mapping)
+                    and code.get("code") and code.get("code_system")
+                }
+                roots = [
+                    (name, target) for name, target in targets.items()
+                    if str(target.get("template_id") or "") == tid
+                    and target.get("kind") == "element"
+                    and target.get("renderable")
+                    and target.get("has_children")
+                    and len(target.get("locations", [])) == 1
+                    and "/" not in str(target.get("path") or "")
+                ]
+                if not exact_terms & fixed_terms or len(roots) != 1:
+                    continue
+                name, target = roots[0]
+                if not presence_target_complete(cda, target):
+                    continue
+                result.append(_candidate(
+                    name, target,
+                    ["TERM(EXACT)", "ARTDECOR_FIXED_STATEMENT", "PRESENCE(boolean)"],
+                    "MEDIUM", 96, kind="CONDITIONAL_PRESENCE",
+                    actionable=True,
+                    mapping={"target": name, "mode": "presence"},
+                    warnings=[
+                        "boolean true emits the optional fixed statement; false omits it"
+                    ],
+                ))
+                break
+
     # 2) Coded ordinal represented as PQ/INT/REAL score.
     ordinal_map = {
         str(label): info.get("ordinal")
@@ -1166,23 +1255,21 @@ def _unbridged_writable_candidates(
     cda: Mapping[str, Any],
     occurrence_mapping: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    """Expose one exact-name writable descendant without selecting it.
+    """Resolve one explicit ART-DECOR leaf role below a mapped container.
 
-    This is deliberately report-only evidence.  Exact source/leaf wording and
-    runtime compatibility can show a reviewer that a physical destination
-    exists, but cannot replace a formal ART-DECOR bridge.
+    A unique exact short-name/leaf match is not global lexical guessing: the
+    enclosing dataset group has already selected the target template and the
+    target leaf is an explicit ART-DECOR constraint.  Datatype-derived leaves
+    remain excluded because names such as ``value`` recur throughout the CDA
+    datatype graph.
     """
     context_node = context.get("node", {}) if isinstance(context, Mapping) else {}
     if not isinstance(context_node, Mapping) or not context_node:
         return []
-    source_names = {
-        _norm(str(field.get(key) or ""))
-        for key in ("name", "short_name")
-        if field.get(key)
-    }
-    source_names.discard("")
-    if not source_names:
+    source_name = _norm(str(field.get("short_name") or ""))
+    if not source_name:
         return []
+    source_words = _semantic_words(str(field.get("name") or ""))
     matches: list[tuple[str, Mapping[str, Any]]] = []
     for name, target in cda.get("targets", {}).items():
         if (
@@ -1195,15 +1282,17 @@ def _unbridged_writable_candidates(
             continue
         leaf = str(target.get("path") or target.get("element_name") or "").rsplit("/", 1)[-1]
         leaf = leaf.lstrip("@").split(":", 1)[-1]
-        target_names = {
-            _norm(leaf),
-            _norm(str(target.get("description") or "")),
-        }
-        target_names.discard("")
-        if not source_names & target_names:
+        description_words = _semantic_words(str(target.get("description") or ""))
+        if (
+            source_name != _norm(leaf)
+            and not (
+                target.get("polymorphic")
+                and source_words and source_words <= description_words
+            )
+        ):
             continue
-        compatible, _ = _direct(
-            field, target, cda=cda, occurrence_mapping=occurrence_mapping,
+        compatible, _ = _context_direct(
+            field, target, context_node, cda, occurrence_mapping,
         )
         if compatible:
             matches.append((str(name), target))
@@ -1211,9 +1300,133 @@ def _unbridged_writable_candidates(
         return []
     name, target = matches[0]
     return [_candidate(
-        name, target, ["WRITABLE_NAME"], "WEAK", 20,
-        kind="WRITABLE_NAME", actionable=False, suggested=True,
-        warnings=["writable target exists, but no formal association was found"],
+        name, target,
+        list(context.get("chain", [])) + [f"ARTDECOR_ROLE({source_name})"],
+        "MEDIUM", 74,
+        kind="ARTDECOR_ROLE", actionable=True,
+        warnings=[
+            "selected by a unique explicit ART-DECOR leaf role inside the mapped container"
+        ],
+    )]
+
+
+def _context_description_candidates(
+    field: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    cda: Mapping[str, Any],
+    occurrence_mapping: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Project an exact ART-DECOR description through its CDA descendants."""
+    context_node = context.get("node", {}) if isinstance(context, Mapping) else {}
+    if not isinstance(context_node, Mapping) or not context_node:
+        return []
+    labels = {
+        _norm(str(field.get(key) or ""))
+        for key in ("name", "description") if field.get(key)
+    }
+    labels.discard("")
+    if not labels:
+        return []
+
+    targets = cda.get("targets", {})
+    selected: dict[str, tuple[Mapping[str, Any], str, bool]] = {}
+    for anchor_name, anchor in targets.items():
+        description = _norm(str(anchor.get("description") or ""))
+        if (
+            not description or description not in labels
+            or anchor.get("prohibited")
+            or len(anchor.get("locations", [])) != 1
+            or not _is_descendant_target(anchor, context_node)
+        ):
+            continue
+        compatible, _ = _context_direct(
+            field, anchor, context_node, cda, occurrence_mapping,
+        )
+        if anchor.get("writable") and compatible:
+            selected[str(anchor_name)] = (anchor, str(anchor_name), False)
+            continue
+
+        descendants: list[tuple[int, str, Mapping[str, Any]]] = []
+        anchor_path = str(anchor.get("path") or "").rstrip("/")
+        for name, target in targets.items():
+            target_path = str(target.get("path") or "")
+            if (
+                not anchor_path or not target_path.startswith(anchor_path + "/")
+                or not target.get("writable") or target.get("prohibited")
+                or target.get("datatype_derived")
+                or len(target.get("locations", [])) != 1
+                or not _is_descendant_target(target, context_node)
+            ):
+                continue
+            compatible, _ = _context_direct(
+                field, target, context_node, cda, occurrence_mapping,
+            )
+            if compatible:
+                descendants.append((target_path.count("/"), str(name), target))
+        if not descendants:
+            continue
+        deepest = max(depth for depth, _, _ in descendants)
+        leaves = [(name, target) for depth, name, target in descendants if depth == deepest]
+        if len(leaves) == 1:
+            name, target = leaves[0]
+            selected[name] = (target, str(anchor_name), True)
+
+    if len(selected) != 1:
+        return []
+    name, (target, anchor_name, projected) = next(iter(selected.items()))
+    return [_candidate(
+        name, target,
+        list(context.get("chain", [])) + [
+            f"ARTDECOR_DESC({anchor_name})",
+            *( ["CDA_DESCENDANT"] if projected else [] ),
+        ],
+        "MEDIUM", 90 if projected else 93,
+        kind="ARTDECOR_DESCENDANT" if projected else "ARTDECOR_DESC",
+        actionable=True,
+        warnings=[
+            "selected by an exact source/ART-DECOR description inside the mapped container"
+        ],
+    )]
+
+
+def _section_narrative_candidates(
+    field: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    cda: Mapping[str, Any],
+    occurrence_mapping: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Use the one compiled section narrative for a contextual text field."""
+    if str(field.get("type") or "") != "text":
+        return []
+    context_node = context.get("node", {}) if isinstance(context, Mapping) else {}
+    if (
+        not isinstance(context_node, Mapping)
+        or str(context_node.get("path") or "").rsplit("/", 1)[-1].partition("[")[0]
+        not in {"hl7:section", "section"}
+    ):
+        return []
+    matches: list[tuple[str, Mapping[str, Any]]] = []
+    for name, target in cda.get("targets", {}).items():
+        if (
+            target.get("content_role") != "section_narrative"
+            or not target.get("writable") or target.get("prohibited")
+            or len(target.get("locations", [])) != 1
+            or not _is_descendant_target(target, context_node)
+        ):
+            continue
+        compatible, _ = _context_direct(
+            field, target, context_node, cda, occurrence_mapping,
+        )
+        if compatible:
+            matches.append((str(name), target))
+    if len(matches) != 1:
+        return []
+    name, target = matches[0]
+    return [_candidate(
+        name, target,
+        list(context.get("chain", [])) + ["CDA_ROLE(section_narrative)"],
+        "MEDIUM", 82, kind="SECTION_NARRATIVE", actionable=True,
+        warnings=["selected from the compiled CDA section narrative role"],
     )]
 
 
@@ -1285,6 +1498,181 @@ def _is_descendant_target(
     return bool(root_path and target_path.startswith(root_path + "/"))
 
 
+def _context_direct(
+    field: Mapping[str, Any],
+    target: Mapping[str, Any],
+    context_node: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    occurrence_mapping: Mapping[str, Any] | None,
+) -> tuple[bool, list[str]]:
+    """Check payload compatibility with one contextual singleton branch.
+
+    A repeated dataset group can be located at a repeatable CDA container
+    before its generated ``for_each`` rule exists.  A descendant may add
+    optional repeat levels; one source value then activates one singleton
+    branch within the already matched contextual occurrence.
+    """
+    compatible, warnings = _direct(
+        field, target, cda=cda, occurrence_mapping=occurrence_mapping,
+    )
+    repeat_warnings = [
+        warning for warning in warnings if warning.startswith("dataset has ")
+    ]
+    if compatible or len(repeat_warnings) != len(warnings):
+        return compatible, warnings
+    source_depth = len(field.get("repeat_chain", []))
+    context_repeats = list(context_node.get("repeat_ancestors", []))
+    target_repeats = list(target.get("repeat_ancestors", []))
+    if (
+        source_depth == len(context_repeats)
+        and target_repeats[:len(context_repeats)] == context_repeats
+    ):
+        return True, []
+    return compatible, warnings
+
+
+def _choice_branch_candidates(
+    field: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    cda: Mapping[str, Any],
+    occurrence_mapping: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Select a scalar endpoint from one ART-DECOR choice particle.
+
+    Predicates distinguish alternative representations of the same CDA/RIM
+    particle.  Prefer a directly compatible atomic branch; otherwise follow
+    the selected complex datatype and require one unique compatible child.
+    """
+    context_node = context.get("node", {}) if isinstance(context, Mapping) else {}
+    if not isinstance(context_node, Mapping) or not context_node:
+        return []
+    targets = cda.get("targets", {})
+    anchors = [
+        (str(name), target)
+        for name, target in targets.items()
+        if (
+            target.get("kind") == "element"
+            and not target.get("datatype_derived")
+            and "[" in str(target.get("path") or "").rsplit("/", 1)[-1]
+            and len(target.get("locations", [])) == 1
+            and not target.get("prohibited")
+            and _is_descendant_target(target, context_node)
+        )
+    ]
+    direct: list[tuple[str, Mapping[str, Any]]] = []
+    for name, target in anchors:
+        compatible, _ = _context_direct(
+            field, target, context_node, cda, occurrence_mapping,
+        )
+        if compatible and not target.get("has_children"):
+            direct.append((name, target))
+    if len(direct) == 1:
+        name, target = direct[0]
+        return [_candidate(
+            name, target,
+            list(context.get("chain", [])) + ["ARTDECOR_CHOICE(atomic)"],
+            "STRONG", 95, kind="ARTDECOR_CHOICE", actionable=True,
+        )]
+
+    descendants: dict[str, Mapping[str, Any]] = {}
+    for _, anchor in anchors:
+        anchor_path = str(anchor.get("path") or "").rstrip("/")
+        for name, target in targets.items():
+            target_path = str(target.get("path") or "")
+            if (
+                not anchor_path or not target_path.startswith(anchor_path + "/")
+                or not target.get("writable") or target.get("prohibited")
+                or len(target.get("locations", [])) != 1
+            ):
+                continue
+            compatible, _ = _context_direct(
+                field, target, context_node, cda, occurrence_mapping,
+            )
+            if compatible:
+                descendants[str(name)] = target
+    if len(descendants) != 1:
+        return []
+    name, target = next(iter(descendants.items()))
+    return [_candidate(
+        name, target,
+        list(context.get("chain", [])) + [
+            "ARTDECOR_CHOICE(complex)", "HL7_DATATYPE_DESCENDANT",
+        ],
+        "STRONG", 94, kind="ARTDECOR_CHOICE", actionable=True,
+    )]
+
+
+def _repeat_scope_candidates(
+    field: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    cda: Mapping[str, Any],
+    occurrence_mapping: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Resolve a direct group field at its compiled CDA occurrence boundary.
+
+    A ``for_each`` rule establishes one target occurrence for a repeated source
+    group.  For a field directly owned by that group, the nearest unique
+    compatible writable descendant represents the occurrence-level value,
+    rather than a deeper child-statement value.  This is especially useful for
+    organizer timestamps and remains independent of clinical class names.
+    """
+    repeat_chain = [str(value) for value in field.get("repeat_chain", [])]
+    if not repeat_chain or str(field.get("parent") or "") != repeat_chain[-1]:
+        return []
+    structures = (
+        occurrence_mapping.get("structures", {})
+        if isinstance(occurrence_mapping, Mapping) else {}
+    )
+    for_each = next((
+        rule for rule in structures.values()
+        if isinstance(rule, Mapping)
+        and rule.get("type") == "for_each"
+        and str(rule.get("source_group") or "") == repeat_chain[-1]
+    ), None)
+    if not isinstance(for_each, Mapping):
+        return []
+    anchor_name = str(for_each.get("target_repeat") or "")
+    anchor = cda.get("targets", {}).get(anchor_name, {})
+    anchor_locations = list(anchor.get("locations", []))
+    context_node = context.get("node", {}) if isinstance(context, Mapping) else {}
+    if len(anchor_locations) != 1 or not isinstance(context_node, Mapping):
+        return []
+    anchor_parts = str(anchor_locations[0]).split(".")
+    matches: list[tuple[int, str, Mapping[str, Any]]] = []
+    for name, target in cda.get("targets", {}).items():
+        locations = list(target.get("locations", []))
+        if (
+            not target.get("writable") or target.get("prohibited")
+            or len(locations) != 1
+            or not str(locations[0]).startswith(str(anchor_locations[0]) + ".")
+            or not _is_descendant_target(target, context_node)
+        ):
+            continue
+        compatible, _ = _context_direct(
+            field, target, context_node, cda, occurrence_mapping,
+        )
+        if compatible:
+            distance = len(str(locations[0]).split(".")) - len(anchor_parts)
+            matches.append((distance, str(name), target))
+    if not matches:
+        return []
+    nearest = min(distance for distance, _, _ in matches)
+    winners = [(name, target) for distance, name, target in matches if distance == nearest]
+    if len(winners) != 1:
+        return []
+    name, target = winners[0]
+    return [_candidate(
+        name, target,
+        list(context.get("chain", [])) + [
+            f"FOR_EACH({repeat_chain[-1]})", "NEAREST_WRITABLE_DESCENDANT",
+        ],
+        "STRONG", 94, kind="REPEAT_SCOPE", actionable=True,
+        warnings=[
+            "selected at the occurrence boundary established by the generated for_each rule"
+        ],
+    )]
+
+
 def _context_descendant_candidates(
     field: Mapping[str, Any],
     context: Mapping[str, Any] | None,
@@ -1311,9 +1699,8 @@ def _context_descendant_candidates(
             or not _is_descendant_target(target, context_node)
         ):
             continue
-        compatible, _ = _direct(
-            field, target, cda=cda,
-            occurrence_mapping=occurrence_mapping,
+        compatible, _ = _context_direct(
+            field, target, context_node, cda, occurrence_mapping,
         )
         if not compatible:
             continue
@@ -1717,6 +2104,14 @@ def _cda_mapping_analysis(
         candidates = _deduplicate(candidates + _context_descendant_candidates(
             field, inherited_context, cda, semantic_labels,
             semantic_neighbours, occurrence_mapping,
+        ) + _context_description_candidates(
+            field, inherited_context, cda, occurrence_mapping,
+        ) + _choice_branch_candidates(
+            field, inherited_context, cda, occurrence_mapping,
+        ) + _repeat_scope_candidates(
+            field, inherited_context, cda, occurrence_mapping,
+        ) + _section_narrative_candidates(
+            field, inherited_context, cda, occurrence_mapping,
         ) + _open_coded_domain_candidates(
             field, inherited_context, cda, value_set_members,
             occurrence_mapping,
@@ -1845,6 +2240,32 @@ def _cda_mapping_analysis(
 
     structures.update(_for_each_rules(model, cda, fields, group_results))
 
+    # Some occurrence boundaries can only be derived after the first scalar
+    # pass has mapped sibling values (the vital-sign organizer is one example).
+    # Revisit still-unmapped direct group fields against those final for_each
+    # rules; this is intentionally a bounded second pass, not iterative lexical
+    # propagation.
+    final_occurrence_mapping = {"structures": structures}
+    for path, field in model_fields.items():
+        if fields.get(path) is not None:
+            continue
+        inherited_context = details[path].get("context")
+        candidates = _repeat_scope_candidates(
+            field, inherited_context, cda, final_occurrence_mapping,
+        )
+        if len(candidates) != 1:
+            continue
+        primary = candidates[0]
+        fields[path] = primary["target"]
+        details[path]["selected"] = primary["target"]
+        details[path]["primary"] = primary
+        details[path]["alternatives"] = [
+            row for row in details[path].get("alternatives", [])
+            if row.get("target") != primary["target"]
+        ][:8]
+        details[path]["context"] = None
+        details[path].pop("unresolved_reason", None)
+
     proposal = {
         "version": 6,
         "model": {
@@ -1920,6 +2341,13 @@ def _cda_mapping_analysis(
                     "and exposes originalText, so unmatched wording has a formal "
                     "target representation without inventing a terminology crosswalk."
                 )
+            mapping = primary.get("mapping")
+            if isinstance(mapping, Mapping) and mapping.get("mode") == "presence":
+                return (
+                    "Exact source terminology identifies an optional ART-DECOR statement "
+                    "whose clinical payload is fixed by the template. Boolean true activates "
+                    "that statement and false omits it."
+                )
             if primary.get("mapping") is not None:
                 return (
                     "The datapoint and CDA target represent the same information with different "
@@ -1966,6 +2394,11 @@ def _cda_mapping_analysis(
         qualification = mapping_qualification(detail, primary)
         if detail.get("runtime_blocked"):
             execution = "REQUIRES RULE"
+        elif (
+            isinstance(primary.get("mapping"), Mapping)
+            and primary.get("mapping", {}).get("mode") == "presence"
+        ):
+            execution = "PRESENCE RULE"
         elif primary.get("mapping") is not None:
             execution = "TRANSFORM"
         elif path in model_fields and fields.get(path) is not None:
@@ -1981,6 +2414,11 @@ def _cda_mapping_analysis(
             result = "SELECTED"
             if detail.get("runtime_blocked"):
                 result = "SELECTED / REQUIRES RULE"
+            elif (
+                isinstance(primary.get("mapping"), Mapping)
+                and primary.get("mapping", {}).get("mode") == "presence"
+            ):
+                result = "SELECTED / PRESENCE RULE"
             elif primary.get("mapping") is not None:
                 result = "SELECTED / TRANSFORM"
             rows.append((primary, result))
@@ -2012,7 +2450,12 @@ def _cda_mapping_analysis(
             selected = detail.get("selected")
             if selected is None:
                 selected = primary.get("mapping") if primary.get("mapping") is not None else primary.get("target")
-            if primary.get("mapping") is not None:
+            if (
+                isinstance(primary.get("mapping"), Mapping)
+                and primary.get("mapping", {}).get("mode") == "presence"
+            ):
+                out += ["**Selected:**", "", f"`{primary.get('target')}` `[{target_datatype(str(primary.get('target')))}]` as a conditional presence rule", ""]
+            elif primary.get("mapping") is not None:
                 out += ["**Selected:**", "", f"`{primary.get('target')}` `[{target_datatype(str(primary.get('target')))}]` with declarative transform", ""]
             else:
                 out += ["**Selected:**", "", f"`{primary.get('target')}` `[{target_datatype(str(primary.get('target')))}]`", ""]

@@ -417,6 +417,8 @@ def _mapping_status(row: Mapping[str, Any]) -> str:
     rule = row.get("rule", {})
     if isinstance(rule, Mapping) and rule.get("structure"):
         return "Structural rule"
+    if isinstance(rule, Mapping) and rule.get("mode") == "presence":
+        return "Presence rule"
     if isinstance(rule, Mapping) and rule.get("transform"):
         return "Transform"
     return "Mapped" if isinstance(row.get("selection"), str) else "Rule"
@@ -430,6 +432,13 @@ def _configuration_instruction(row: Mapping[str, Any]) -> str:
         return (
             f"In `cda-mapping.json`, map **{name}** by setting "
             f"`fields[\"{path}\"]` to `\"{target}\"`."
+        )
+    rule = row.get("rule", {})
+    if isinstance(rule, Mapping) and rule.get("mode") == "presence":
+        return (
+            f"In `cda-mapping.json`, review the rule stored at "
+            f"`fields[\"{path}\"]`; it conditionally activates `\"{target}\"` "
+            f"when **{name}** is true."
         )
     return (
         f"In `cda-mapping.json`, review the rule stored at "

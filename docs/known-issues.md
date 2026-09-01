@@ -27,9 +27,18 @@ ValueSet contains an `OTH` exception and whose datatype exposes
 `nullFlavor="OTH"` plus their source wording. A supplied target member is kept
 only when both code and code system match exactly.
 
-Three source fields remain contextual: allergy description, antibiotic-allergy
-flag and contrast-agent-allergy flag. The description still needs a reviewed
-narrative/observation-text decision. The two derived flags carry
+The complete allergy occurrence is not yet executable from this transaction by
+itself. Activating `Agens` also activates Allergy Concern Act
+`1.2.276.0.76.10.4065`, where ART-DECOR requires
+`effectiveTime/low` as the time the allergy was first documented as a concern.
+The source allergy group has no timestamp, and the mandatory target does not
+permit a null flavor. The compiler therefore retains the valid agent mapping
+evidence but the synthetic full-proposal fixture reports this missing required
+sibling instead of substituting document time or inventing a clinical date.
+
+The allergy description now maps to the unique compiled section narrative role;
+it no longer remains a structural-only suggestion. Two source fields remain
+contextual: the antibiotic-allergy and contrast-agent-allergy flags. They carry
 diagnosis/disorder concepts (`Z88.1` and `293637006`), not allergenic-substance
 codes, and must not be written directly as `playingEntity/code`. They need an
 explicit occurrence/negation representation rather than being treated as
@@ -49,14 +58,22 @@ source fields executable without a medication-specific rule: manufactured
 material name, product code with its declared open code system, dosage
 narrative, and route.
 
+Predicate-aware structural overlay now recovers the associated medication
+`sequenceNumber`, and datatype expansion exposes the event-related timing
+`offset`. Both follow the existing medication `for_each`; neither is a
+medication-name exception.
+
 The remaining medication boundary is narrower but still important. No formal
 source association has been found for lot number, so `chargennummer` remains
-unmapped even though the target structure exposes it. The outer Medikation
-template also prohibits direct `effectiveTime`, `doseQuantity`, `rateQuantity`
-and `administrationUnitCode`; detailed dose/rate/schedule data belongs to
-repeatable UV Subordinate administration
-`2.16.840.1.113883.10.21.4.6` and still needs compound-value terminology and
-nested-occurrence evidence. See
+unmapped even though a general manufactured-material model can expose such a
+slot. The active UV Subordinate administration template
+`2.16.840.1.113883.10.21.4.6` exposes alternatives for timing plus
+`doseQuantity` and `rateQuantity`, but the current source evidence does not
+uniquely bridge start/stop, dose, rate, body site, PRN and medication-reason
+fields to those alternatives. In particular, start, stop and dosage-time fields
+would otherwise claim one atomic timing target, while dose and rate are two
+equally compatible quantities. They remain unmapped instead of being resolved
+by German/English path vocabulary or positional guessing. See
 [`analyses/2026-09-01-medication-common-base-slot.md`](analyses/2026-09-01-medication-common-base-slot.md).
 
 ## Transform vocabulary
@@ -68,6 +85,8 @@ proven AKTIN semantics for Tetanusschutz, Isolation, modified Rankin, and
 diagnosis certainty, to carry a normalized source code into one explicitly
 declared open target CodeSystem, and to constrain an explicitly open source
 domain through an exact target ValueSet's `OTH`/`originalText` fallback.
+`mode: "presence"` is a structural assignment, not a scalar transform: it is
+allowed only for a boolean source and a unique renderable fixed statement.
 Structural `for_each`, `repeat_by_discriminator`, and
 `coalesce` behavior is implemented in the generic binding layer and is generated
 only from formal repeat/discriminator evidence. Legacy reviewed `fan_out`

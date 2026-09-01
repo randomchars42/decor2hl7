@@ -42,7 +42,7 @@ _POLICY: dict[str, DatatypeDefinition] = {
     "BIN": _definition("BIN", representation=_text("text")),
     "UID": _definition("UID", representation=_text("identifier", "text")),
     "OID": _definition("OID", base="UID", kind=DatatypeKind.ALIAS),
-    "URL": _definition("URL", representation=_text("text")),
+    "URL": _definition("URL", representation=_attribute("value", "text")),
     "TEL": _definition("TEL", representation=_attribute("value", "text")),
     "II": _definition("II", representation=ValueRepresentation(
         ValueRepresentationKind.IDENTIFIER, ("identifier",),
@@ -54,6 +54,8 @@ _POLICY: dict[str, DatatypeDefinition] = {
     "IVL_TS": _definition("IVL_TS", kind=DatatypeKind.COMPLEX),
     "PIVL_TS": _definition("PIVL_TS", base="SXCM_TS", kind=DatatypeKind.COMPLEX),
     "EIVL_TS": _definition("EIVL_TS", base="SXCM_TS", kind=DatatypeKind.COMPLEX),
+    "EIVL.EVENT": _definition("EIVL.EVENT", base="CE", kind=DatatypeKind.ALIAS),
+    "SXPR_TS": _definition("SXPR_TS", base="SXCM_TS", kind=DatatypeKind.COMPLEX),
     "INT": _definition("INT", representation=ValueRepresentation(
         ValueRepresentationKind.QUANTITY, ("integer", "ordinal", "quantity"),
         attribute="value")),
