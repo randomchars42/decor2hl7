@@ -203,6 +203,16 @@ Evidence: `src/decor2hl7/compile/artifacts.py`, `docs/architecture.md`,
 human names, exact keys, contextual read-only XML and explicit candidate/result
 classes. Configuration is edited in JSON, never in generated Markdown or XML.
 
+Its stable coverage headline separates mapped dataset datapoints and target
+leaves, actionable unselected suggestions, datapoints with no suitable writable
+CDA leaf, and reportable template-level CDA leaves with no dataset source. Two
+status-gutter trees present the same evidence in opposite directions: every
+dataset datapoint through its source hierarchy, and every reportable CDA leaf
+through the document/template hierarchy. Tree leaves stay on one physical line.
+The inverse view excludes generic datatype-expansion plumbing and fixed,
+conditional-fixed or system-supplied values rather than reporting the raw
+writable-target inventory as meaningful mapping surface.
+
 A dataset code may map directly to an unfixed writable CDA `hl7:code` element
 when both sides use coded datatypes and share an explicit ValueSet. This permits
 formally associated payloads such as the referral source while preventing a

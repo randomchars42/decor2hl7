@@ -434,15 +434,15 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(compatible)
             self.assertIn("structural, fixed, prohibited, or ambiguous", reasons[0])
 
-    def test_mapping_outline_keeps_names_and_wraps_long_targets(self) -> None:
+    def test_mapping_outline_keeps_status_gutter_and_never_wraps_leaves(self) -> None:
         short = _outline_datapoint_lines(
             "│   │   ",
             {"dataset_name": "Patienten ID", "target": "PatientIdentifier.id"},
-            last=True,
+            last=True, status="✓",
         )
         self.assertEqual(
             short,
-            ["│   │   └── Patienten ID → {PatientIdentifier.id}"],
+            ["✓  │   │   └── Patienten ID → {PatientIdentifier.id}"],
         )
 
         long = _outline_datapoint_lines(
@@ -454,16 +454,37 @@ class CoreTests(unittest.TestCase):
                     "effectiveTime.low@20160601"
                 ),
             },
-            last=False,
+            last=False, status="!",
         )
         self.assertEqual(
             long,
             [
-                "│   │   ├── Aufnahmezeitpunkt",
-                "│   │   │   → {CDAEncompassingEncounter.componentOf."
-                "encompassingEncounter.effectiveTime.low@20160601}",
+                "!  │   │   ├── Aufnahmezeitpunkt → "
+                "{CDAEncompassingEncounter.componentOf.encompassingEncounter."
+                "effectiveTime.low@20160601}",
             ],
         )
+
+    def test_unbridged_writable_name_is_report_only_suggestion(self) -> None:
+        field = {"name": "Name", "short_name": "name", "type": "text"}
+        target = {
+            "writable": True, "prohibited": False, "locations": ["0.1"],
+            "path": "hl7:participant/hl7:name", "datatype": "ST",
+            "logical_types": ["text"], "value_representation": {
+                "kind": "element_text", "logical_types": ["text"],
+            },
+        }
+        suggestions = mapping_compiler._unbridged_writable_candidates(
+            field,
+            {"node": {"locations": ["0"], "path": "hl7:participant"}},
+            {"targets": {"Organization.name": target}},
+            {"structures": {}},
+        )
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0]["target"], "Organization.name")
+        self.assertTrue(suggestions[0]["suggested"])
+        self.assertFalse(suggestions[0]["actionable"])
+        self.assertEqual(suggestions[0]["chain"], ["WRITABLE_NAME"])
 
     def test_cda_guide_merges_xml_context_and_explains_candidates(self) -> None:
         def element(name: str, children: list[dict] | None = None, **values: object) -> dict:
@@ -481,7 +502,8 @@ class CoreTests(unittest.TestCase):
         )
         header = element("hl7:componentOf", [encounter], fixed={"typeCode": "COMP"})
         candidate = element("hl7:code", datatype="CE", targets=["Referral.code"])
-        section = element("hl7:section", [candidate], target="Referral.section")
+        unused = element("hl7:text", datatype="ST", targets=["Referral.unused"])
+        section = element("hl7:section", [candidate, unused], target="Referral.section")
         document = element("hl7:ClinicalDocument", [header, element("hl7:component", [section])])
         cda_model = {
             "document_template": {
@@ -514,6 +536,13 @@ class CoreTests(unittest.TestCase):
                     "locations": ["0.1.0.0"], "path": "hl7:section/hl7:code",
                     "datatype": "CE", "kind": "element", "description": "Referral code",
                     "template_name": "Referral", "template_display_name": "Referral",
+                    "writable": True, "fixed": {}, "system_value": None,
+                },
+                "Referral.unused": {
+                    "locations": ["0.1.0.1"], "path": "hl7:section/hl7:text",
+                    "datatype": "ST", "kind": "element", "description": "Unused text",
+                    "template_name": "Referral", "template_display_name": "Referral",
+                    "writable": True, "fixed": {}, "system_value": None,
                 },
             },
         }
@@ -521,9 +550,9 @@ class CoreTests(unittest.TestCase):
             "order": ["case.start", "case.end", "case.referral"],
             "groups": {"case": {"name": "Case"}},
             "fields": {
-                "case.start": {"name": "Start"},
-                "case.end": {"name": "End"},
-                "case.referral": {"name": "Referral source"},
+                "case.start": {"name": "Start", "parent": "case"},
+                "case.end": {"name": "End", "parent": "case"},
+                "case.referral": {"name": "Referral source", "parent": "case"},
             },
         }
         mapping_cfg = {"fields": {
@@ -534,10 +563,22 @@ class CoreTests(unittest.TestCase):
             "summary": {"field_coverage": {"NO": 1}},
             "fields": {"case.referral": {"alternatives": [{
                 "target": "Referral.code", "datatype": "CE", "confidence": "STRONG",
-                "chain": ["SPEC", "TA"], "actionable": False,
+                "chain": ["SPEC", "TA"], "actionable": True,
             }]}},
         }
         report = render_cda_mapping_markdown(model, cda_model, mapping_cfg, audit)
+        self.assertIn(
+            "Model: **3 datapoints** · ✓ mapped **2 dp → 2 leaves** · "
+            "! suggested **1 dp → 1 leaf** · × no target **0 dp** · "
+            "○ no source **1 leaf**",
+            report,
+        )
+        self.assertIn("!      └── Referral source → {Referral.code}", report)
+        self.assertIn("✓  │       ├── low {Encounter.low} ← Start", report)
+        self.assertIn(
+            "○          └── text {Referral.unused} ← no dataset counterpart",
+            report,
+        )
         self.assertIn('<componentOf typeCode="COMP">', report)
         self.assertIn('<encompassingEncounter classCode="ENC" moodCode="EVN">', report)
         self.assertIn('<low value="{Encounter.low}"/>', report)
@@ -545,8 +586,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("**1** unresolved dataset datapoint(s)", report)
         self.assertIn("Referral code", report)
         self.assertIn("SPEC → TA", report)
-        self.assertIn("evidence only", report)
-        self.assertIn("None of these rows is directly selectable", report)
+        self.assertIn("selectable after review", report)
 
     def test_code_normalization_and_unmapped_code(self) -> None:
         field = {"type": "code", "values": {"rot": {"code": "R", "code_system": "1.2.3", "display_name": "rot"}}}

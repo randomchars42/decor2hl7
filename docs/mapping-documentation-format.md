@@ -33,38 +33,90 @@ The report should answer, in order:
 Generate the guide in this order:
 
 1. document identity, coverage and editing instruction;
-2. compact CDA document outline;
-3. sections and CDA entities;
-4. selected configuration examples and contextual CDA previews;
-5. decisions and mappings requiring review;
-6. structural and transformation rules;
-7. required-CDA completion rules;
-8. a pointer to detailed evidence.
+2. dataset-to-CDA coverage tree;
+3. inverse CDA-to-dataset coverage tree;
+4. sections and CDA entities;
+5. selected configuration examples and contextual CDA previews;
+6. decisions and mappings requiring review;
+7. structural and transformation rules;
+8. required-CDA completion rules;
+9. a pointer to detailed evidence.
 
-## Document outline
+## Coverage headline and trees
 
-Group mappings below human-readable CDA sections and entities. Beneath an entity,
-show the dataset name followed by the exact logical CDA target in braces. Keep a
-short target inline; move a long target to an indented continuation line.
+The opening coverage line is stable, compact and suitable for build logs, pull
+request comparisons and chat summaries:
 
 ```text
-Notaufnahmeregister Transitionsversion (ClinicalDocument)
-├── Document header
-│   ├── PatientIdentifier
-│   │   └── Patienten ID → {PatientIdentifier.id}
-│   ├── CDAEncompassingEncounter
-│   │   ├── Aufnahmezeitpunkt
-│   │   │   → {CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.low@20160601}
-│   │   └── Zeitpunkt Patient verlegt / entlassen nach
-│   │       → {CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.high@20160601}
-│   └── CDADocumentationOf
-│       └── Zeitpunkt erster Arztkontakt
-│           → {CDADocumentationOf.documentationOf.serviceEvent.performer.time.low}
-└── Document body (structuredBody)
+Model: 120 datapoints · ✓ mapped 74 dp → 76 leaves · ! suggested 4 dp → 4 leaves · × no target 42 dp · ○ no source 349 leaves
 ```
 
-The outline is an overview. It omits candidate scores, rejected alternatives and
-long evidence chains.
+The categories mean:
+
+- **Mapped** — the datapoint has a selected executable mapping;
+- **Suggested** — one or more unique, writable, non-prohibited CDA leaves are
+  actionable candidates, or are runtime-compatible exact-name descendants in
+  the mapped context without a formal bridge, but no executable mapping is
+  selected;
+- **No target** — the analysis found no suitable writable CDA leaf for the
+  dataset datapoint;
+- **No source** — a reportable writable CDA leaf has neither a selected nor a
+  suggested dataset datapoint.
+
+The first three categories partition the dataset model. Counts distinguish
+dataset datapoints (`dp`) from logical CDA leaf assignments because one rule may
+write more than one leaf. The inverse no-source count uses reportable CDA
+targets: unique-location, template-level writable leaves that are neither fixed,
+conditional-fixed, system-supplied nor generic datatype-expansion plumbing.
+The report must not headline the raw compiled writable-target inventory.
+
+Render two complementary trees. Both use a dedicated three-character status
+gutter and keep every leaf, including its complete stable target name, on one
+physical line. Long lines may scroll horizontally; identifiers must never be
+split onto a continuation line.
+
+### Dataset coverage tree
+
+The first tree follows the complete dataset hierarchy and contains every model
+datapoint. This gives datapoints without a target an honest position instead of
+placing them under an arbitrary CDA section.
+
+```text
+   Dataset model
+   ├── Administrative Verlegungs-/Entlassungsinformationen
+✓  │   ├── Typ Entlassung → {CDAEncompassingEncounter.componentOf.encompassingEncounter.dischargeDispositionCode@20160601}
+✓  │   └── Zeitpunkt Patient verlegt / entlassen nach → {CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.high@20160601}
+   ├── Abschlussdiagnosen
+!  │   └── ICD-10 Sekundärdiagnose → {Problemobservationeddiagnosis.observation.value@20170213}
+   └── Dokumentationsinformationen
+×      └── Version des EDIS → — no suitable writable CDA leaf
+```
+
+### CDA coverage tree
+
+The second tree follows the CDA document, sections and template entities. It is
+the inverse view: selected and suggested dataset names point back from each
+logical CDA leaf. A leaf with no dataset counterpart is marked explicitly.
+
+```text
+   Notaufnahmeregister Transitionsversion (ClinicalDocument)
+   ├── Document header
+   │   └── CDA encompassingEncounter Patientenkontakt (Basis)
+✓  │       ├── effectiveTime.high {CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.high@20160601} ← Zeitpunkt Patient verlegt / entlassen nach
+✓  │       └── dischargeDispositionCode {CDAEncompassingEncounter.componentOf.encompassingEncounter.dischargeDispositionCode@20160601} ← Typ Entlassung
+   └── Abschlussdiagnosen
+       └── Problem Observation
+✓          ├── value {Problemobservationeddiagnosis.observation.value@20170213} ← ICD-10
+○          └── low {Problemobservationeddiagnosis.observation.effectiveTime.low@20170213} ← no dataset counterpart; default nullFlavor="UNK"
+```
+
+If one CDA leaf is already selected from one dataset datapoint and is also an
+actionable suggestion for another, use the combined gutter status `✓!` and name
+both sources on the same leaf. The CDA tree does not use `×`; that is a
+dataset-side absence and belongs in the first tree.
+
+The trees are coverage overviews. They omit candidate scores, rejected
+alternatives and long evidence chains.
 
 ## Section and entity presentation
 
@@ -446,6 +498,11 @@ behavior.
 ## Compactness rules
 
 - Show all mappings in entity tables.
+- Show every dataset datapoint in the dataset coverage tree.
+- Show every reportable template-level CDA leaf in the inverse coverage tree;
+  exclude generic datatype plumbing and fixed/system-supplied values.
+- Keep each tree leaf on one physical line and never truncate or wrap a stable
+  dataset or CDA identifier.
 - Do not generate full JSON and XML for every direct mapping.
 - Generate one simple example and one example for every non-trivial pattern that
   occurs: transform, repetition, repeat-by-discriminator, coalescing, fallback,
@@ -466,6 +523,9 @@ behavior.
 - Never phrase XML as a place where the user enters values.
 - Reuse candidate classification and reasoning from the mapping audit; do not
   implement a second scoring system in the report generator.
+- Derive the headline and both trees from the same selected mappings, actionable
+  audit candidates and compiled CDA target metadata used elsewhere in the
+  report, so comparison metrics cannot drift from the displayed leaves.
 - Distinguish selected mappings, alternatives, transforms, rule requirements,
   context-only evidence and absence of candidates.
 - Preserve occurrence semantics whenever source or target repetition is involved.
