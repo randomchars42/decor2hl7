@@ -585,10 +585,11 @@ The exact module split may evolve. The important invariant is the direction of d
    Allergy Concern Act / Allergy Intolerance Observation to narrative and the
    bound allergen `playingEntity/code`, without treating derived diagnosis flags
    as substance codes.
-2. Continue medication steps 3–6: represent compound source values, bind only
-   fields exposed by the active UV medication/subordinate-administration branch,
-   resolve terminology, and verify repeated output while preserving the current
-   section-entry `for_each` rule.
+2. Continue the remaining medication work after the common-slot projection:
+   retain the now executable product name/code, dosage narrative and route;
+   establish formal lot-number evidence; represent detailed dose/rate/schedule
+   compound values; and align the repeatable subordinate-administration branch
+   while preserving the current section-entry `for_each` rule.
 3. Keep retrieval closure bounded while improving strong owner/project resolution.
 4. Stabilize artifact/form and transaction/terminology compiler contracts.
 5. Keep target-neutral dataset semantics separate from CDA semantics.

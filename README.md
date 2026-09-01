@@ -464,6 +464,11 @@ mapping or transform proves the runtime semantics.
 
 Direct `implementation/@xpath` declarations are treated as explicit technical
 mapping evidence when they uniquely resolve to a current writable CDA target.
+A legacy/profile `staticAssociations/origconcept` link can likewise be
+projected to an active target when both constraints resolve to one unique common
+CDA/RIM XSD slot inside the mapped context. XSD mixed-content metadata supplies
+element-text writability for complex roots; neither mapping nor rendering uses
+datatype- or medication-specific leaf rules.
 A formally coded dataset field can also map directly to an unfixed writable
 CDA `hl7:code` element when both sides share an explicit ValueSet. Fixed or
 differently bound structural codes, such as a section's identifying LOINC code,
@@ -482,7 +487,7 @@ bound AKTIN L/R eye ValueSet; equivalent encounter start fields use conservative
 `equal_or_error` coalescing. A `for_each` names the exact CDA
 repeat node driven by its source group, so additional repeat-capable target
 ancestors are not populated positionally. The transform vocabulary is
-intentionally small (`identity`, `enum`, `ordinal`, `not`) and remains data
+intentionally small (`identity`, `enum`, `ordinal`, `not`, `code_system`) and remains data
 rather than clinical Python code.
 
 Existing reviewed version-5 `fan_out` rules remain executable. During

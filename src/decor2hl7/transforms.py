@@ -130,6 +130,28 @@ def _scalar(value: Any, transform: Mapping[str, Any]) -> Any:
         if isinstance(value, bool):
             return not value
         raise ValueError("not transform requires a boolean value")
+    if kind == "code_system":
+        code_system = str(transform.get("code_system") or "")
+        if not code_system:
+            raise ValueError("code_system transform requires code_system")
+        code = _selected_value(
+            value, {**dict(transform), "select": transform.get("select") or "raw"}
+        )
+        if code in (None, "") and isinstance(value, Mapping):
+            code = value.get("code")
+        if code in (None, ""):
+            return OMIT
+        result: dict[str, Any] = {
+            "code": str(code),
+            "codeSystem": code_system,
+        }
+        if isinstance(value, Mapping):
+            display = value.get("displayName") or value.get("display_name")
+            if display:
+                result["displayName"] = display
+            if value.get("raw") is not None:
+                result["raw"] = value.get("raw")
+        return result
     raise ValueError(f"unknown mapping transform {kind!r}")
 
 
@@ -154,10 +176,12 @@ def validate_transform(transform: Any) -> list[str]:
     if not isinstance(transform, Mapping):
         return ["transform must be an object"]
     kind = str(transform.get("type") or "")
-    if kind not in {"identity", "enum", "ordinal", "not"}:
+    if kind not in {"identity", "enum", "ordinal", "not", "code_system"}:
         return [f"unknown transform type {kind!r}"]
     if kind in {"enum", "ordinal"} and not isinstance(transform.get("map"), Mapping):
         return [f"{kind} transform requires an object map"]
+    if kind == "code_system" and not str(transform.get("code_system") or ""):
+        return ["code_system transform requires code_system"]
     selector = transform.get("select")
     if selector is not None and selector not in {
         "value", "canonical", "code", "displayName", "display_name",

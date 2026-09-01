@@ -29,7 +29,7 @@ def write_datatype_schema(root: Path) -> Path:
     <xs:element name="streetAddressLine" type="ADXP" minOccurs="0" maxOccurs="unbounded"/>
   </xs:sequence><xs:attribute name="use" type="xs:string"/></xs:complexType>
   <xs:complexType name="ADXP"><xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent></xs:complexType>
-  <xs:complexType name="EN"><xs:sequence>
+  <xs:complexType name="EN" mixed="true"><xs:sequence>
     <xs:element name="family" type="ENXP" minOccurs="0" maxOccurs="unbounded"/>
     <xs:element name="given" type="ENXP" minOccurs="0" maxOccurs="unbounded"/>
     <xs:element name="prefix" type="ENXP" minOccurs="0" maxOccurs="unbounded"/>
@@ -858,6 +858,31 @@ class CdaDatatypeTests(unittest.TestCase):
             datatype_definition("TS.DATE.MIN").profile,
             "DATE.MIN",
         )
+
+    def test_xsd_mixed_content_makes_complex_root_text_writable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root_dir = Path(tmp)
+            source = root_dir / "template.xml"
+            schema = write_datatype_schema(root_dir)
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument">
+    <element name="hl7:name" datatype="EN" minimumMultiplicity="0" maximumMultiplicity="1"/>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {}, "fields": {},
+            }
+            compiled = compile_cda(
+                [source], model, core_definition_paths=[schema]
+            )
+            _, target = target_at(compiled, "/hl7:name")
+            self.assertEqual(target["datatype"], "EN")
+            self.assertEqual(
+                target["value_representation"],
+                {"kind": "element_text", "logical_types": ["text"]},
+            )
+            self.assertTrue(target["has_children"])
 
     def test_ad_and_pn_expand_map_and_render_without_special_cases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

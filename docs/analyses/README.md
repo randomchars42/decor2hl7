@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-01-medication-common-base-slot.md`](2026-09-01-medication-common-base-slot.md)
+  records the implemented static-association projection, XSD mixed-content and
+  open-code handling, the resulting medication mappings, and the remaining lot
+  and detailed-dosage boundaries.
 - [`2026-09-01-section-overlay-and-mapping-priorities.md`](2026-09-01-section-overlay-and-mapping-priorities.md)
   records the transparent-wrapper section correction, the stable flattened-name
   decision, and the allergy/medication evidence that now heads the priority list.

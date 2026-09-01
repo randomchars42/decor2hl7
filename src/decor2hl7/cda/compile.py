@@ -76,6 +76,28 @@ def _typed_value_target(
     return serial
 
 
+def _node_value_representation(
+    node: Mapping[str, Any],
+) -> ValueRepresentation | None:
+    """Return the scalar XML slot compiled for one effective CDA node.
+
+    Most scalar encodings are defined by the V3 datatype representation
+    policy.  XSD ``mixed`` is itself a machine-readable representation rule:
+    it permits a plain character string at the element root even when the
+    datatype also exposes structured child parts (for example EN or AD).
+    """
+    representation = value_representation(
+        node.get("representation_datatype") or node.get("datatype")
+    )
+    if representation is not None:
+        return representation
+    if node.get("mixed_content"):
+        return ValueRepresentation(
+            ValueRepresentationKind.ELEMENT_TEXT, ("text",)
+        )
+    return None
+
+
 def _key(template: ET.Element) -> TemplateKey:
     return template.get("id") or "", template.get("effectiveDate") or ""
 
@@ -1096,6 +1118,8 @@ def _expand_datatype_structure(
             schema_definition = resolve_definition(definitions, declared)  # type: ignore[arg-type]
             if schema_definition.category == "datatype":
                 classification = "datatype"
+                if schema_definition.mixed:
+                    node["mixed_content"] = True
             else:
                 # Structural classes are materialized only by the CDA/RIM
                 # pass.  Letting the datatype pass follow them would unfold
@@ -1464,9 +1488,7 @@ def _annotate_targets(
                     # Fixed element text is a template constraint, not a writable
                     # application slot.  Keep the target for provenance/evidence
                     # but do not allow mappings or site values to override it.
-                    representation = value_representation(
-                        node.get("representation_datatype") or node.get("datatype")
-                    )
+                    representation = _node_value_representation(node)
                     serialized_representation = (
                         representation.to_dict() if representation is not None else None
                     )
@@ -1665,9 +1687,7 @@ def _compiled_content_roles(
                 node["content_role"] = "section_title"
             elif len(path) >= 2 and path[-2:] == ("section", "text"):
                 node["content_role"] = "section_narrative"
-            representation = value_representation(
-                node.get("representation_datatype") or node.get("datatype")
-            )
+            representation = _node_value_representation(node)
             if (
                 representation is not None
                 and representation.kind == ValueRepresentationKind.CODED

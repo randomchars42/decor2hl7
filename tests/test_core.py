@@ -1255,6 +1255,24 @@ class CoreTests(unittest.TestCase):
             "shared section container with occurrence-aligned entries",
             rules["for-each-therapy"]["evidence"],
         )
+        candidate_target = {
+            **cda_model["targets"]["Medication.code"],
+            "writable": True,
+            "logical_types": ["code", "ordinal"],
+            "value_representation": {
+                "kind": "coded", "logical_types": ["code", "ordinal"],
+            },
+            "fixed": {}, "codes": [],
+        }
+        self.assertEqual(
+            mapping_compiler._direct(
+                model["fields"]["therapy.medication.code"],
+                candidate_target,
+                cda=cda_model,
+                occurrence_mapping={"structures": rules},
+            ),
+            (True, []),
+        )
         self.assertEqual(
             mapping_compiler._for_each_rules(
                 {
@@ -1404,6 +1422,159 @@ class CoreTests(unittest.TestCase):
         )
         self.assertFalse(problems)
 
+    def test_static_association_projects_common_rim_slot_and_open_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp) / "project.xml"
+            evidence.write_text('''<project>
+  <templateAssociation templateId="active" effectiveDate="2026">
+    <concept ref="drug" elementId="active-root"/>
+  </templateAssociation>
+  <template id="legacy" effectiveDate="2020" name="LegacyMaterial">
+    <element name="hl7:manufacturedMaterial" id="legacy-root">
+      <element name="hl7:code" id="legacy-code" datatype="CD">
+        <vocabulary codeSystem="1.2.3.4"/>
+      </element>
+      <element name="hl7:name" id="legacy-name" datatype="EN"/>
+    </element>
+    <staticAssociations>
+      <origconcept ref="drug-code" elementId="legacy-code"
+          templateId="legacy" templateEffectiveDate="2020"/>
+      <origconcept ref="drug-name" elementId="legacy-name"
+          templateId="legacy" templateEffectiveDate="2020"/>
+    </staticAssociations>
+  </template>
+</project>''', encoding="utf-8")
+            model = {
+                "meta": {"dataset_id": "ds", "transaction_id": "tx"},
+                "groups": {
+                    "drug": {
+                        "name": "Drug", "concept": "drug", "parent": None,
+                        "repeating": False, "repeat_chain": [],
+                    },
+                },
+                "fields": {
+                    "drug.code": {
+                        "name": "Drug code", "concept": "drug-code",
+                        "type": "code", "parent": "drug", "repeat_chain": [],
+                        "value_sets": [], "codes": [],
+                    },
+                    "drug.name": {
+                        "name": "Drug name", "concept": "drug-name",
+                        "type": "text", "parent": "drug", "repeat_chain": [],
+                        "value_sets": [], "codes": [],
+                    },
+                },
+            }
+            material_slot = {
+                "source": "cda-rim", "datatype": "POCD_MT000040.Material",
+            }
+            compiled = {
+                "document_template": {"name": "ActiveDocument"},
+                "source_index": {},
+                "assertions": [],
+                "targets": {
+                    "Active.material": {
+                        "template_id": "active", "template_effective_date": "2026",
+                        "element_id": "active-root", "kind": "element",
+                        "path": "hl7:manufacturedMaterial", "renderable": True,
+                        "writable": False, "locations": ["0"],
+                        "repeat_ancestors": [], "has_children": True,
+                    },
+                    "Active.code": {
+                        "template_id": "active", "kind": "element",
+                        "path": "hl7:manufacturedMaterial/hl7:code",
+                        "datatype": "CD", "renderable": True, "writable": True,
+                        "locations": ["0.0"], "repeat_ancestors": [],
+                        "value_representation": {
+                            "kind": "coded", "logical_types": ["code", "ordinal"],
+                            "attributes": ["code", "codeSystem", "displayName"],
+                            "scalar_attribute": "code",
+                        },
+                        "logical_types": ["code", "ordinal"],
+                        "fixed": {}, "codes": [], "has_children": False,
+                        "provenance": [{
+                            **material_slot, "datatype_part": "hl7:code",
+                            "path": "hl7:manufacturedMaterial/hl7:code",
+                        }],
+                    },
+                    "Active.name": {
+                        "template_id": "active", "kind": "element",
+                        "path": "hl7:manufacturedMaterial/hl7:name",
+                        "datatype": "EN", "renderable": True, "writable": True,
+                        "locations": ["0.1"], "repeat_ancestors": [],
+                        "value_representation": {
+                            "kind": "element_text", "logical_types": ["text"],
+                        },
+                        "logical_types": ["text"], "fixed": {}, "codes": [],
+                        "has_children": True,
+                        "provenance": [{
+                            **material_slot, "datatype_part": "hl7:name",
+                            "path": "hl7:manufacturedMaterial/hl7:name",
+                        }],
+                    },
+                    "Legacy.code": {
+                        "template_id": "legacy", "template_effective_date": "2020",
+                        "element_id": "legacy-code", "kind": "element",
+                        "path": "hl7:manufacturedMaterial/hl7:code",
+                        "datatype": "CD", "renderable": False, "writable": False,
+                        "locations": [], "provenance": [],
+                    },
+                    "Legacy.name": {
+                        "template_id": "legacy", "template_effective_date": "2020",
+                        "element_id": "legacy-name", "kind": "element",
+                        "path": "hl7:manufacturedMaterial/hl7:name",
+                        "datatype": "EN", "renderable": False, "writable": False,
+                        "locations": [], "provenance": [],
+                    },
+                },
+                "document": [{
+                    "kind": "element", "name": "hl7:manufacturedMaterial",
+                    "min": 1, "max": 1, "mandatory": True,
+                    "attributes": [], "codes": [], "fixed": {},
+                    "targets": ["Active.material"], "target": "Active.material",
+                    "asserts": [], "lets": {}, "children": [
+                        {
+                            "kind": "element", "name": "hl7:code", "datatype": "CD",
+                            "min": 0, "max": 1, "mandatory": False,
+                            "attributes": [], "codes": [], "fixed": {},
+                            "targets": ["Active.code"], "target": "Active.code",
+                            "asserts": [], "lets": {}, "children": [],
+                        },
+                        {
+                            "kind": "element", "name": "hl7:name", "datatype": "EN",
+                            "min": 0, "max": 1, "mandatory": False,
+                            "attributes": [], "codes": [], "fixed": {},
+                            "targets": ["Active.name"], "target": "Active.name",
+                            "asserts": [], "lets": {}, "children": [],
+                        },
+                    ],
+                }],
+            }
+            proposal, report = cda_mapping_proposal(
+                model, compiled, [evidence]
+            )
+            self.assertEqual(proposal["fields"]["drug.name"], "Active.name")
+            self.assertEqual(proposal["fields"]["drug.code"], {
+                "target": "Active.code",
+                "transform": {
+                    "type": "code_system", "code_system": "1.2.3.4",
+                },
+            })
+            self.assertIn("STATIC_ASSOC", report)
+            record = {
+                "key": "P1", "values": {
+                    "drug.name": "Example drug",
+                    "drug.code": {"nullFlavor": "OTH", "raw": "01234567"},
+                }, "instances": {},
+            }
+            payload, problems = cda.emit(record, model, compiled, proposal, {})
+            self.assertEqual(problems, [])
+            root = ET.fromstring(payload)
+            code = root.find("{urn:hl7-org:v3}code")
+            name = root.find("{urn:hl7-org:v3}name")
+            self.assertEqual(code.get("code"), "01234567")
+            self.assertEqual(code.get("codeSystem"), "1.2.3.4")
+            self.assertEqual(name.text, "Example drug")
     def test_transaction_model_keeps_human_explanations_and_synonyms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transaction = Path(tmp) / "transaction.xml"
