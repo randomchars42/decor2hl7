@@ -596,13 +596,20 @@ def _configuration_excerpt(
         transform = rule.get("transform")
         if isinstance(transform, Mapping):
             compact_transform = {
-                key: transform[key] for key in ("type", "select")
+                key: transform[key] for key in (
+                    "type", "select", "null_flavor", "value_set",
+                )
                 if transform.get(key) is not None
             }
             values = transform.get("map")
             if isinstance(values, Mapping):
                 compact_transform["map"] = (
                     f"{len(values)} configured values; see cda-mapping.json"
+                )
+            allowed = transform.get("allowed")
+            if isinstance(allowed, list):
+                compact_transform["allowed"] = (
+                    f"{len(allowed)} exact code/code-system pairs; see cda-mapping.json"
                 )
             result["transform"] = compact_transform
         return result
@@ -744,6 +751,21 @@ def render_cda_mapping_markdown(
                     f"{_mapping_status(row)} |"
                 )
             lines.append("")
+
+            coded_fallbacks = [
+                row for row in entity_rows
+                if isinstance(row.get("rule"), Mapping)
+                and isinstance(row["rule"].get("transform"), Mapping)
+                and row["rule"]["transform"].get("type") == "coded_fallback"
+            ]
+            if coded_fallbacks:
+                lines += [
+                    "Target-governed coded fallback: an exact admitted code/code-system "
+                    "pair is written as that code. Any other source value is written as "
+                    "`nullFlavor=\"OTH\"`, and its wording is preserved in the compiled "
+                    "coded datatype's `originalText` child.",
+                    "",
+                ]
 
             complex_mapping = any(
                 not isinstance(row["selection"], str) for row in entity_rows

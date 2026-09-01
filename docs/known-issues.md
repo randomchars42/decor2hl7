@@ -17,15 +17,23 @@ the required allergen is represented at
 `participant/participantRole/playingEntity/code`, bound to ValueSet
 `1.2.276.0.76.11.52`. The section narrative is also a legal writable target.
 
-The current source fields—description, agent, antibiotic-allergy flag and
-contrast-agent-allergy flag—remain contextual rather than executable. The
-source agent concept list has no resolved members in the compiled snapshot, so
-the source-to-allergen terminology mapping cannot yet be verified. The two
-derived flags carry diagnosis/disorder concepts (`Z88.1` and `293637006`), not
-allergenic-substance codes, and must not be written directly as
-`playingEntity/code`. The next implementation must resolve agent terminology,
-choose reviewed narrative/originalText placement, and model those derived flags
-explicitly rather than pretending they are allergen identities.
+The source `Agens` domain is now executable. Its inline `conceptList` is empty,
+owned by the PMP dataset concept and has no external reference; this is recorded
+as an intentionally unconstrained coded domain rather than a terminology fetch
+failure. Inside the already mapped allergy section, the required
+`playingEntity/code` is the unique compatible coded descendant whose exact
+ValueSet contains an `OTH` exception and whose datatype exposes
+`originalText`. Unknown agent values therefore serialize as
+`nullFlavor="OTH"` plus their source wording. A supplied target member is kept
+only when both code and code system match exactly.
+
+Three source fields remain contextual: allergy description, antibiotic-allergy
+flag and contrast-agent-allergy flag. The description still needs a reviewed
+narrative/observation-text decision. The two derived flags carry
+diagnosis/disorder concepts (`Z88.1` and `293637006`), not allergenic-substance
+codes, and must not be written directly as `playingEntity/code`. They need an
+explicit occurrence/negation representation rather than being treated as
+allergen identities.
 
 ## Medication payload mapping — priority 2
 
@@ -55,10 +63,12 @@ nested-occurrence evidence. See
 
 `cda-mapping.json` version 6 accepts direct target names, small declarative
 rules, and explicit structural bindings. The built-in scalar transform vocabulary is deliberately limited to `identity`,
-`enum`, `ordinal`, `not`, and `code_system`. The generated proposal uses it for the currently
+`enum`, `ordinal`, `not`, `code_system`, and `coded_fallback`. The generated proposal uses it for the currently
 proven AKTIN semantics for Tetanusschutz, Isolation, modified Rankin, and
-diagnosis certainty, and to carry a normalized source code into one explicitly
-declared open target CodeSystem. Structural `for_each`, `repeat_by_discriminator`, and
+diagnosis certainty, to carry a normalized source code into one explicitly
+declared open target CodeSystem, and to constrain an explicitly open source
+domain through an exact target ValueSet's `OTH`/`originalText` fallback.
+Structural `for_each`, `repeat_by_discriminator`, and
 `coalesce` behavior is implemented in the generic binding layer and is generated
 only from formal repeat/discriminator evidence. Legacy reviewed `fan_out`
 configuration remains executable for compatibility.

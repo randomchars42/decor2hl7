@@ -223,6 +223,23 @@ def transformed_compatibility(
             reasons.append(
                 "code_system transform requires a coded dataset field, a coded CDA target, and one code system"
             )
+    elif kind == "coded_fallback":
+        allowed = transform.get("allowed", [])
+        if (
+            str(field.get("type") or "") != "code"
+            or kind_value != ValueRepresentationKind.CODED.value
+            or not isinstance(allowed, list)
+            or not all(
+                isinstance(item, Mapping)
+                and item.get("code")
+                and item.get("codeSystem")
+                for item in allowed
+            )
+            or not str(transform.get("null_flavor") or "")
+        ):
+            reasons.append(
+                "coded_fallback transform requires a coded dataset field, a coded CDA target, allowed target members, and a null flavor"
+            )
     else:
         reasons.append(f"unknown transform type {kind!r}")
     repeat_chain = list(field.get("repeat_chain") or ([] if not field.get("repeat") else [field.get("repeat")]))

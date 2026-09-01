@@ -21,6 +21,7 @@ from ..transforms import cda_target_name, mapping_rules
 from ..cda.model import ValueRepresentationKind
 from .structural import (
     coalesce_rule as _coalesce_rule,
+    members_for_target as _members_for_target,
     repeat_by_discriminator_rule as _repeat_by_discriminator_rule,
     for_each_rules as _for_each_rules,
     value_set_members as _value_set_members,
@@ -1287,6 +1288,115 @@ def _context_descendant_candidates(
     )]
 
 
+def _open_coded_domain_candidates(
+    field: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    cda: Mapping[str, Any],
+    value_sets: Mapping[Any, list[dict[str, Any]]],
+    occurrence_mapping: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Resolve an explicitly open source code into one safe CDA code slot.
+
+    This is deliberately structural and terminology-driven.  It applies only
+    below a formally selected container and only when exactly one compatible
+    descendant binds an explicit ``OTH`` exception and exposes the datatype's
+    ``coded_original_text`` companion.  No template, class, field, or ValueSet
+    identifier is embedded in the rule.
+    """
+    coded_domain = field.get("coded_domain", {})
+    if (
+        str(field.get("type") or "") != "code"
+        or not isinstance(coded_domain, Mapping)
+        or coded_domain.get("status") != "unconstrained"
+    ):
+        return []
+    context_node = context.get("node", {}) if isinstance(context, Mapping) else {}
+    if not isinstance(context_node, Mapping) or not context_node:
+        return []
+
+    matches: list[
+        tuple[
+            str, Mapping[str, Any], dict[str, str], list[dict[str, Any]],
+            dict[str, Any], str,
+        ]
+    ] = []
+    targets = cda.get("targets", {})
+    for name, target in targets.items():
+        if (
+            not target.get("writable")
+            or target.get("prohibited")
+            or len(target.get("locations", [])) != 1
+            or not _is_descendant_target(target, context_node)
+        ):
+            continue
+        members, binding = _members_for_target(target, value_sets)
+        if not members or binding is None:
+            continue
+        other = [
+            member for member in members
+            if str(member.get("kind") or "") == "exception"
+            and str(member.get("code") or "") == "OTH"
+        ]
+        allowed = [
+            {
+                key: str(member.get(key) or "")
+                for key in ("code", "codeSystem", "displayName")
+                if member.get(key) not in (None, "")
+            }
+            for member in members
+            if member not in other
+        ]
+        if len(other) != 1:
+            continue
+        parent_location = str(target["locations"][0])
+        original_text = [
+            (str(child_name), child)
+            for child_name, child in targets.items()
+            if child.get("writable")
+            and child.get("content_role") == "coded_original_text"
+            and len(child.get("locations", [])) == 1
+            and str(child["locations"][0]).startswith(parent_location + ".")
+            and str(child.get("path") or "").rsplit("/", 1)[0]
+            == str(target.get("path") or "")
+        ]
+        if len(original_text) != 1:
+            continue
+        transform = {
+            "type": "coded_fallback",
+            "allowed": allowed,
+            "null_flavor": "OTH",
+            "value_set": dict(binding),
+        }
+        compatible, _ = _direct(
+            field, target, cda=cda,
+            occurrence_mapping=occurrence_mapping, transform=transform,
+        )
+        if compatible:
+            matches.append((
+                str(name), target, binding, allowed, transform,
+                original_text[0][0],
+            ))
+    if len(matches) != 1:
+        return []
+    name, target, binding, _, transform, original_text_name = matches[0]
+    domain_id = str(coded_domain.get("id") or "owned-inline-list")
+    effective = str(binding.get("effective_date") or "latest")
+    return [_candidate(
+        name, target,
+        list(context.get("chain", [])) + [
+            f"OPEN_CODED_DOMAIN({domain_id})",
+            f"VS({binding['id']}@{effective}:OTH)",
+            f"CODED_ORIGINAL_TEXT({original_text_name})",
+            "UNIQUE_DESCENDANT",
+        ],
+        "STRONG", 97, kind="OPEN_CODED_DOMAIN", actionable=True,
+        mapping={"target": name, "transform": transform},
+        warnings=[
+            "unrecognized source codes use the target ValueSet's OTH exception and preserve their wording in originalText"
+        ],
+    )]
+
+
 def _context(
     path: str,
     model: Mapping[str, Any],
@@ -1530,6 +1640,7 @@ def _cda_mapping_analysis(
         model, cda, {}, group_results
     )
     occurrence_mapping = {"structures": preliminary_structures}
+    value_set_members = _value_set_members(xml_paths)
 
     fields: dict[str, Any] = {}
     for path, field in model_fields.items():
@@ -1542,6 +1653,9 @@ def _cda_mapping_analysis(
         candidates = _deduplicate(candidates + _context_descendant_candidates(
             field, inherited_context, cda, semantic_labels,
             semantic_neighbours, occurrence_mapping,
+        ) + _open_coded_domain_candidates(
+            field, inherited_context, cda, value_set_members,
+            occurrence_mapping,
         ))
         actionable = [row for row in candidates if row["actionable"]]
         primary = actionable[0] if actionable else None
@@ -1553,7 +1667,6 @@ def _cda_mapping_analysis(
             "context": inherited_context if primary is None else None,
         }
 
-    value_set_members = _value_set_members(xml_paths)
     target_defaults: dict[str, dict[str, str]] = {}
     for path, field in model_fields.items():
         semantic = (
@@ -1705,10 +1818,13 @@ def _cda_mapping_analysis(
         if close:
             return f"MULTIPLE({len(close) + 1})"
         indirect_tokens = {
-            "INHERIT^-1", "ORIGINAL^-1", "SPEC^-1", "TA_VERSION", "TA_SPEC"
+            "INHERIT^-1", "ORIGINAL^-1", "SPEC^-1", "TA_VERSION", "TA_SPEC",
+            "OPEN_CODED_DOMAIN",
         }
         if primary.get("confidence") == "STRONG" and not any(
-            token in indirect_tokens for token in primary.get("chain", [])
+            token in indirect_tokens
+            or str(token).startswith("OPEN_CODED_DOMAIN(")
+            for token in primary.get("chain", [])
         ):
             return "EXACT"
         return "INDIRECT"
@@ -1732,6 +1848,13 @@ def _cda_mapping_analysis(
                 return (
                     "The CDA target is supported by mapping evidence and the shared occurrence "
                     f"semantics are made explicit by structural rule `{detail['structural_rule']}`."
+                )
+            if primary.get("kind") == "OPEN_CODED_DOMAIN":
+                return (
+                    "The source declares an unconstrained coded domain. Inside the "
+                    "mapped container, one unique coded target binds an OTH exception "
+                    "and exposes originalText, so unmatched wording has a formal "
+                    "target representation without inventing a terminology crosswalk."
                 )
             if primary.get("mapping") is not None:
                 return (

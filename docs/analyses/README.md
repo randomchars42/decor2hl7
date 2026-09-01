@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-01-open-coded-allergy.md`](2026-09-01-open-coded-allergy.md)
+  records the implemented empty-owned-domain classification, the generic
+  target-ValueSet `OTH`/`originalText` derivation for `Agens`, fresh-snapshot
+  coverage, and the remaining allergy description/derived-flag boundary.
 - [`2026-09-01-medication-common-base-slot.md`](2026-09-01-medication-common-base-slot.md)
   records the implemented static-association projection, XSD mixed-content and
   open-code handling, the resulting medication mappings, and the remaining lot
