@@ -210,10 +210,20 @@ sees only targets whose compiled
 `value_representation` marks them writable. The renderer executes that
 representation and does not contain a second datatype dispatch table.
 
+Generated target identifiers remain flattened and stable for configuration and
+runtime compatibility. They are identifiers, not an alternate XML hierarchy.
+The effective unflattened hierarchy remains available in each target's `path`
+and physical `locations` and in `cda-expanded-readable.xml` / `.md`.
+
 Before datatype expansion, `cda/core.py` loads the pinned normative CDA R2 XSD
 set cached by `fetch`. It indexes structural definitions, follows XSD extension
 inheritance, and materializes omitted CDA/RIM children and attributes. Explicit
-ART-DECOR constraints overlay these generic nodes. One compiled path can
+ART-DECOR constraints overlay these generic nodes. `include` and `contains`
+wrappers are transparent to the XML content model: their element descendants
+satisfy a parent's CDA/RIM particles while the wrappers remain in the compiled
+tree for template identity, occurrence metadata and provenance. The compiler
+therefore never materializes a generic sibling for a structural child already
+provided through one of those wrappers. One compiled path can
 therefore cross an ART-DECOR constraint, a CDA structural class, an HL7
 datatype, and its writable XML representation without class knowledge in
 mapping or rendering.

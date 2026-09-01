@@ -10,6 +10,9 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-01-section-overlay-and-mapping-priorities.md`](2026-09-01-section-overlay-and-mapping-priorities.md)
+  records the transparent-wrapper section correction, the stable flattened-name
+  decision, and the allergy/medication evidence that now heads the priority list.
 - [`2026-08-30-medication-mapping-plan.md`](2026-08-30-medication-mapping-plan.md)
   records the medication gap plan and the completed IHE Medicine Entry artifact
   check.

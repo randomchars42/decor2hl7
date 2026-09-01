@@ -301,6 +301,14 @@ names procedurally, overlays ART-DECOR constraints, and then runs datatype/value
 representation expansion. Generated nodes retain `cda-rim`, `datatype`, or
 combined template provenance. Mapping and rendering contain no per-class rules.
 
+Template `include` and `contains` nodes are provenance/occurrence wrappers, not
+XML elements. Structural matching descends through those wrappers before
+materializing an omitted CDA/RIM particle. A wrapped explicit child is overlaid
+with the structural type and combined provenance in place; it must not coexist
+with a second generic child. Group placement likewise uses compiled structural
+metadata (`kind`, writability, children and derivation provenance), not absence
+of a datatype, because explicit CDA containers carry their RIM class datatype.
+
 Medication `for_each` remains under DEC-007 because the model describes legal
 XML structure, not occurrence ownership. Pupil laterality is derived separately
 as `repeat_by_discriminator` from repeat cardinality, required
@@ -319,6 +327,12 @@ carried by compiled roles. ART-DECOR XPath predicates remain constraint
 identity, never serialized QName text. These rules preserve the compiled-model
 boundary: the renderer consumes representations, fallbacks and roles without
 class-, datatype- or template-specific dispatch.
+
+Generated target identifiers retain their flattened form as stable mapping and
+runtime keys. This does not flatten the compiled CDA model: physical `path` and
+`locations` metadata and the expanded readable products retain the actual
+hierarchy. Renaming the identifiers solely for presentation would create broad
+configuration churn without changing the executable structure.
 
 Evidence: `src/decor2hl7/cda/core.py`, `src/decor2hl7/cda/compile.py`,
 `tests/test_cda_datatypes.py`,

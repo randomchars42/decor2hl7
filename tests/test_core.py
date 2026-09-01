@@ -1270,6 +1270,33 @@ class CoreTests(unittest.TestCase):
             {},
         )
 
+    def test_group_name_mapping_selects_typed_structural_container(self) -> None:
+        structural = {
+            "kind": "element", "datatype": "POCD_MT000040.SubstanceAdministration",
+            "path": "hl7:substanceAdministration", "renderable": True,
+            "writable": False, "has_children": True,
+        }
+        writable = {
+            "kind": "attribute", "datatype": None,
+            "path": "hl7:substanceAdministration/hl7:text/hl7:reference/@value",
+            "renderable": True, "writable": True, "has_children": False,
+        }
+        generated = {
+            "kind": "element", "datatype": "POCD_MT000040.Participant2",
+            "path": "hl7:substanceAdministration/hl7:participant",
+            "renderable": True, "writable": False, "has_children": True,
+            "datatype_derived": True,
+        }
+        selected = mapping_compiler._principal_target(
+            "medication", {}, {"medication": [
+                ("Medication.value", writable),
+                ("Medication.participant", generated),
+                ("Medication.substanceAdministration", structural),
+            ]},
+        )
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected[0], "Medication.substanceAdministration")
+
     def test_for_each_can_bind_source_repeat_below_shared_cda_container(self) -> None:
         code_target = {
             "kind": "element", "datatype": "CD",
