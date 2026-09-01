@@ -407,7 +407,7 @@ def build_assignments(
     structural_sources: set[str] = set()
     for structure in structures:
         kind = str(structure.get("type") or "")
-        if kind == "fan_out":
+        if kind in {"fan_out", "repeat_by_discriminator"}:
             structural_sources.update(
                 str(branch.get("source")) for branch in structure.get("branches", [])
                 if isinstance(branch, Mapping) and branch.get("source")
@@ -463,13 +463,15 @@ def build_assignments(
             target = targets.get(target_name, {})
             _assign(assignments, target_name, _prepare_identifier(target_name, target, value, site))
             continue
-        if kind == "fan_out":
+        if kind in {"fan_out", "repeat_by_discriminator"}:
             branches = [branch for branch in structure.get("branches", []) if isinstance(branch, Mapping)]
             if not branches:
                 continue
             target_names = {_physical_target_name(cda, branch) for branch in branches}
             if len(target_names) != 1:
-                raise ValueError(f"fan_out rule {rule_id!r} must use one shared CDA target")
+                raise ValueError(
+                    f"repeat_by_discriminator rule {rule_id!r} must use one shared CDA target"
+                )
             target_name = next(iter(target_names))
             branch_values: list[tuple[Any, Mapping[str, Any]]] = []
             depths: set[int] = set()
@@ -482,7 +484,9 @@ def build_assignments(
                 constants = branch.get("constants", {})
                 branch_values.append((value, constants if isinstance(constants, Mapping) else {}))
             if len(depths) != 1:
-                raise ValueError(f"fan_out rule {rule_id!r} sources have different repeat depths")
+                raise ValueError(
+                    f"repeat_by_discriminator rule {rule_id!r} sources have different repeat depths"
+                )
             payload, constants = _fan_out(branch_values, next(iter(depths)))
             target = targets.get(target_name, {})
             _assign(assignments, target_name, _prepare_identifier(target_name, target, payload, site))
@@ -502,7 +506,7 @@ def covered_shared_claims(mapping: Mapping[str, Any]) -> dict[str, set[str]]:
         kind = str(rule.get("type") or "")
         if kind == "coalesce" and rule.get("target"):
             covered[str(rule["target"])] = {str(path) for path in rule.get("sources", [])}
-        elif kind == "fan_out":
+        elif kind in {"fan_out", "repeat_by_discriminator"}:
             for branch in rule.get("branches", []):
                 if isinstance(branch, Mapping) and branch.get("target") and branch.get("source"):
                     covered.setdefault(cda_target_name(branch), set()).add(str(branch["source"]))
@@ -525,7 +529,7 @@ def validate_structures(
         if rule_id in seen_ids:
             errors.append(f"{prefix} is duplicated")
         seen_ids.add(rule_id)
-        if kind not in {"for_each", "fan_out", "coalesce"}:
+        if kind not in {"for_each", "fan_out", "repeat_by_discriminator", "coalesce"}:
             errors.append(f"{prefix} has unknown type {kind!r}")
             continue
         if kind == "for_each":
@@ -597,6 +601,45 @@ def validate_structures(
             continue
         target_name = next(iter(value_targets))
         target = targets.get(target_name)
+        discriminator = rule.get("discriminator", {})
+        discriminator_target = str(
+            discriminator.get("target") or ""
+        ) if isinstance(discriminator, Mapping) else ""
+        allowed_members = {
+            (
+                str(member.get("code") or ""),
+                str(member.get("codeSystem") or member.get("code_system") or ""),
+            )
+            for member in (
+                discriminator.get("members", [])
+                if isinstance(discriminator, Mapping) else []
+            )
+            if isinstance(member, Mapping)
+        }
+        if kind == "repeat_by_discriminator":
+            binding = (
+                discriminator.get("value_set", {})
+                if isinstance(discriminator, Mapping) else {}
+            )
+            constant_target = targets.get(discriminator_target, {})
+            target_bindings = [
+                item for item in (constant_target.get("value_set_bindings") or [])
+                if isinstance(item, Mapping)
+            ] if isinstance(constant_target, Mapping) else []
+            if not discriminator_target or not allowed_members:
+                errors.append(f"{prefix} has no bound discriminator definition")
+            elif isinstance(binding, Mapping) and target_bindings and not any(
+                str(item.get("id") or "") == str(binding.get("id") or "")
+                and (
+                    not str(item.get("effective_date") or "")
+                    or str(item.get("effective_date") or "")
+                    == str(binding.get("effective_date") or "")
+                )
+                for item in target_bindings
+            ):
+                errors.append(
+                    f"{prefix} discriminator ValueSet binding does not match the CDA target"
+                )
         depths: set[int] = set()
         for branch in branches:
             path = str(branch.get("source") or "")
@@ -610,12 +653,25 @@ def validate_structures(
             if not isinstance(constants, Mapping) or not constants:
                 errors.append(f"{prefix} branch {path!r} has no discriminator constants")
             elif target:
-                for name in constants:
+                for name, constant in constants.items():
                     constant_target = targets.get(str(name))
                     if not constant_target or not constant_target.get("writable"):
                         errors.append(f"{prefix} references non-renderable constant target {name!r}")
                     elif constant_target.get("repeat_ancestors") != target.get("repeat_ancestors"):
                         errors.append(f"{prefix} constant target {name!r} is in a different occurrence")
+                    if kind == "repeat_by_discriminator" and str(name) == discriminator_target:
+                        encoded = (
+                            str(constant.get("code") or ""),
+                            str(
+                                constant.get("codeSystem")
+                                or constant.get("code_system") or ""
+                            ),
+                        ) if isinstance(constant, Mapping) else ("", "")
+                        if encoded not in allowed_members:
+                            errors.append(
+                                f"{prefix} branch {path!r} uses discriminator constant "
+                                f"{encoded!r} outside the selected bound ValueSet"
+                            )
         if not target or not target.get("writable") or len(target.get("locations", [])) != 1:
             errors.append(f"{prefix} references non-renderable target {target_name!r}")
         elif len(depths) == 1 and len(target.get("repeat_ancestors", [])) != next(iter(depths)) + 1:

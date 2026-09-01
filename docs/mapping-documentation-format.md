@@ -79,7 +79,8 @@ Use execution-oriented status labels:
 
 - **Mapped** — direct executable assignment;
 - **Transform** — executable after a declarative transformation;
-- **Structural rule** — repetition, fan-out or coalescing controls assignment;
+- **Structural rule** — repetition, repeat-by-discriminator or coalescing
+  controls assignment;
 - **Rule** — another executable multi-target or fallback rule;
 - **Review required** — no executable mapping has been approved.
 
@@ -447,8 +448,8 @@ behavior.
 - Show all mappings in entity tables.
 - Do not generate full JSON and XML for every direct mapping.
 - Generate one simple example and one example for every non-trivial pattern that
-  occurs: transform, repetition, fan-out, coalescing, fallback, ambiguity or
-  target-specific default.
+  occurs: transform, repetition, repeat-by-discriminator, coalescing, fallback,
+  ambiguity or target-specific default.
 - Group candidate details into decision cards only for unresolved or ambiguous
   fields.
 - Limit the working guide to the strongest five candidates; keep complete

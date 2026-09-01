@@ -22,15 +22,22 @@ import xml.etree.ElementTree as ET
 
 from ..retrieval.xml import child_text, clean, local, parse_file
 from ..assertions import schematron
+from ..compile.structural import value_set_members
 from ..workspace import write_json
 from .datatypes import (
+    base_datatype,
     classify_datatype,
     datatype_inventory,
     expand_datatype,
     value_representation,
 )
-from .core import index_definitions, structural_definition
-from .model import CdaValueTarget, Provenance, ValueRepresentation
+from .core import element_definition, index_definitions, resolve_definition
+from .model import (
+    CdaValueTarget,
+    Provenance,
+    ValueRepresentation,
+    ValueRepresentationKind,
+)
 
 TemplateKey = tuple[str, str]
 TEMPLATE_RELATIONS = {"SPEC", "VERSION", "COPY"}
@@ -104,10 +111,34 @@ def _maximum(value: str | None) -> int | None | str:
 
 def _source_key(source: Mapping[str, Any]) -> str:
     template = str(source.get("template_id") or "")
+    effective = str(source.get("template_effective_date") or "")
     element_id = source.get("element_id")
     if element_id:
-        return f"{template}|ID:{element_id}"
+        # ART-DECOR element ids are not necessarily unique inside a template.
+        # Expanded includes in particular can reuse the same id for distinct
+        # sibling constraints.  The path is therefore part of physical source
+        # identity; the id-only form remains available as a deliberately
+        # tolerant semantic lookup below.
+        return (
+            f"{template}@{effective}|ID:{element_id}"
+            f"|PATH:{source.get('path') or ''}"
+        )
+    return f"{template}@{effective}|PATH:{source.get('path') or ''}"
+
+
+def _revisionless_source_key(source: Mapping[str, Any]) -> str:
+    template = str(source.get("template_id") or "")
+    element_id = source.get("element_id")
+    if element_id:
+        return f"{template}|ID:{element_id}|PATH:{source.get('path') or ''}"
     return f"{template}|PATH:{source.get('path') or ''}"
+
+
+def _tolerant_source_key(source: Mapping[str, Any]) -> str:
+    element_id = source.get("element_id")
+    if not element_id:
+        return ""
+    return f"{source.get('template_id') or ''}|ID:{element_id}"
 
 
 def collect_templates(
@@ -213,25 +244,61 @@ def reachable_templates(
     return found, list(missing.values())
 
 
-def _constraints(element: ET.Element) -> tuple[list[str], list[tuple[str, str]], dict[str, str], str | None]:
+def _value_set_binding(node: ET.Element) -> dict[str, str] | None:
+    value_set = node.get("valueSet") or ""
+    if not value_set:
+        return None
+    return {
+        "id": value_set,
+        "effective_date": node.get("vseffectiveDate") or node.get("effectiveDate") or "",
+        "flexibility": node.get("flexibility") or "",
+    }
+
+
+def _attribute_fixed_value(attribute: ET.Element) -> str | None:
+    """Return an explicit or single-code ART-DECOR attribute constraint."""
+    if attribute.get("value") is not None:
+        return attribute.get("value")
+    codes = {
+        str(node.get("code")) for node in list(attribute)
+        if local(node.tag) == "vocabulary" and node.get("code") is not None
+    }
+    return next(iter(codes)) if len(codes) == 1 else None
+
+
+def _constraints(
+    element: ET.Element,
+) -> tuple[
+    list[str], list[dict[str, str]], list[tuple[str, str]], dict[str, str], str | None,
+]:
     value_sets: list[str] = []
+    value_set_bindings: list[dict[str, str]] = []
     codes: list[tuple[str, str]] = []
     fixed: dict[str, str] = {}
     unit: str | None = None
     for node in list(element):
         kind = local(node.tag)
         if kind == "vocabulary":
-            if node.get("valueSet"):
-                value_sets.append(node.get("valueSet") or "")
-            if node.get("code") and node.get("codeSystem"):
+            binding = _value_set_binding(node)
+            if binding is not None:
+                value_sets.append(binding["id"])
+                if binding not in value_set_bindings:
+                    value_set_bindings.append(binding)
+            if node.get("code"):
+                # CS constraints commonly state only the vocabulary code; the
+                # code system is implicit in the CDA attribute's domain.  A
+                # single such code is still an executable fixed value.
                 codes.append((node.get("code") or "", node.get("codeSystem") or ""))
         elif kind == "attribute" and node.get("name") and node.get("value"):
             fixed[node.get("name") or ""] = node.get("value") or ""
         elif kind == "property" and node.get("unit"):
             unit = node.get("unit")
-    if fixed.get("code") and fixed.get("codeSystem"):
-        codes.append((fixed["code"], fixed["codeSystem"]))
-    return list(dict.fromkeys(value_sets)), list(dict.fromkeys(codes)), fixed, unit
+    if fixed.get("code"):
+        codes.append((fixed["code"], fixed.get("codeSystem", "")))
+    return (
+        list(dict.fromkeys(value_sets)), value_set_bindings,
+        list(dict.fromkeys(codes)), fixed, unit,
+    )
 
 
 def _fixed_text(element: ET.Element) -> str | None:
@@ -252,6 +319,168 @@ def _description(element: ET.Element) -> str | None:
             if value:
                 return value
     return None
+
+
+def _normalized_xml_path(value: str) -> tuple[str, ...]:
+    """Return a prefix/predicate-independent CDA path for evidence matching."""
+    return tuple(
+        part.split(":", 1)[-1].split("[", 1)[0]
+        for part in value.split("/")
+        if part and not part.startswith("@")
+    )
+
+
+def _neutral_coded_examples(
+    reachable: Mapping[TemplateKey, ET.Element],
+) -> dict[tuple[TemplateKey, tuple[str, ...]], list[dict[str, str]]]:
+    """Index coded neutral examples by exact template revision and CDA path.
+
+    ART-DECOR examples may sit at template level or inside the element they
+    illustrate.  Nested examples commonly repeat their enclosing element as
+    their XML root, so that duplicate segment is removed when the paths join.
+    """
+    result: dict[
+        tuple[TemplateKey, tuple[str, ...]], list[dict[str, str]]
+    ] = defaultdict(list)
+
+    def example_values(
+        node: ET.Element, prefix: tuple[str, ...] = (),
+    ) -> Iterable[tuple[tuple[str, ...], dict[str, str]]]:
+        if not isinstance(node.tag, str):
+            return
+        current = prefix + (local(node.tag),)
+        if node.get("code"):
+            yield current, {
+                "code": node.get("code") or "",
+                "code_system": node.get("codeSystem") or "",
+            }
+        for child in list(node):
+            yield from example_values(child, current)
+
+    def walk(
+        node: ET.Element, template_key: TemplateKey,
+        constraint_path: tuple[str, ...] = (),
+    ) -> None:
+        kind = local(node.tag) if isinstance(node.tag, str) else ""
+        current = constraint_path
+        if kind == "element" and node.get("name"):
+            current += _normalized_xml_path(node.get("name") or "")
+        if kind == "example":
+            if (node.get("type") or "").casefold() != "neutral":
+                return
+            for root in list(node):
+                for example_path, value in example_values(root):
+                    if current and example_path and current[-1] == example_path[0]:
+                        path = current[:-1] + example_path
+                    else:
+                        path = current + example_path
+                    key = (template_key, path)
+                    if value not in result[key]:
+                        result[key].append(value)
+            return
+        for child in list(node):
+            walk(child, template_key, current)
+
+    for template_key, template in reachable.items():
+        walk(template, template_key)
+    return dict(result)
+
+
+def _allowed_coded_values(
+    node: Mapping[str, Any],
+    members: Mapping[str | tuple[str, str], list[dict[str, Any]]],
+) -> tuple[list[tuple[str, str]], dict[str, str] | None]:
+    """Return the exact allowed coded set that can prove an example default."""
+    bindings = [
+        item for item in node.get("value_set_bindings", [])
+        if isinstance(item, Mapping) and item.get("id")
+    ]
+    if len(bindings) == 1:
+        value_set = str(bindings[0].get("id") or "")
+        effective = str(bindings[0].get("effective_date") or "")
+        if effective:
+            allowed = {
+                (str(item.get("code") or ""), str(item.get("codeSystem") or ""))
+                for item in members.get((value_set, effective), [])
+                if item.get("code") and item.get("codeSystem")
+            }
+            if allowed:
+                return sorted(allowed), {
+                    "id": value_set, "effective_date": effective,
+                }
+
+    explicit = {
+        (str(item.get("code") or ""), str(item.get("code_system") or ""))
+        for item in node.get("codes", [])
+        if isinstance(item, Mapping) and item.get("code")
+    }
+    # One explicit code is already a fixed template constraint.  Two or more
+    # codes form an allowed set against which a neutral example can be checked.
+    if len(explicit) > 1:
+        return sorted(explicit), None
+    return [], None
+
+
+def _apply_neutral_example_defaults(
+    nodes: list[dict[str, Any]],
+    examples: Mapping[
+        tuple[TemplateKey, tuple[str, ...]], list[dict[str, str]]
+    ],
+    members: Mapping[str | tuple[str, str], list[dict[str, Any]]],
+) -> None:
+    """Compile strong, terminology-checked neutral-example fallbacks."""
+    for node in nodes:
+        if node.get("kind") == "element":
+            representation = value_representation(
+                node.get("representation_datatype") or node.get("datatype")
+            )
+            required = bool(node.get("mandatory")) or int(node.get("min") or 0) >= 1
+            origin = node.get("origin") if isinstance(node.get("origin"), Mapping) else {}
+            template_key = (
+                str(origin.get("template_id") or ""),
+                str(origin.get("template_effective_date") or ""),
+            )
+            path = _normalized_xml_path(str(origin.get("path") or ""))
+            candidates = examples.get((template_key, path), [])
+            allowed, binding = _allowed_coded_values(node, members)
+            resolved: set[tuple[str, str]] = set()
+            if (
+                required and representation is not None
+                and representation.kind.value == "coded"
+                and candidates and allowed
+                and not node.get("fixed") and len(node.get("codes", [])) != 1
+            ):
+                for candidate in candidates:
+                    code = str(candidate.get("code") or "")
+                    code_system = str(candidate.get("code_system") or "")
+                    matches = {
+                        item for item in allowed
+                        if item[0] == code and (not code_system or item[1] == code_system)
+                    }
+                    if len(matches) == 1:
+                        resolved.update(matches)
+            if len(resolved) == 1:
+                code, code_system = next(iter(resolved))
+                evidence: dict[str, Any] = {
+                    "source": "template-example",
+                    "evidence": "STRONG",
+                    "template_id": template_key[0],
+                    "template_effective_date": template_key[1],
+                    "path": str(origin.get("path") or ""),
+                }
+                if binding is not None:
+                    evidence["value_set"] = binding
+                node["compiled_default"] = {
+                    "value": {
+                        "code": code,
+                        **({"codeSystem": code_system} if code_system else {}),
+                    },
+                    **evidence,
+                }
+                node.setdefault("provenance", []).append(evidence)
+        _apply_neutral_example_defaults(
+            list(node.get("children", [])), examples, members
+        )
 
 
 
@@ -275,7 +504,7 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                 if kind == "element":
                     name = child.get("name") or "element"
                     current = path + (name,)
-                    value_sets, codes, fixed, unit = _constraints(child)
+                    value_sets, value_set_bindings, codes, fixed, unit = _constraints(child)
                     rows.append({
                         "template_id": tkey[0],
                         "template_effective_date": tkey[1],
@@ -287,6 +516,7 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                         "path": "/".join(current),
                         "datatype": child.get("datatype"),
                         "value_sets": value_sets,
+                        "value_set_bindings": value_set_bindings,
                         "codes": [{"code": c, "code_system": s} for c, s in codes],
                         "fixed": fixed,
                         "fixed_text": _fixed_text(child),
@@ -302,6 +532,7 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                         if local(direct.tag) != "attribute" or not direct.get("name"):
                             continue
                         aname = "@" + (direct.get("name") or "attribute")
+                        attribute_value = _attribute_fixed_value(direct)
                         rows.append({
                             "template_id": tkey[0],
                             "template_effective_date": tkey[1],
@@ -316,8 +547,14 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                                 v.get("valueSet") or "" for v in list(direct)
                                 if local(v.tag) == "vocabulary" and v.get("valueSet")
                             ],
+                            "value_set_bindings": [
+                                binding for v in list(direct)
+                                if local(v.tag) == "vocabulary"
+                                for binding in [_value_set_binding(v)]
+                                if binding is not None
+                            ],
                             "codes": [],
-                            "fixed": {"value": direct.get("value")} if direct.get("value") else {},
+                            "fixed": {"value": attribute_value} if attribute_value is not None else {},
                             "fixed_text": None,
                             "description": None,
                             "conformance": child.get("conformance"),
@@ -373,21 +610,24 @@ def _source(template: ET.Element, path: str, element_id: str | None) -> dict[str
 
 
 def _parse_attribute(attribute: ET.Element, template: ET.Element, path: str) -> dict[str, Any]:
-    valuesets = [
-        node.get("valueSet") or "" for node in list(attribute)
-        if local(node.tag) == "vocabulary" and node.get("valueSet")
+    bindings = [
+        binding for node in list(attribute)
+        if local(node.tag) == "vocabulary"
+        for binding in [_value_set_binding(node)] if binding is not None
     ]
+    valuesets = list(dict.fromkeys(binding["id"] for binding in bindings))
     return {
         "kind": "attribute",
         "name": attribute.get("name") or "attribute",
         "id": attribute.get("id"),
         "datatype": attribute.get("datatype"),
-        "value": attribute.get("value"),
+        "value": _attribute_fixed_value(attribute),
         "optional": (
             attribute.get("isOptional") == "true"
             if attribute.get("isOptional") is not None else None
         ),
         "value_sets": valuesets,
+        "value_set_bindings": bindings,
         "sources": [_source(template, path, attribute.get("id"))],
         "provenance": [{
             "source": "template",
@@ -401,7 +641,7 @@ def _parse_element(element: ET.Element, template: ET.Element, path: tuple[str, .
     name = element.get("name") or "hl7:element"
     current = path + (name,)
     current_path = "/".join(current)
-    value_sets, codes, fixed, unit = _constraints(element)
+    value_sets, value_set_bindings, codes, fixed, unit = _constraints(element)
     children: list[dict[str, Any]] = []
     attributes: list[dict[str, Any]] = []
     assertions: list[dict[str, str]] = []
@@ -446,8 +686,9 @@ def _parse_element(element: ET.Element, template: ET.Element, path: tuple[str, .
         "fixed": fixed,
         "fixed_text": _fixed_text(element),
         "value_sets": value_sets,
+        "value_set_bindings": value_set_bindings,
         "codes": [{"code": c, "code_system": s} for c, s in codes],
-        "unit": unit,
+        "unit": unit or fixed.get("unit"),
         "attributes": attributes,
         "children": children,
         "contains": element.get("contains"),
@@ -495,6 +736,8 @@ def _merge_attribute(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dic
             result[key] = child.get(key)
     if child.get("value_sets"):
         result["value_sets"] = deepcopy(child.get("value_sets"))
+    if child.get("value_set_bindings"):
+        result["value_set_bindings"] = deepcopy(child.get("value_set_bindings"))
     result["sources"] = _unique_sources(list(parent.get("sources", [])) + list(child.get("sources", [])))
     result["targets"] = []
     return result
@@ -559,8 +802,17 @@ def _merge_node(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str
     result["fixed"] = {**dict(parent.get("fixed", {})), **dict(child.get("fixed", {}))}
     if child.get("value_sets"):
         result["value_sets"] = deepcopy(child.get("value_sets"))
+        if not child.get("codes"):
+            result["codes"] = []
+    if child.get("value_set_bindings"):
+        result["value_set_bindings"] = deepcopy(child.get("value_set_bindings"))
     if child.get("codes"):
         result["codes"] = deepcopy(child.get("codes"))
+        if not child.get("value_sets"):
+            # A specialization's explicit code list replaces its prototype's
+            # broader vocabulary rather than being combined with it.
+            result["value_sets"] = []
+            result["value_set_bindings"] = []
     merged_asserts: list[dict[str, Any]] = []
     seen_asserts: set[tuple[str, str, str]] = set()
     for assertion in list(parent.get("asserts", [])) + list(child.get("asserts", [])):
@@ -768,6 +1020,7 @@ def _datatype_child(
         "fixed": {},
         "fixed_text": None,
         "value_sets": [],
+        "value_set_bindings": [],
         "codes": [],
         "unit": None,
         "attributes": [],
@@ -775,9 +1028,10 @@ def _datatype_child(
         "contains": None,
         "contains_flexibility": None,
         "origin": source,
-        "sources": [source] + (
-            list(parent.get("sources", [])) if parent.get("model_derived") else []
-        ),
+        # Sources address this physical node.  Ancestor evidence belongs in
+        # provenance only; treating it as another source key aliases children
+        # and attributes back onto the ancestor target.
+        "sources": [source],
         "provenance": [source] + (
             list(parent.get("provenance", [])) if parent.get("model_derived") else []
         ),
@@ -785,6 +1039,7 @@ def _datatype_child(
         "asserts": [],
         "lets": {},
         "datatype_derived": True,
+        "datatype_expansion_depth": int(parent.get("datatype_expansion_depth") or 0) + 1,
     }
 
 
@@ -800,9 +1055,8 @@ def _datatype_attribute(
         "value": None,
         "optional": optional,
         "value_sets": [],
-        "sources": [source] + (
-            list(parent.get("sources", [])) if parent.get("model_derived") else []
-        ),
+        "value_set_bindings": [],
+        "sources": [source],
         "provenance": [source] + (
             list(parent.get("provenance", [])) if parent.get("model_derived") else []
         ),
@@ -812,40 +1066,76 @@ def _datatype_attribute(
 
 
 def _expand_datatype_structure(
-    nodes: list[dict[str, Any]], stack: tuple[str, ...] = (),
+    nodes: list[dict[str, Any]], definitions: Mapping[str, Any] | None = None,
+    stack: tuple[str, ...] = (),
 ) -> None:
     """Overlay explicit template constraints on recursively expanded datatypes."""
+    def representation_type(name: str) -> str | None:
+        current = name
+        seen: set[str] = set()
+        while current and current not in seen:
+            seen.add(current)
+            if classify_datatype(current) in {"datatype", "alias"}:
+                policy = expand_datatype(current)
+                if policy.value_representation is not None:
+                    return current
+            definition = (definitions or {}).get(current)
+            current = str(definition.base or "") if definition is not None else ""
+        return None
+
     for node in nodes:
         if node.get("kind") != "element":
-            _expand_datatype_structure(list(node.get("children", [])), stack)
+            _expand_datatype_structure(
+                list(node.get("children", [])), definitions, stack
+            )
             continue
         declared = str(node.get("datatype") or "")
         classification = classify_datatype(declared)
+        schema_definition = None
+        if declared in (definitions or {}):
+            schema_definition = resolve_definition(definitions, declared)  # type: ignore[arg-type]
+            if schema_definition.category == "datatype":
+                classification = "datatype"
+            else:
+                # Structural classes are materialized only by the CDA/RIM
+                # pass.  Letting the datatype pass follow them would unfold
+                # the cyclic document grammar from every generated child.
+                schema_definition = None
         if classification == "unsupported":
             raise ValueError(
                 f"unsupported HL7 V3 datatype {declared!r} at {node.get('origin', {}).get('path') or node.get('name')}"
             )
         normalized = declared.upper()
-        definition = (
-            expand_datatype(declared)
-            if classification in {"datatype", "alias"} else None
+        representation_name = representation_type(declared)
+        representation_definition = (
+            expand_datatype(representation_name) if representation_name else None
         )
+        if representation_name:
+            node["representation_datatype"] = representation_name
         current_path = str(node.get("origin", {}).get("path") or node.get("name") or "")
-        if definition is not None:
+        if representation_definition is not None or schema_definition is not None:
             represented_attributes = set(
-                definition.value_representation.attributes
-                if definition.value_representation is not None else ()
+                representation_definition.value_representation.attributes
+                if representation_definition is not None
+                and representation_definition.value_representation is not None else ()
             )
             if (
-                definition.value_representation is not None
-                and definition.value_representation.attribute
+                representation_definition is not None
+                and representation_definition.value_representation is not None
+                and representation_definition.value_representation.attribute
             ):
-                represented_attributes.add(definition.value_representation.attribute)
+                represented_attributes.add(
+                    representation_definition.value_representation.attribute
+                )
             existing_attributes = {
                 _xml_key("@" + str(item.get("name") or "")): item
                 for item in node.get("attributes", [])
             }
-            for attribute in definition.attributes:
+            attributes = (
+                schema_definition.attributes if schema_definition is not None
+                else representation_definition.attributes  # type: ignore[union-attr]
+            )
+            for attribute in attributes:
                 if attribute.name in represented_attributes:
                     continue
                 key = _xml_key("@" + attribute.name)
@@ -867,8 +1157,22 @@ def _expand_datatype_structure(
                 _xml_key(str(item.get("name") or "")): item
                 for item in node.get("children", []) if item.get("kind") == "element"
             }
-            if normalized not in stack:
-                for part in definition.parts:
+            if (
+                normalized not in stack
+                # A derived node that already has a scalar XML representation
+                # is a writable boundary.  Complex nodes continue through the
+                # XSD graph until such a boundary or a schema cycle is reached.
+                and not (
+                    node.get("datatype_derived")
+                    and representation_definition is not None
+                    and representation_definition.value_representation is not None
+                )
+            ):
+                parts = (
+                    schema_definition.parts if schema_definition is not None
+                    else representation_definition.parts  # type: ignore[union-attr]
+                )
+                for part in parts:
                     key = _xml_key(part.name)
                     part_path = current_path + "/" + part.name
                     if key in existing_children:
@@ -880,12 +1184,15 @@ def _expand_datatype_structure(
                             "source": "template + datatype",
                         })
                     else:
-                        node.setdefault("children", []).append(_datatype_child(
+                        child = _datatype_child(
                             node, part.name, part.datatype,
                             part.minimum, part.maximum, part_path,
-                        ))
+                        )
+                        node.setdefault("children", []).append(child)
+                        existing_children[key] = child
         _expand_datatype_structure(
             list(node.get("children", [])),
+            definitions,
             stack + ((normalized,) if normalized else ()),
         )
 
@@ -893,15 +1200,31 @@ def _expand_datatype_structure(
 def _expand_cda_model_structure(
     nodes: list[dict[str, Any]], definitions: dict[str, Any],
     stack: tuple[str, ...] = (),
+    parent_definition: Any | None = None,
 ) -> None:
     """Overlay ART-DECOR constraints on CDA structural class definitions."""
     for node in nodes:
         if node.get("kind") != "element":
             _expand_cda_model_structure(
-                list(node.get("children", [])), definitions, stack
+                list(node.get("children", [])), definitions, stack,
+                parent_definition,
             )
             continue
-        definition = structural_definition(definitions, str(node.get("name") or ""))
+        definition = element_definition(
+            definitions,
+            str(node.get("name") or ""),
+            declared_type=str(node.get("datatype") or ""),
+            parent=parent_definition,
+        )
+        # Materialize the direct CDA/RIM content model of every explicit
+        # ART-DECOR node.  A generated structural child remains a navigation
+        # container until a template constrains it; recursively unfolding the
+        # complete CDA grammar would produce the entire cyclic RIM graph.
+        # Datatype children are expanded recursively in the following pass.
+        if node.get("model_derived"):
+            definition = None
+        if definition is not None and definition.category != "structural":
+            definition = None
         current_path = str(
             node.get("origin", {}).get("path") or node.get("name") or ""
         )
@@ -916,7 +1239,8 @@ def _expand_cda_model_structure(
                 source = _model_source(node, part_path, part.name, "cda-rim")
                 if key in existing_children:
                     child = existing_children[key]
-                    child.setdefault("datatype", part.datatype)
+                    if not child.get("datatype"):
+                        child["datatype"] = part.datatype
                     child.setdefault("provenance", []).append({
                         **source, "source": "template + cda-rim",
                     })
@@ -931,6 +1255,7 @@ def _expand_cda_model_structure(
                     child["sources"] = [source]
                     child["provenance"] = [source]
                     node.setdefault("children", []).append(child)
+                    existing_children[key] = child
             existing_attributes = {
                 _xml_key("@" + str(item.get("name") or "")): item
                 for item in node.get("attributes", [])
@@ -940,8 +1265,18 @@ def _expand_cda_model_structure(
                 path = current_path + "/@" + attribute.name
                 source = _model_source(node, path, "@" + attribute.name, "cda-rim")
                 if key in existing_attributes:
-                    existing_attributes[key].setdefault("datatype", attribute.datatype)
-                    existing_attributes[key].setdefault("provenance", []).append({
+                    existing = existing_attributes[key]
+                    if not existing.get("datatype"):
+                        existing["datatype"] = attribute.datatype
+                    if (
+                        existing.get("value") is None
+                        and (attribute.fixed is not None or attribute.default is not None)
+                    ):
+                        existing["value"] = (
+                            attribute.fixed
+                            if attribute.fixed is not None else attribute.default
+                        )
+                    existing.setdefault("provenance", []).append({
                         **source, "source": "template + cda-rim",
                     })
                 else:
@@ -959,6 +1294,7 @@ def _expand_cda_model_structure(
         _expand_cda_model_structure(
             list(node.get("children", [])), definitions,
             stack + ((definition.name,) if definition is not None else ()),
+            definition or parent_definition,
         )
 
 
@@ -982,6 +1318,7 @@ def _raw_datatype_targets(document: Iterable[Mapping[str, Any]]) -> list[dict[st
                     "path": origin.get("path"),
                     "datatype": node.get("datatype"),
                     "value_sets": list(node.get("value_sets", [])),
+                    "value_set_bindings": list(node.get("value_set_bindings", [])),
                     "codes": list(node.get("codes", [])),
                     "fixed": dict(node.get("fixed", {})),
                     "fixed_text": node.get("fixed_text"),
@@ -1008,6 +1345,7 @@ def _raw_datatype_targets(document: Iterable[Mapping[str, Any]]) -> list[dict[st
                     "path": origin.get("path"),
                     "datatype": attribute.get("datatype"),
                     "value_sets": list(attribute.get("value_sets", [])),
+                    "value_set_bindings": list(attribute.get("value_set_bindings", [])),
                     "codes": [],
                     "fixed": {},
                     "fixed_text": None,
@@ -1029,10 +1367,30 @@ def _target_lookup(targets: Mapping[str, Mapping[str, Any]]) -> dict[str, list[s
     lookup: dict[str, list[str]] = defaultdict(list)
     for name, target in targets.items():
         lookup[str(target.get("source_key") or "")].append(name)
+        lookup[_revisionless_source_key(target)].append(name)
         # Element-id source resolution is intentionally version tolerant.
         if target.get("element_id"):
-            lookup[f"{target.get('template_id')}|ID:{target.get('element_id')}"] .append(name)
+            lookup[_tolerant_source_key(target)].append(name)
     return lookup
+
+
+def _lookup_source_targets(
+    lookup: Mapping[str, list[str]], source: Mapping[str, Any]
+) -> list[str]:
+    """Resolve one physical source, falling back to id-only evidence.
+
+    Exact path identity must win whenever it exists.  Using the id-only index
+    first aliases distinct sibling constraints when an ART-DECOR publisher
+    reused an element id in a single template.
+    """
+    exact = list(lookup.get(_source_key(source), []))
+    if exact:
+        return exact
+    revisionless = list(lookup.get(_revisionless_source_key(source), []))
+    if revisionless:
+        return revisionless
+    tolerant = _tolerant_source_key(source)
+    return list(lookup.get(tolerant, [])) if tolerant else []
 
 
 def _annotate_targets(
@@ -1059,7 +1417,7 @@ def _annotate_targets(
                 origin_key = _source_key(origin) if origin else ""
                 for source in node.get("sources", []):
                     key = _source_key(source)
-                    for name in lookup.get(key, []):
+                    for name in _lookup_source_targets(lookup, source):
                         if name not in names:
                             names.append(name)
                         if key == origin_key and own_name is None:
@@ -1084,7 +1442,9 @@ def _annotate_targets(
                     # Fixed element text is a template constraint, not a writable
                     # application slot.  Keep the target for provenance/evidence
                     # but do not allow mappings or site values to override it.
-                    representation = value_representation(node.get("datatype"))
+                    representation = value_representation(
+                        node.get("representation_datatype") or node.get("datatype")
+                    )
                     serialized_representation = (
                         representation.to_dict() if representation is not None else None
                     )
@@ -1107,18 +1467,26 @@ def _annotate_targets(
                         if serialized_representation is not None and serialized_representation.get("xsi_type"):
                             typed["value_representation"]["xsi_type"] = serialized_representation["xsi_type"]
                         target.update(typed)
-                    represented_attributes = set(
-                        serialized_representation.get("attributes", [])
-                        if serialized_representation else []
+                    # A composite value representation may contain both the
+                    # source-controlled scalar slot and template-controlled
+                    # companion metadata.  For example, PQ writes the number
+                    # to @value while a template commonly fixes @unit.  Only a
+                    # fixed scalar slot makes the value target non-writable;
+                    # fixed companion attributes are retained by the renderer.
+                    scalar_attribute = (
+                        serialized_representation.get("scalar_attribute")
+                        if serialized_representation else None
+                    ) or (
+                        serialized_representation.get("attribute")
+                        if serialized_representation else None
                     )
-                    if serialized_representation and serialized_representation.get("attribute"):
-                        represented_attributes.add(str(serialized_representation["attribute"]))
                     fixed_representation = bool(
-                        represented_attributes & set(node.get("fixed", {}))
+                        scalar_attribute
+                        and scalar_attribute in node.get("fixed", {})
                     ) or bool(
                         serialized_representation
                         and serialized_representation.get("kind") == "coded"
-                        and node.get("codes")
+                        and len(node.get("codes", [])) == 1
                     )
                     target["writable"] = bool(
                         representation is not None
@@ -1130,10 +1498,14 @@ def _annotate_targets(
                     target["renderable"] = not prohibited and node.get("fixed_text") is None
                     # The concrete node carries effective SPEC constraints.
                     for key in (
-                        "datatype", "value_sets", "codes", "fixed", "fixed_text", "unit",
-                        "min", "max", "mandatory",
+                        "datatype", "value_sets", "value_set_bindings", "codes", "fixed", "fixed_text", "unit",
+                        "min", "max", "mandatory", "system_value", "content_role",
                     ):
                         target[key] = deepcopy(node.get(key))
+                    if node.get("compiled_default") is not None:
+                        target["compiled_default"] = deepcopy(
+                            node.get("compiled_default")
+                        )
                     target["has_children"] = bool(node.get("children"))
                     target["provenance"] = deepcopy(node.get("provenance", []))
                 if own_name:
@@ -1141,8 +1513,11 @@ def _annotate_targets(
                         key = _source_key(source)
                         if own_name not in source_index[key]:
                             source_index[key].append(own_name)
-                        if source.get("element_id"):
-                            tolerant = f"{source.get('template_id')}|ID:{source.get('element_id')}"
+                        revisionless = _revisionless_source_key(source)
+                        if own_name not in source_index[revisionless]:
+                            source_index[revisionless].append(own_name)
+                        tolerant = _tolerant_source_key(source)
+                        if tolerant:
                             if own_name not in source_index[tolerant]:
                                 source_index[tolerant].append(own_name)
 
@@ -1153,7 +1528,7 @@ def _annotate_targets(
                     own_attr: str | None = None
                     for source in attr.get("sources", []):
                         key = _source_key(source)
-                        for name in lookup.get(key, []):
+                        for name in _lookup_source_targets(lookup, source):
                             if name not in attr_names:
                                 attr_names.append(name)
                             if key == attr_origin_key and own_attr is None:
@@ -1181,10 +1556,28 @@ def _annotate_targets(
                             representation,
                             attr.get("provenance", []),
                         ))
-                        target["writable"] = not prohibited and fixed_value is None
-                        target["renderable"] = not prohibited and fixed_value is None
+                        conditional_fixed = bool(
+                            fixed_value is not None
+                            and attr.get("optional") is True
+                        )
+                        attr["conditional_fixed"] = conditional_fixed
+                        target["conditional_fixed"] = conditional_fixed
+                        # A fixed optional attribute constrains the value only
+                        # when the attribute is present.  It remains a legal
+                        # mapping endpoint (for example @nullFlavor="NI"), but
+                        # the renderer must omit it when no value is assigned
+                        # and reject any assigned value other than the fixed
+                        # one.  Required fixed attributes are still supplied
+                        # entirely by the template and are not writable.
+                        target["writable"] = not prohibited and (
+                            fixed_value is None or conditional_fixed
+                        )
+                        target["renderable"] = target["writable"]
                         target["datatype"] = attr.get("datatype")
                         target["value_sets"] = deepcopy(attr.get("value_sets", []))
+                        target["value_set_bindings"] = deepcopy(
+                            attr.get("value_set_bindings", [])
+                        )
                         target["fixed"] = {"value": fixed_value} if fixed_value is not None else {}
                         target["min"] = 0 if attr.get("optional") is not False else 1
                         target["max"] = 1
@@ -1196,14 +1589,85 @@ def _annotate_targets(
                             key = _source_key(source)
                             if own_attr not in source_index[key]:
                                 source_index[key].append(own_attr)
-                            if source.get("element_id"):
-                                tolerant = f"{source.get('template_id')}|ID:{source.get('element_id')}"
+                            revisionless = _revisionless_source_key(source)
+                            if own_attr not in source_index[revisionless]:
+                                source_index[revisionless].append(own_attr)
+                            tolerant = _tolerant_source_key(source)
+                            if tolerant:
                                 if own_attr not in source_index[tolerant]:
                                     source_index[tolerant].append(own_attr)
             annotate(list(node.get("children", [])), here, node_repeat_ancestors)
 
     annotate(document)
     return dict(source_index)
+
+
+def _compiled_content_roles(
+    nodes: list[dict[str, Any]], element_path: tuple[str, ...] = (),
+) -> None:
+    """Annotate specification-defined values supplied by document production.
+
+    These roles are compiled once from the effective CDA hierarchy.  Rendering
+    consumes only the role metadata and therefore has no datatype or template
+    name dispatch of its own.
+    """
+    for node in nodes:
+        path = element_path
+        if node.get("kind") == "element":
+            raw = str(node.get("name") or "").split(":", 1)[-1]
+            raw = raw.split("[", 1)[0]
+            path = element_path + (raw,)
+            datatype = str(node.get("datatype") or "")
+            if (
+                classify_datatype(datatype) in {"datatype", "alias"}
+                and base_datatype(datatype) == "II"
+                and (node.get("mandatory") or int(node.get("min") or 0) >= 1)
+                and not node.get("fixed")
+            ):
+                node["system_value"] = "generated_identifier"
+            if path == ("ClinicalDocument", "effectiveTime"):
+                node["system_value"] = "document_generation_time"
+            elif path == ("ClinicalDocument", "author", "time"):
+                node["system_value"] = "document_generation_time"
+            elif path == (
+                "ClinicalDocument", "custodian", "assignedCustodian",
+                "representedCustodianOrganization", "id",
+            ):
+                node["system_value"] = "custodian_organization_identifier"
+            elif path == (
+                "ClinicalDocument", "custodian", "assignedCustodian",
+                "representedCustodianOrganization", "name",
+            ):
+                node["system_value"] = "custodian_organization_name"
+            elif len(path) >= 2 and path[-2:] == ("section", "title"):
+                node["content_role"] = "section_title"
+            elif len(path) >= 2 and path[-2:] == ("section", "text"):
+                node["content_role"] = "section_narrative"
+            representation = value_representation(
+                node.get("representation_datatype") or node.get("datatype")
+            )
+            if (
+                representation is not None
+                and representation.kind == ValueRepresentationKind.CODED
+            ):
+                for child in node.get("children", []):
+                    child_name = str(child.get("name") or "").split(":", 1)[-1]
+                    child_name = child_name.split("[", 1)[0]
+                    child_representation = value_representation(
+                        child.get("representation_datatype")
+                        or child.get("datatype")
+                    )
+                    if (
+                        child_name == "originalText"
+                        and child_representation is not None
+                        and child_representation.kind
+                        == ValueRepresentationKind.ELEMENT_TEXT
+                    ):
+                        # The datatype definition, rather than the renderer,
+                        # owns the fact that a coded value's source wording is
+                        # serialized in this companion text node.
+                        child["content_role"] = "coded_original_text"
+        _compiled_content_roles(list(node.get("children", [])), path)
 
 
 
@@ -1215,11 +1679,13 @@ def compile_cda(
     *,
     strict: bool = True,
     core_definition_paths: Iterable[Path] = (),
+    value_set_paths: Iterable[Path] = (),
 ) -> dict[str, Any]:
     template_id = str(model.get("meta", {}).get("template_id") or "")
     if not template_id:
         raise ValueError("model has no representing CDA template")
     template_effective = str(model.get("meta", {}).get("template_effective_date") or "") or None
+    xml_paths = list(xml_paths)
     templates = collect_templates(xml_paths, fallback_paths, cutoff)
     reachable, missing = reachable_templates(templates, template_id, template_effective)
     if strict and missing:
@@ -1243,7 +1709,13 @@ def compile_cda(
             "unsupported HL7 V3 datatype(s) in effective CDA template: "
             + ", ".join(inventory["unsupported"])
         )
-    _expand_datatype_structure(document)
+    _expand_datatype_structure(document, definitions)
+    _apply_neutral_example_defaults(
+        document,
+        _neutral_coded_examples(reachable),
+        value_set_members([*xml_paths, *list(value_set_paths)]),
+    )
+    _compiled_content_roles(document)
     targets = _name_targets(
         _raw_targets(reachable) + _raw_datatype_targets(document)
     )
@@ -1309,6 +1781,9 @@ def compile_cda(
             "definitions": len(definitions),
             "source": "HL7 CDA R2 normative XSD" if definitions else None,
         },
+        "compiled_defaults": sum(
+            bool(target.get("compiled_default")) for target in targets.values()
+        ),
         "stats": {
             "reachable_templates": len(reachable),
             "targets": len(targets),
@@ -1344,11 +1819,13 @@ def compile_cda_model(
 def write_cda_model(
     templates: Iterable[Path], model_dir: Path, model: dict[str, Any],
     core_definition_paths: Iterable[Path] = (),
+    value_set_paths: Iterable[Path] = (),
 ) -> dict[str, Any]:
     """Write ``cda.json`` while retaining unresolved nested references."""
     cda = compile_cda(
         templates, model, strict=False,
         core_definition_paths=core_definition_paths,
+        value_set_paths=value_set_paths,
     )
     write_json(model_dir / "cda.json", cda)
     (model_dir / "cda-assertions.sch").write_text(

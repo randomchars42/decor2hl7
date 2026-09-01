@@ -119,6 +119,7 @@ def direct_compatibility(
     model_type = str(field.get("type") or "")
     if not model_type:
         return False, ["dataset node has no value datatype"]
+    ordinal_payload = False
     if model_type == "ordinal":
         coded = any(
             isinstance(info, Mapping) and info.get("code")
@@ -131,12 +132,14 @@ def direct_compatibility(
             return False, [
                 f"ordinal representation ({'coded' if coded else 'numeric'}) is incompatible with CDA {target.get('datatype') or 'container'}"
             ]
+        ordinal_payload = True
     elif not target_type_match(model_type, target):
         return False, [f"datatype {model_type} is incompatible with CDA {target.get('datatype') or 'container'}"]
     if not target.get("writable"):
         return False, [f"CDA target {target.get('path') or '?'} is structural, fixed, prohibited, or ambiguous"]
     if (
         not explicit_path
+        and not ordinal_payload
         and not payload_match(model_type, target)
         and not _shared_coded_element_payload(field, target)
     ):

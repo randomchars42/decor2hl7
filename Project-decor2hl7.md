@@ -351,11 +351,12 @@ A target implementation compiles the selected HL7 output specification into a fo
 
 The current CDA target compiles exact reachable templates, recursive `SPEC` refinement, `INCLUDE` / `CONTAINS`, fixed constraints, vocabulary, and assertions.
 
-It also expands the HL7 V3 datatypes declared by that effective template from a
-deterministic compiler catalogue. ART-DECOR constraints refine the generic
-datatype structure. Structural CDA nodes and explicit writable value targets
-remain distinct; mapping and rendering consume each target's compiled value
-representation instead of guessing from XML path names or datatype names.
+It also expands CDA/RIM structural classes and the HL7 V3 datatypes declared by
+that effective template from the pinned CDA R2 XSD graph cached under `spec/`.
+ART-DECOR constraints refine the generic structure. Structural CDA nodes and
+explicit writable value targets remain distinct; mapping and rendering consume
+each target's compiled value representation instead of guessing from XML path
+names, class names, or datatype names.
 
 It distinguishes:
 
@@ -404,7 +405,10 @@ Clinical semantics should not accumulate as target-specific Python conditionals 
 Structural behavior is explicit. Current CDA work uses generic concepts such as:
 
 - `for_each` — preserve one source occurrence as one target occurrence;
-- `fan_out` — turn semantically distinct sibling fields into separate target occurrences;
+- `repeat_by_discriminator` — turn semantically distinct sibling fields into
+  separate target occurrences only when a required coded discriminator, its
+  exact ValueSet revision and a unique source-facet/member correspondence are
+  available;
 - `coalesce` — let equivalent source values share one target, conservatively using `equal_or_error` unless configured otherwise;
 - `fallback` — fill an absent target leaf without replacing a real value.
 

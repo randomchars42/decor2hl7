@@ -8,7 +8,10 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from decor2hl7.cli import _prune_absent_pending, _prune_stale_pending, main
+from decor2hl7.cli import (
+    _migrate_repeat_by_discriminator, _prune_absent_pending,
+    _prune_stale_pending, main,
+)
 from decor2hl7.workspace import (
     load_json, set_release, set_transaction, transaction_mapping_dir,
     transaction_model_dir, transaction_site_dir, transaction_test_dir, write_json,
@@ -23,6 +26,39 @@ TRANSACTIONS = [{
 
 
 class CliTests(unittest.TestCase):
+    def test_legacy_fan_out_is_migrated_only_by_matching_generated_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proposed = root / "proposed.json"
+            current = root / "current.json"
+            branches = [
+                {"source": "pupil.right", "target": "Pupil_right.value", "cda_target": "Pupil.value", "branch": "right", "constants": {"Pupil.side": {"code": "R"}}},
+                {"source": "pupil.left", "target": "Pupil_left.value", "cda_target": "Pupil.value", "branch": "left", "constants": {"Pupil.side": {"code": "L"}}},
+            ]
+            write_json(proposed, {"version": 6, "fields": {}, "structures": {
+                "repeat-by-discriminator-pupil-value": {
+                    "type": "repeat_by_discriminator", "branches": branches,
+                    "discriminator": {"target": "Pupil.side", "value_set": {"id": "eyes", "effective_date": "2015-11-17"}, "members": [{"code": "R"}, {"code": "L"}]},
+                },
+            }})
+            write_json(current, {"version": 5, "fields": {
+                "pupil.right": {"target": "Pupil_right.value", "cda_target": "Pupil.value", "structure": "fan-out-pupil-value", "branch": "right"},
+                "pupil.left": {"target": "Pupil_left.value", "cda_target": "Pupil.value", "structure": "fan-out-pupil-value", "branch": "left"},
+            }, "structures": {"fan-out-pupil-value": {
+                "type": "fan_out", "branches": branches,
+            }}})
+            self.assertEqual(_migrate_repeat_by_discriminator(proposed, current), 1)
+            migrated = load_json(current)
+            self.assertEqual(migrated["version"], 6)
+            self.assertEqual(
+                migrated["fields"]["pupil.right"]["structure"],
+                "repeat-by-discriminator-pupil-value",
+            )
+            self.assertEqual(
+                migrated["structures"]["repeat-by-discriminator-pupil-value"]["type"],
+                "repeat_by_discriminator",
+            )
+
     def test_build_completes_with_reported_auxiliary_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -338,6 +374,10 @@ class CliTests(unittest.TestCase):
                     "diagnoses.leading": {
                         "type": "boolean", "repeat_chain": ["diagnoses"]
                     },
+                    "diagnoses.sequence": {
+                        "type": "integer", "min_value": 1,
+                        "repeat_chain": ["diagnoses"],
+                    },
                 },
             }
             expected = setup_fixture(
@@ -352,6 +392,9 @@ class CliTests(unittest.TestCase):
             self.assertEqual([row["diagnoses.certainty"] for row in rows], ["V", "A", "Z", "G"])
             self.assertEqual(rows[0]["diagnoses.leading"], "true")
             self.assertTrue(all(row["diagnoses.leading"] == "false" for row in rows[1:]))
+            self.assertEqual(
+                [row["diagnoses.sequence"] for row in rows], ["1", "2", "3", "4"]
+            )
 
     def test_stale_pending_output_is_pruned_when_source_changes_or_reverts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

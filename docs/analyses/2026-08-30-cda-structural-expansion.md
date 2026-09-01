@@ -16,5 +16,7 @@ Focused coverage demonstrates `observation/value` through `CD`,
 `substanceAdministration/doseQuantity/low` through `IVL_PQ` to a writable
 quantity. The existing postcode test continues to prove `AD/postalCode`.
 
-Medication `for_each` and pupil-side `fan_out` remain because structural
-definitions do not determine source occurrence identity or laterality.
+Medication `for_each` remains because structural definitions do not determine
+source occurrence identity. Pupil occurrence handling is generalized separately
+as specification-derived `repeat_by_discriminator`; see the 2026-08-31 recovery
+analysis for the exact AKTIN L/R evidence and integration results.

@@ -12,9 +12,18 @@ from ..retrieval.xml import child_text, local, parse_file
 from ..transforms import selected_cda_targets
 
 
-def value_set_members(xml_paths: Iterable[Path]) -> dict[str, list[dict[str, str]]]:
-    """Collect exact coded members used to prove discriminator rules."""
-    result: dict[str, list[dict[str, str]]] = defaultdict(list)
+ValueSetKey = str | tuple[str, str]
+
+
+def value_set_members(
+    xml_paths: Iterable[Path],
+) -> dict[ValueSetKey, list[dict[str, Any]]]:
+    """Index coded members by value-set OID *and* effective version.
+
+    The plain OID key remains as a compatibility view of the latest version;
+    specification-driven rules use the tuple key and never mix revisions.
+    """
+    exact: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for path in sorted(set(xml_paths)):
         try:
             root, _ = parse_file(path)
@@ -24,6 +33,7 @@ def value_set_members(xml_paths: Iterable[Path]) -> dict[str, list[dict[str, str
             if local(value_set.tag) != "valueSet" or not value_set.get("id"):
                 continue
             oid = value_set.get("id") or ""
+            effective = value_set.get("effectiveDate") or ""
             for concept in value_set.iter():
                 if local(concept.tag) not in {"concept", "items"}:
                     continue
@@ -32,36 +42,137 @@ def value_set_members(xml_paths: Iterable[Path]) -> dict[str, list[dict[str, str
                 if not code or not system:
                     continue
                 display = concept.get("displayName") or child_text(concept, "name") or code
-                row = {"code": code, "codeSystem": system, "displayName": display}
-                if row not in result[oid]:
-                    result[oid].append(row)
+                designations = [
+                    {
+                        "displayName": item.get("displayName") or "",
+                        "language": item.get("language") or "",
+                    }
+                    for item in concept.iter()
+                    if local(item.tag) == "designation" and item.get("displayName")
+                ]
+                row: dict[str, Any] = {
+                    "code": code,
+                    "codeSystem": system,
+                    "displayName": display,
+                    "designations": designations,
+                    "valueSet": oid,
+                    "valueSetEffectiveDate": effective,
+                }
+                if row not in exact[(oid, effective)]:
+                    exact[(oid, effective)].append(row)
+    result: dict[ValueSetKey, list[dict[str, Any]]] = dict(exact)
+    by_oid: dict[str, list[str]] = defaultdict(list)
+    for oid, effective in exact:
+        by_oid[oid].append(effective)
+    for oid, versions in by_oid.items():
+        selected = max(versions)
+        result[oid] = list(exact[(oid, selected)])
     return result
 
 
-def _side_of(path: str, field: Mapping[str, Any]) -> str | None:
-    text = " ".join(
-        str(value or "") for value in (
-            path, field.get("name"), field.get("description"), field.get("short_name"),
-        )
-    ).casefold()
-    if re.search(r"(?:^|[^a-z])(rechts|right)(?:[^a-z]|$)", text):
-        return "right"
-    if re.search(r"(?:^|[^a-z])(links|left)(?:[^a-z]|$)", text):
-        return "left"
-    return None
+def _tokens(value: str) -> set[str]:
+    value = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", value)
+    return {
+        token.casefold()
+        for token in re.findall(r"[A-Za-zÄÖÜäöüß]+", value)
+        if len(token) >= 2
+    }
 
 
-def _side_member(
-    members: Iterable[Mapping[str, str]], side: str
-) -> dict[str, str] | None:
+def _member_tokens(member: Mapping[str, Any]) -> set[str]:
+    values = [str(member.get("displayName") or "")]
+    values.extend(
+        str(item.get("displayName") or "")
+        for item in member.get("designations", [])
+        if isinstance(item, Mapping)
+    )
+    return set().union(*(_tokens(value) for value in values))
+
+
+def _members_for_target(
+    target: Mapping[str, Any],
+    value_sets: Mapping[ValueSetKey, list[dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
+    bindings = [
+        item for item in (target.get("value_set_bindings") or [])
+        if isinstance(item, Mapping) and item.get("id")
+    ]
+    if bindings:
+        # One discriminator binding is expected.  Ambiguous simultaneous
+        # bindings cannot prove a unique coded discriminator.
+        if len(bindings) != 1:
+            return [], None
+        binding = {
+            "id": str(bindings[0].get("id") or ""),
+            "effective_date": str(bindings[0].get("effective_date") or ""),
+        }
+        key: ValueSetKey = (
+            binding["id"], binding["effective_date"]
+        ) if binding["effective_date"] else binding["id"]
+        members = [dict(item) for item in value_sets.get(key, [])]
+        resolved_versions = {
+            str(item.get("valueSetEffectiveDate") or "") for item in members
+        }
+        if not binding["effective_date"] and len(resolved_versions) == 1:
+            binding["effective_date"] = resolved_versions.pop()
+        return members, binding
+    oids = [str(oid) for oid in target.get("value_sets", [])]
+    if len(oids) != 1:
+        return [], None
+    members = [dict(item) for item in value_sets.get(oids[0], [])]
+    versions = {str(item.get("valueSetEffectiveDate") or "") for item in members}
+    return members, {
+        "id": oids[0],
+        "effective_date": versions.pop() if len(versions) == 1 else "",
+    }
+
+
+def _facet_assignments(
+    paths: list[str], fields: Mapping[str, Any], members: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]] | None:
+    source_tokens = {
+        path: _tokens(" ".join(str(value or "") for value in (
+            path, fields.get(path, {}).get("name"),
+            fields.get(path, {}).get("description"),
+            fields.get(path, {}).get("short_name"),
+        )))
+        for path in paths
+    }
+    common = set.intersection(*source_tokens.values()) if source_tokens else set()
+    facets = {path: tokens - common for path, tokens in source_tokens.items()}
+    candidates: dict[str, list[dict[str, Any]]] = {}
+    for path, tokens in facets.items():
+        ranked = [
+            (len(tokens & _member_tokens(member)), member)
+            for member in members
+        ]
+        best = max((score for score, _ in ranked), default=0)
+        selected = [dict(member) for score, member in ranked if score == best and score > 0]
+        if len(selected) != 1:
+            return None
+        candidates[path] = selected[0]
+    if len({str(item.get("code")) for item in candidates.values()}) != len(paths):
+        return None
+    return candidates
+
+
+def _branch_labels(members: list[Mapping[str, Any]]) -> list[str]:
+    english_tokens: list[set[str]] = []
     for member in members:
-        code = str(member.get("code") or "").casefold()
-        label = str(member.get("displayName") or "").casefold()
-        if side == "right" and (code == "r" or "right" in label or "rechts" in label):
-            return dict(member)
-        if side == "left" and (code == "l" or "left" in label or "links" in label):
-            return dict(member)
-    return None
+        english = [
+            item for item in member.get("designations", [])
+            if isinstance(item, Mapping)
+            and str(item.get("language") or "").casefold().startswith("en")
+        ]
+        english_tokens.append(
+            _tokens(str(english[0].get("displayName") or "")) if english else set()
+        )
+    common = set.intersection(*english_tokens) if english_tokens and all(english_tokens) else set()
+    result: list[str] = []
+    for member, tokens in zip(members, english_tokens):
+        facet = sorted(tokens - common, key=lambda value: (len(value), value))
+        result.append(facet[0] if facet else str(member.get("code") or "occurrence"))
+    return result
 
 
 def rule_id(prefix: str, target: str) -> str:
@@ -76,23 +187,43 @@ def occurrence_target(target: str, branch: str) -> str:
     return f"{head}_{label}{separator}{tail}" if separator else f"{target}_{label}"
 
 
-def fanout_rule(
+def _schematron_unique_codes(
+    cda: Mapping[str, Any], discriminator_target: Mapping[str, Any],
+) -> set[str]:
+    leaf = str(discriminator_target.get("path") or "").rsplit("/", 1)[-1]
+    leaf = leaf.split(":", 1)[-1]
+    result: set[str] = set()
+    for assertion in cda.get("assertions", []):
+        if not isinstance(assertion, Mapping):
+            continue
+        test = str(assertion.get("test") or "")
+        compact = re.sub(r"\s+", "", test)
+        if leaf not in test or "count(" not in compact or not re.search(r"(?:<=|&lt;=)1", compact):
+            continue
+        result.update(
+            code for quote, code in re.findall(
+                r"@code\s*=\s*(['\"])([^'\"]+)\1", test
+            )
+        )
+    return result
+
+
+def repeat_by_discriminator_rule(
     paths: list[str],
     target_name: str,
     model: Mapping[str, Any],
     cda: Mapping[str, Any],
-    value_sets: Mapping[str, list[dict[str, str]]],
+    value_sets: Mapping[ValueSetKey, list[dict[str, Any]]],
 ) -> tuple[str, dict[str, Any]] | None:
     target = cda.get("targets", {}).get(target_name, {})
     fields = model.get("fields", {})
     depths = {len(fields.get(path, {}).get("repeat_chain", [])) for path in paths}
     if len(depths) != 1 or len(target.get("repeat_ancestors", [])) != next(iter(depths)) + 1:
         return None
-    sides = {path: _side_of(path, fields.get(path, {})) for path in paths}
-    if set(sides.values()) != {"left", "right"} or len(paths) != 2:
-        return None
     parent_path = str(target.get("path") or "").rsplit("/", 1)[0]
-    discriminator: tuple[str, dict[str, str], dict[str, str]] | None = None
+    discriminator: tuple[
+        str, dict[str, str], dict[str, dict[str, Any]],
+    ] | None = None
     for name, candidate in cda.get("targets", {}).items():
         if name == target_name or not candidate.get("renderable"):
             continue
@@ -100,38 +231,64 @@ def fanout_rule(
             continue
         if str(candidate.get("path") or "").rsplit("/", 1)[0] != parent_path:
             continue
-        members = [
-            member for oid in candidate.get("value_sets", [])
-            for member in value_sets.get(str(oid), [])
-        ]
-        left = _side_member(members, "left")
-        right = _side_member(members, "right")
-        if left and right:
-            discriminator = str(name), left, right
+        if int(candidate.get("min") or 0) < 1 or candidate.get("max") != 1:
+            continue
+        members, binding = _members_for_target(candidate, value_sets)
+        assignments = _facet_assignments(paths, fields, members)
+        unique_codes = _schematron_unique_codes(cda, candidate)
+        selected_codes = {
+            str(member.get("code") or "")
+            for member in (assignments or {}).values()
+        }
+        if unique_codes and not selected_codes <= unique_codes:
+            continue
+        if assignments and binding:
+            discriminator = str(name), binding, assignments
             break
     if discriminator is None:
         return None
-    discriminator_name, left, right = discriminator
-    rule_name = rule_id("fan-out", target_name)
+    discriminator_name, binding, assignments = discriminator
+    rule_name = rule_id("repeat-by-discriminator", target_name)
     branches = []
-    for side in ("right", "left"):
-        path = next(path for path, value in sides.items() if value == side)
+    selected_members = [assignments[path] for path in paths]
+    for path, branch in zip(paths, _branch_labels(selected_members)):
+        member = assignments[path]
         branches.append({
             "source": path,
-            "target": occurrence_target(target_name, side),
+            "target": occurrence_target(target_name, branch),
             "cda_target": target_name,
-            "branch": side,
-            "constants": {discriminator_name: right if side == "right" else left},
+            "branch": branch,
+            "constants": {discriminator_name: member},
         })
     return rule_name, {
-        "type": "fan_out",
+        "type": "repeat_by_discriminator",
+        "discriminator": {
+            "target": discriminator_name,
+            "value_set": binding,
+            "members": selected_members,
+            "evidence_level": "STRONG",
+        },
         "evidence": [
             "shared repeatable CDA value target",
             "one additional CDA repeat level",
-            f"required side discriminator {discriminator_name}",
+            f"required coded discriminator {discriminator_name}",
+            "unique terminology designation match",
+            *( ["Schematron uniqueness by discriminator code"]
+               if _schematron_unique_codes(
+                   cda, cda.get("targets", {}).get(discriminator_name, {})
+               ) else [] ),
         ],
         "branches": branches,
     }
+
+
+def fanout_rule(
+    paths: list[str], target_name: str, model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    value_sets: Mapping[ValueSetKey, list[dict[str, Any]]],
+) -> tuple[str, dict[str, Any]] | None:
+    """Compatibility alias for callers compiled before mapping format v6."""
+    return repeat_by_discriminator_rule(paths, target_name, model, cda, value_sets)
 
 
 def coalesce_rule(

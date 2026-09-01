@@ -180,13 +180,15 @@ def check_config(
             compatibility_field = field
             structure_name = rule.get("structure")
             structure = structures_by_id.get(str(structure_name or ""), {})
-            if structure.get("type") == "fan_out":
+            if structure.get("type") in {"fan_out", "repeat_by_discriminator"}:
                 compatibility_field = dict(field)
                 chain = list(
                     field.get("repeat_chain")
                     or ([] if not field.get("repeat") else [field.get("repeat")])
                 )
-                compatibility_field["repeat_chain"] = chain + [f"fan_out:{structure_name}"]
+                compatibility_field["repeat_chain"] = chain + [
+                    f"repeat_by_discriminator:{structure_name}"
+                ]
             compatible, reasons = transformed_compatibility(
                 compatibility_field, target, transform
             )
@@ -271,7 +273,12 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
             errors.append(f"CDA target {name} is prohibited but marked renderable")
         if target.get("fixed_text") is not None and target.get("renderable"):
             errors.append(f"CDA target {name} has fixed text but is marked renderable")
-        if target.get("kind") == "attribute" and target.get("fixed", {}).get("value") is not None and target.get("renderable"):
+        if (
+            target.get("kind") == "attribute"
+            and target.get("fixed", {}).get("value") is not None
+            and target.get("renderable")
+            and not target.get("conditional_fixed")
+        ):
             errors.append(f"CDA target {name} is a fixed attribute but marked renderable")
         if target.get("renderable") and len(target_locations) != 1:
             errors.append(f"CDA target {name} is renderable but has {len(target_locations)} physical locations")
@@ -302,8 +309,8 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
 
 def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable[Path]) -> list[str]:
     """Independent check of explicit source constraints without invoking the compiler."""
-    source_by_id: dict[tuple[str, str, str], ET.Element] = {}
-    source_assertions: dict[tuple[str, str, str, str, str], dict[str, str]] = {}
+    source_by_id: dict[tuple[str, str, str, str], ET.Element] = {}
+    source_assertions: dict[tuple[str, str, str, str, str, str], dict[str, str]] = {}
     templates: set[tuple[str, str]] = set()
     for path in sorted(set(xml_paths)):
         try:
@@ -315,23 +322,34 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
                 continue
             tid, eff = template.get("id") or "", template.get("effectiveDate") or ""
             templates.add((tid, eff))
-            for node in template.iter():
-                if local(node.tag) in {"element", "attribute"} and node.get("id"):
-                    source_by_id[(tid, eff, node.get("id") or "")] = node
-                if local(node.tag) == "element":
-                    lets = {
-                        child.get("name") or "": child.get("value") or ""
-                        for child in list(node)
-                        if local(child.tag) == "let" and child.get("name") and child.get("value")
-                    }
-                    for assertion in list(node):
-                        if local(assertion.tag) != "assert" or not assertion.get("test"):
-                            continue
-                        key = (
-                            tid, eff, node.get("id") or "",
-                            assertion.get("test") or "", assertion.get("role") or "error",
-                        )
-                        source_assertions[key] = lets
+            def collect(parent: ET.Element, parent_path: tuple[str, ...] = ()) -> None:
+                for node in list(parent):
+                    kind = local(node.tag)
+                    current_path = parent_path
+                    if kind == "element":
+                        current_path = parent_path + (node.get("name") or "element",)
+                    elif kind == "attribute" and node.get("name"):
+                        current_path = parent_path + ("@" + (node.get("name") or "attribute"),)
+                    physical_path = "/".join(current_path)
+                    if kind in {"element", "attribute"} and node.get("id"):
+                        source_by_id[(tid, eff, node.get("id") or "", physical_path)] = node
+                    if kind == "element":
+                        lets = {
+                            child.get("name") or "": child.get("value") or ""
+                            for child in list(node)
+                            if local(child.tag) == "let" and child.get("name") and child.get("value")
+                        }
+                        for assertion in list(node):
+                            if local(assertion.tag) != "assert" or not assertion.get("test"):
+                                continue
+                            key = (
+                                tid, eff, node.get("id") or "", physical_path,
+                                assertion.get("test") or "", assertion.get("role") or "error",
+                            )
+                            source_assertions[key] = lets
+                    collect(node, current_path)
+
+            collect(template)
     errors: list[str] = []
     doc = cda.get("document_template", {})
     doc_key = (str(doc.get("id") or ""), str(doc.get("effective_date") or ""))
@@ -341,7 +359,12 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
         element_id = str(target.get("element_id") or "")
         if not element_id:
             continue
-        key = (str(target.get("template_id") or ""), str(target.get("template_effective_date") or ""), element_id)
+        key = (
+            str(target.get("template_id") or ""),
+            str(target.get("template_effective_date") or ""),
+            element_id,
+            str(target.get("path") or ""),
+        )
         source = source_by_id.get(key)
         if source is None:
             continue
@@ -363,11 +386,23 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
             for attr_name, attr_value in fixed.items():
                 if str(target.get("fixed", {}).get(attr_name) or "") != attr_value:
                     errors.append(f"source verification: {name} lost fixed @{attr_name}={attr_value!r}")
-        elif local(source.tag) == "attribute" and source.get("value") is not None:
-            if str(target.get("fixed", {}).get("value") or "") != str(source.get("value") or ""):
-                errors.append(f"source verification: {name} lost fixed attribute value {source.get('value')!r}")
+        elif local(source.tag) == "attribute":
+            source_value = source.get("value")
+            if source_value is None:
+                codes = {
+                    str(node.get("code")) for node in list(source)
+                    if local(node.tag) == "vocabulary" and node.get("code") is not None
+                }
+                source_value = next(iter(codes)) if len(codes) == 1 else None
+            if (
+                source_value is not None
+                and str(target.get("fixed", {}).get("value") or "") != str(source_value)
+            ):
+                errors.append(
+                    f"source verification: {name} lost fixed attribute value {source_value!r}"
+                )
 
-    compiled_by_source: dict[tuple[str, str, str], list[Mapping[str, Any]]] = defaultdict(list)
+    compiled_by_source: dict[tuple[str, str, str, str], list[Mapping[str, Any]]] = defaultdict(list)
     def structural(nodes: list[Mapping[str, Any]]) -> None:
         for node in nodes:
             for source in node.get("sources", []):
@@ -375,13 +410,14 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
                     str(source.get("template_id") or ""),
                     str(source.get("template_effective_date") or ""),
                     str(source.get("element_id") or ""),
+                    str(source.get("path") or ""),
                 )
                 if source_key[2]:
                     compiled_by_source[source_key].append(node)
             structural(list(node.get("children", [])))
     structural(list(cda.get("document", [])))
     for key, source_lets in source_assertions.items():
-        source_key = key[:3]
+        source_key = key[:4]
         compiled_nodes = compiled_by_source.get(source_key, [])
         if not compiled_nodes:
             # The source element itself is not part of the effective specialized
@@ -391,21 +427,21 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
         match = next((
             node for node in compiled_nodes
             if any(
-                str(item.get("test") or "") == key[3]
-                and str(item.get("role") or "error") == key[4]
+                str(item.get("test") or "") == key[4]
+                and str(item.get("role") or "error") == key[5]
                 for item in node.get("asserts", [])
             )
         ), None)
         if match is None:
             errors.append(
-                f"source verification: lost ART-DECOR assert {key[3]!r} from {key[0]}@{key[1]}:{key[2]}"
+                f"source verification: lost ART-DECOR assert {key[4]!r} from {key[0]}@{key[1]}:{key[2]}"
             )
             continue
         compiled_lets = match.get("lets", {}) if isinstance(match.get("lets"), Mapping) else {}
         for let_name, let_value in source_lets.items():
             if str(compiled_lets.get(let_name) or "") != let_value:
                 errors.append(
-                    f"source verification: ART-DECOR assert {key[3]!r} lost let ${let_name}={let_value!r}"
+                    f"source verification: ART-DECOR assert {key[4]!r} lost let ${let_name}={let_value!r}"
                 )
     return errors
 

@@ -54,7 +54,8 @@ src/decor2hl7/
         structural.py   cardinality/terminology → structural rules
         reports.py      readable effective CDA + mapping guide
     cda/
-        datatypes.py    deterministic HL7 V3 datatype catalogue
+        core.py         pinned CDA/RIM + HL7 V3 XSD definition graph
+        datatypes.py    scalar XML serialization policy
         model.py        typed node/value-target/value-representation IR
         compile.py      templates + datatypes → effective cda.json
         render.py       compiled value representations → CDA XML
@@ -200,10 +201,12 @@ The same logical datapoints are used by configuration, reports, validation and
 runtime assignment. ART-DECOR identifiers are provenance, not runtime addresses.
 
 Compilation first resolves template relationships and specialization, then
-derives the effective datatype inventory. `cda/datatypes.py` recursively expands
-complex types and constrained aliases; explicit ART-DECOR constraints overlay
-the legal datatype structure. Structural targets remain navigation, evidence
-and repeat anchors. Scalar mapping sees only targets whose compiled
+derives the effective CDA model inventory. `cda/core.py` indexes the fetched
+pinned XSD graph and recursively follows structural classes, datatype aliases
+and inheritance; `cda/datatypes.py` contains only the scalar XML serialization
+policy. Explicit ART-DECOR constraints overlay the legal model structure.
+Structural targets remain navigation, evidence and repeat anchors. Scalar mapping
+sees only targets whose compiled
 `value_representation` marks them writable. The renderer executes that
 representation and does not contain a second datatype dispatch table.
 
@@ -229,6 +232,19 @@ non-prohibited physical node. Ambiguity and structural-only targets remain as
 provenance/evidence but are configuration/runtime errors when selected as scalar
 destinations. `validate.verify_compiled_cda()` checks these invariants before
 transformation.
+
+Required coded construction values may be compiled from neutral ART-DECOR
+examples only after exact template/path scoping and unique validation against
+the exact bound ValueSet revision or explicit allowed-code set. The value and
+STRONG `template-example` provenance stay in the compiled model; an explicit
+assignment always has precedence. Expanded coded datatypes also identify their
+source-wording companion through a compiled content role, allowing normalized
+`raw` text to populate that child without renderer knowledge of CD/CE layout.
+
+Names used by ART-DECOR constraints can contain XPath predicates that select a
+sibling constraint. Predicates remain part of compiled path identity and
+evidence, but are removed when the renderer turns a selected node name into an
+XML QName.
 
 Only fetched build-template forms participate in compilation. Live project
 evidence cannot fill a missing dependency. Static flexibility is exact; dynamic
@@ -267,7 +283,7 @@ Mapping values can be direct target strings or declarative rule objects. A field
 may control more than one target (for example Tetanusschutz `negationInd` and
 `nullFlavor`) without introducing target-specific renderer code.
 
-`cda-mapping.json` version 5 separates scalar transforms, structural bindings,
+`cda-mapping.json` version 6 separates scalar transforms, structural bindings,
 and CDA completion policy. The compiler emits only rules supported by explicit
 cardinality, terminology, and template evidence:
 
@@ -275,9 +291,11 @@ cardinality, terminology, and template evidence:
   node. Unbound target repeat ancestors are rendered as one shared container;
   for example, repeated medication records bind to section `entry` while the
   enclosing medication section is emitted once;
-- `fan_out` turns sibling fields such as right/left measurements into separate
-  logical CDA datapoints and occurrences, retaining their shared physical
-  target and writing the discriminator required by the target ValueSet;
+- `repeat_by_discriminator` turns sibling fields such as right/left measurements
+  into separate logical CDA datapoints and occurrences only when the target has
+  one additional repeat level, a required coded discriminator, an exact bound
+  ValueSet revision and a unique terminology-supported source/member match.
+  Schematron uniqueness constraints are retained as additional evidence;
 - `coalesce` lets equivalent singleton fields share a target, using
   `equal_or_error` unless a different policy is explicitly configured;
 - `mode: "fallback"` remains available for an explicitly configured
@@ -294,9 +312,20 @@ prohibit null flavors. Thus deliberately leaving a dataset-to-CDA field mapping
 empty does not invalidate the whole mapping when the corresponding required CDA
 leaf can legally carry a null flavor; optional leaves remain absent.
 
+The generated pupil rule therefore uses `targetSiteCode` values `R` and `L`
+from AKTIN ValueSet `1.2.276.0.76.11.48` and code system
+`1.2.276.0.76.3.1.195.5.48`; it does not substitute SNOMED eye concepts.
+Legacy reviewed `fan_out` remains runtime-compatible and is migrated only when
+the generated rule proves identical source and physical-target identity.
+
 The compiler does not embed AKTIN paths, OIDs, or side codes in the runtime. A
 generated rule carries the resolved source paths, targets, and terminology
 members, so the same binding engine can execute another transaction/template.
+
+Physical ART-DECOR source identity uses template id, effective date, element id
+and template-local path. Revisionless/path and element-id-only indexes remain
+useful tolerant semantic evidence, but cannot identify a physical constraint
+alone because one template may reuse an id in distinct sibling branches.
 
 ## Assertions and nested occurrences
 
@@ -314,6 +343,11 @@ records therefore form nested keyed occurrence trees, and CDA targets record
 repeating XML ancestors. A mapping is executable only when dataset and CDA repeat
 depths agree; rendering carries the occurrence tuple through every repeated CDA
 ancestor instead of flattening lists.
+
+Synthetic mapping fixtures vary repeated integer/count/ordinal values by
+occurrence within model bounds. This exercises order/sequence semantics without
+manufacturing duplicate discriminator values such as several sequence-1
+diagnoses.
 
 ## Input boundary
 

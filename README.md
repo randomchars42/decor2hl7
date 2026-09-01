@@ -270,8 +270,8 @@ analysis.
   logical labels are not promoted into formal codes.
 - `build-diagnostics.json` / `build-diagnostics.md`: unavailable dependency
   identities, their expected build effect, and unresolved CDA template links.
-- `cda.json`: reachable CDA template constraints plus datatype-derived legal
-  structure, the automatic datatype inventory, explicit writable value
+- `cda.json`: reachable CDA template constraints plus XSD-derived CDA/RIM and
+  datatype structure, the automatic model inventory, explicit writable value
   representations, formal ART-DECOR assertions, and readable target names such
   as `PatientIdentifier.id` or `ersteinschatzung.effectiveTime`.
 - `cda-assertions.sch`: ISO Schematron containing the original effective
@@ -298,6 +298,11 @@ template declares only the parent datatype. ART-DECOR constraints refine those
 generic parts. Ambiguous or structural-only targets stay in `cda.json` for
 evidence/provenance but cannot be selected for scalar rendering. `decor2hl7
 check` verifies these compiled-model invariants before transformation.
+
+The compiler can also retain exact, terminology-validated construction
+fallbacks from neutral template examples and compiled companion-content roles.
+Explicit mapped values take precedence. ART-DECOR XPath predicates continue to
+identify constraint branches but are never serialized as part of an XML tag.
 
 ## Mapping configuration
 
@@ -459,7 +464,7 @@ CDA `hl7:code` element when both sides share an explicit ValueSet. Fixed or
 differently bound structural codes, such as a section's identifying LOINC code,
 remain unavailable as dataset payload targets.
 
-`cda-mapping.json` version 5 may also contain declarative scalar, structural,
+`cda-mapping.json` version 6 may also contain declarative scalar, structural,
 and completion rules. The generated proposal currently derives only semantics
 supported by the specification itself:
 Tetanusschutz drives `negationInd` plus `nullFlavor=NI` for unknown status,
@@ -467,12 +472,18 @@ Isolation drives `negationInd`, and modified Rankin labels map to their numeric
 `{score}` value. Diagnosis occurrences use `for_each`; medication occurrences
 use it to create repeated entries below one shared medication section; V/A/Z/G
 certainty controls the formal qualifier and exclusion negation; left/right pupil
-fields use a terminology-backed `fan_out`; equivalent encounter start fields
-use conservative `equal_or_error` coalescing. A `for_each` names the exact CDA
+fields use a specification-derived `repeat_by_discriminator` rule with the
+bound AKTIN L/R eye ValueSet; equivalent encounter start fields use conservative
+`equal_or_error` coalescing. A `for_each` names the exact CDA
 repeat node driven by its source group, so additional repeat-capable target
 ancestors are not populated positionally. The transform vocabulary is
 intentionally small (`identity`, `enum`, `ordinal`, `not`) and remains data
 rather than clinical Python code.
+
+Existing reviewed version-5 `fan_out` rules remain executable. During
+`init-cda-mapping`, an old rule is migrated only when the newly generated
+`repeat_by_discriminator` rule proves the same source set and physical CDA
+target; otherwise the accepted mapping is left untouched for review.
 
 Completion belongs to the shareable CDA mapping rather than site configuration.
 `defaults.required_unmapped` supplies `nullFlavor="NI"` to an otherwise empty

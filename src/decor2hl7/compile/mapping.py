@@ -21,10 +21,14 @@ from ..transforms import cda_target_name, mapping_rules
 from ..cda.model import ValueRepresentationKind
 from .structural import (
     coalesce_rule as _coalesce_rule,
-    fanout_rule as _fanout_rule,
+    repeat_by_discriminator_rule as _repeat_by_discriminator_rule,
     for_each_rules as _for_each_rules,
     value_set_members as _value_set_members,
 )
+
+# Private compatibility name retained for downstream extensions while newly
+# generated structures use ``repeat_by_discriminator``.
+_fanout_rule = _repeat_by_discriminator_rule
 
 STRONG_EDGES = {"SPEC", "INHERIT", "ORIGINAL", "EQUIV", "VERSION", "COPY"}
 REVERSE_EDGES = {"INHERIT^-1", "ORIGINAL^-1", "SPEC^-1"}
@@ -104,6 +108,44 @@ def _graph_and_associations(
     for source, edges in reverse.items():
         graph[source].update(edges)
     return graph, associations, names
+
+
+def _semantic_concept_index(
+    xml_paths: Iterable[Path],
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Build an undirected terminology-label graph for contextual matching.
+
+    This graph is intentionally separate from the directed lineage graph used
+    to prove template associations.  ADAPT and other weak relations may expose
+    multilingual designations, but they must not silently become identity
+    edges for direct mappings.
+    """
+    labels: dict[str, set[str]] = defaultdict(set)
+    neighbours: dict[str, set[str]] = defaultdict(set)
+    for root in _all_xml(xml_paths):
+        for node in root.iter():
+            if local(node.tag) != "concept" or not node.get("id"):
+                continue
+            concept_id = node.get("id") or ""
+            for child in list(node):
+                kind = local(child.tag)
+                if kind in {"name", "synonym", "desc"}:
+                    value = " ".join("".join(child.itertext()).split())
+                    if value:
+                        labels[concept_id].add(value)
+                reference = ""
+                if kind == "inherit":
+                    reference = child.get("ref") or ""
+                    original = child.get("originalId") or ""
+                    if original:
+                        neighbours[concept_id].add(original)
+                        neighbours[original].add(concept_id)
+                elif kind in {"relationship", "contains"}:
+                    reference = child.get("ref") or ""
+                if reference:
+                    neighbours[concept_id].add(reference)
+                    neighbours[reference].add(concept_id)
+    return labels, neighbours
 
 
 def _implementation_paths(
@@ -418,8 +460,14 @@ def _principal_target(
         item for item in candidates
         if _is_payload(model_type, item[1]) and _type_match(model_type, item[1].get("datatype"))
     ]
-    if typed:
-        return min(typed, key=lambda item: len(str(item[1].get("path") or "")))
+    explicit = [item for item in typed if not item[1].get("datatype_derived")]
+    if explicit:
+        return min(explicit, key=lambda item: len(str(item[1].get("path") or "")))
+    # A wildcard structural class exposes many type-compatible RIM children.
+    # Datatype compatibility alone cannot decide that an unconstrained
+    # realmCode, statusCode, or another generated slot carries this field.
+    if len(typed) == 1:
+        return typed[0]
     return None
 
 
@@ -563,6 +611,11 @@ def _vocabulary_candidates(
             and _type_match(model_type, target.get("datatype"))
             and _is_payload(model_type, target)
         ]
+        explicit_payloads = [
+            item for item in payloads if not item[1].get("datatype_derived")
+        ]
+        if explicit_payloads:
+            payloads = explicit_payloads
         unique_payloads = {name: target for name, target in payloads}
         if len(unique_payloads) == 1:
             name, target = next(iter(unique_payloads.items()))
@@ -735,6 +788,11 @@ def _semantic_transform_candidates(
                     and str(target.get("template_id") or "") == tid
                     and str(target.get("path") or "").endswith("/@negationInd")
                 ]
+                explicit_negations = [
+                    item for item in negations if not item[1].get("datatype_derived")
+                ]
+                if explicit_negations:
+                    negations = explicit_negations
                 if len(negations) != 1:
                     continue
                 neg_name, neg_target = negations[0]
@@ -749,18 +807,27 @@ def _semantic_transform_candidates(
                 unknown = [label for label, kind in classes.items() if kind == "unknown"]
                 if unknown:
                     nulls = [
-                        name for name, target in targets.items()
+                        (name, target) for name, target in targets.items()
                         if target.get("renderable") and len(target.get("locations", [])) == 1
                         and str(target.get("template_id") or "") == tid
                         and str(target.get("path") or "").endswith("/@nullFlavor")
                     ]
+                    explicit_nulls = [
+                        item for item in nulls if not item[1].get("datatype_derived")
+                    ]
+                    if explicit_nulls:
+                        nulls = explicit_nulls
                     if len(nulls) == 1:
                         null_map = {label: ("NI" if label in unknown else None) for label in options}
-                        rules.append({"target": nulls[0], "transform": {"type": "enum", "map": null_map}})
+                        rules.append({"target": nulls[0][0], "transform": {"type": "enum", "map": null_map}})
                 result.append(_candidate(
                     neg_name, neg_target,
                     ["SEMANTIC_STATE", "TRANSFORM(enum→negationInd)"],
-                    confidence, 78 if confidence == "MEDIUM" else 62,
+                    # A positive/negative source enumeration plus one formally
+                    # located explicit negationInd is stronger payload evidence
+                    # than a template-name match to an unrelated generated
+                    # coded slot such as statusCode.
+                    confidence, 98 if confidence == "MEDIUM" else 72,
                     kind="TRANSFORM", actionable=True, mapping=rules,
                     warnings=["generated from dataset state labels and CDA negation semantics"],
                 ))
@@ -774,13 +841,26 @@ def _semantic_transform_candidates(
     }
     if len(ordinal_map) >= 2:
         for tid, locator_confidence in template_ids:
-            numeric = [
+            formally_located = {
+                str(candidate.get("target") or ""): candidate.get("node", {})
+                for candidate in candidates
+                if str(candidate.get("node", {}).get("template_id") or "") == tid
+                and candidate.get("node", {}).get("writable")
+                and candidate.get("node", {}).get("value_representation", {}).get("kind")
+                == ValueRepresentationKind.QUANTITY.value
+            }
+            numeric = list(formally_located.items()) or [
                 (name, target) for name, target in targets.items()
                 if target.get("writable") and len(target.get("locations", [])) == 1
                 and str(target.get("template_id") or "") == tid
                 and target.get("value_representation", {}).get("kind")
                 == ValueRepresentationKind.QUANTITY.value
             ]
+            explicit_numeric = [
+                item for item in numeric if not item[1].get("datatype_derived")
+            ]
+            if explicit_numeric:
+                numeric = explicit_numeric
             if len(numeric) != 1:
                 continue
             name, target = numeric[0]
@@ -842,9 +922,116 @@ def _context_for_node(
                     "chain": [f"CTX[{concept.rsplit('.', 1)[-1]}]"],
                     "confidence": "CONTEXT",
                     "target": selected["target"],
+                    "node": selected.get("node", {}),
                 }
         parent = groups.get(str(parent), {}).get("parent")
     return None
+
+
+def _semantic_words(value: str) -> set[str]:
+    value = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", value)
+    normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    return {
+        word.casefold() for word in re.findall(r"[A-Za-z0-9]+", normalized)
+        if len(word) >= 3
+    }
+
+
+def _related_labels(
+    concept_id: str,
+    labels: Mapping[str, set[str]],
+    neighbours: Mapping[str, set[str]],
+    maximum_depth: int = 2,
+) -> list[tuple[str, int, str]]:
+    rows: list[tuple[str, int, str]] = []
+    queue: deque[tuple[str, int]] = deque([(concept_id, 0)])
+    seen = {concept_id}
+    while queue:
+        current, depth = queue.popleft()
+        rows.extend((current, depth, label) for label in labels.get(current, set()))
+        if depth >= maximum_depth:
+            continue
+        for related in neighbours.get(current, set()):
+            if related not in seen:
+                seen.add(related)
+                queue.append((related, depth + 1))
+    return rows
+
+
+def _is_descendant_target(
+    target: Mapping[str, Any], context_node: Mapping[str, Any],
+) -> bool:
+    context_locations = [str(value) for value in context_node.get("locations", [])]
+    target_locations = [str(value) for value in target.get("locations", [])]
+    if len(context_locations) == 1 and len(target_locations) == 1:
+        root = context_locations[0]
+        return target_locations[0].startswith(root + ".")
+    root_path = str(context_node.get("path") or "").rstrip("/")
+    target_path = str(target.get("path") or "")
+    return bool(root_path and target_path.startswith(root_path + "/"))
+
+
+def _context_descendant_candidates(
+    field: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    cda: Mapping[str, Any],
+    labels: Mapping[str, set[str]],
+    neighbours: Mapping[str, set[str]],
+) -> list[dict[str, Any]]:
+    """Resolve one writable descendant inside a formally mapped container."""
+    context_node = context.get("node", {}) if isinstance(context, Mapping) else {}
+    if not isinstance(context_node, Mapping) or not context_node:
+        return []
+    concept_id = str(field.get("concept") or "")
+    evidence = _related_labels(concept_id, labels, neighbours)
+    evidence.append((concept_id, 0, " ".join(
+        str(field.get(key) or "") for key in ("name", "short_name", "description")
+    )))
+    candidates: list[tuple[int, int, str, Mapping[str, Any], str]] = []
+    for name, target in cda.get("targets", {}).items():
+        if (
+            not target.get("writable")
+            or target.get("prohibited")
+            or len(target.get("locations", [])) != 1
+            or not _is_descendant_target(target, context_node)
+        ):
+            continue
+        compatible, _ = _direct(field, target)
+        if not compatible:
+            continue
+        leaf = str(target.get("path") or "").rsplit("/", 1)[-1].lstrip("@")
+        leaf = leaf.split(":", 1)[-1]
+        target_words = _semantic_words(leaf)
+        if not target_words or max(map(len, target_words)) < 5:
+            continue
+        matches = [
+            (len(target_words & _semantic_words(label)), depth, label)
+            for _, depth, label in evidence
+            if target_words <= _semantic_words(label)
+        ]
+        if not matches:
+            continue
+        overlap, depth, label = max(matches, key=lambda row: (row[0], -row[1]))
+        candidates.append((overlap, -depth, str(name), target, label))
+    candidates.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    if not candidates:
+        return []
+    best = candidates[0][:2]
+    if sum(row[:2] == best for row in candidates) != 1:
+        return []
+    _, negative_depth, name, target, label = candidates[0]
+    return [_candidate(
+        name, target,
+        list(context.get("chain", [])) + [
+            f"RELATED_LABEL({label})", "CDA_DESCENDANT",
+        ],
+        "STRONG" if negative_depth == 0 else "MEDIUM",
+        92 + negative_depth * 4,
+        kind="CONTEXT_DESCENDANT",
+        actionable=True,
+        via=concept_id,
+        via_name=label,
+    )]
 
 
 def _context(
@@ -898,14 +1085,19 @@ def _certainty_mapping(
     ) | {"diagnos", "diagnose"}
 
     def sibling(suffix: str) -> str | None:
-        rows: list[tuple[int, str]] = []
+        rows: list[tuple[int, str, bool]] = []
         for name, candidate in cda.get("targets", {}).items():
             if not candidate.get("renderable") or candidate.get("repeat_ancestors", []) != repeat_ancestors:
                 continue
             if not str(candidate.get("path") or "").endswith(suffix):
                 continue
             label = f"{candidate.get('template_name') or ''} {candidate.get('template_display_name') or ''} {name}"
-            rows.append((len(template_words & _words(label)), str(name)))
+            rows.append((
+                len(template_words & _words(label)), str(name),
+                not candidate.get("datatype_derived"),
+            ))
+        explicit = [row for row in rows if row[2]]
+        rows = explicit or rows
         rows.sort(reverse=True)
         return rows[0][1] if rows and (len(rows) == 1 or rows[0][0] > rows[1][0]) else None
 
@@ -951,11 +1143,100 @@ def _certainty_mapping(
     }
 
 
+def _bound_enum_mapping(
+    field: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    value_sets: Mapping[Any, list[dict[str, Any]]],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Map a complete source enumeration to one bound CDA ValueSet.
+
+    Every source label (or a declared synonym) must identify exactly one
+    member, and exactly one writable CDA target must satisfy the complete
+    enumeration.  Partial lexical similarities are deliberately insufficient.
+    """
+    source = accepted_values(field)
+    if len(source) < 2:
+        return None
+    matches: list[tuple[str, Mapping[str, Any], str, str, dict[str, Any]]] = []
+    for name, target in cda.get("targets", {}).items():
+        if (
+            not target.get("writable")
+            or len(target.get("locations", [])) != 1
+            or len(target.get("value_sets", [])) != 1
+        ):
+            continue
+        oid = str(target["value_sets"][0])
+        members = value_sets.get(oid, [])
+        if not members:
+            continue
+        table: dict[str, Any] = {}
+        selected_members: list[dict[str, Any]] = []
+        for label, detail in source.items():
+            info = detail if isinstance(detail, Mapping) else {}
+            aliases = [str(label)] + [
+                str(value) for value in info.get("synonyms", [])
+            ]
+            normalized = {_norm(value) for value in aliases if _norm(value)}
+            ranked: list[tuple[int, dict[str, Any]]] = []
+            for member in members:
+                member_code = _norm(str(member.get("code") or ""))
+                member_labels = {
+                    _norm(str(member.get("displayName") or "")),
+                    *{
+                        _norm(str(item.get("displayName") or ""))
+                        for item in member.get("designations", [])
+                        if isinstance(item, Mapping)
+                    },
+                }
+                score = 2 if member_code in normalized else (
+                    1 if normalized & member_labels else 0
+                )
+                if score:
+                    ranked.append((score, dict(member)))
+            best = max((score for score, _ in ranked), default=0)
+            selected = [member for score, member in ranked if score == best]
+            if len(selected) != 1:
+                break
+            selected_members.append(selected[0])
+            for alias in aliases:
+                table[alias] = selected[0]
+        else:
+            if len({str(item.get("code") or "") for item in selected_members}) != len(source):
+                continue
+            transform = {"type": "enum", "select": "raw", "map": table}
+            compatible, _ = transformed_compatibility(field, target, transform)
+            if compatible:
+                versions = {
+                    str(item.get("valueSetEffectiveDate") or "")
+                    for item in selected_members
+                }
+                matches.append((
+                    str(name), target, oid,
+                    versions.pop() if len(versions) == 1 else "",
+                    transform,
+                ))
+    if len(matches) != 1:
+        return None
+    name, target, oid, effective, transform = matches[0]
+    selection = _candidate(
+        name, target,
+        [f"VS({oid}@{effective or 'latest'})", "EXACT_ENUM"],
+        "STRONG", 96, kind="VALUE_SET_ENUM", actionable=True,
+        mapping={"target": name, "transform": transform},
+    )
+    return {"mapping": selection["mapping"], "primary": selection}, {
+        "kind": "bound_value_set_enum",
+        "value_set": {"id": oid, "effective_date": effective},
+        "evidence_level": "EXACT",
+    }
+
+
 def _cda_mapping_analysis(
     model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: Iterable[Path]
 ) -> tuple[dict[str, Any], dict[str, Any], str, str]:
     xml_paths = list(xml_paths)
     graph, associations, concept_names = _graph_and_associations(xml_paths)
+    semantic_labels, semantic_neighbours = _semantic_concept_index(xml_paths)
     implementations = _implementation_paths(xml_paths)
     indexes = _mapping_indexes(cda)
     details: dict[str, dict[str, Any]] = {}
@@ -970,10 +1251,18 @@ def _cda_mapping_analysis(
             group_path, group, graph, associations, concept_names, implementations, cda, indexes
         )
         actionable = [row for row in group_candidates if row["actionable"]]
+        # Dataset groups are navigation/occurrence concepts, not scalar values.
+        # A unique structural TA is therefore an executable placement context
+        # even though the container itself is correctly non-writable.
+        placement = actionable[0] if actionable else next((
+            row for row in group_candidates
+            if row.get("node", {}).get("renderable")
+            and len(row.get("node", {}).get("locations", [])) == 1
+        ), None)
         group_results[group_path] = {
-            "selected": actionable[0]["target"] if actionable else None,
-            "primary": actionable[0] if actionable else None,
-            "alternatives": [row for row in group_candidates if not actionable or row is not actionable[0]][:8],
+            "selected": placement["target"] if placement else None,
+            "primary": placement,
+            "alternatives": [row for row in group_candidates if row is not placement][:8],
             "context": None,
         }
 
@@ -987,6 +1276,10 @@ def _cda_mapping_analysis(
     fields: dict[str, Any] = {}
     for path, field in model_fields.items():
         candidates = _candidates(path, field, graph, associations, concept_names, implementations, cda, indexes)
+        inherited_context = _context(path, model, group_results)
+        candidates = _deduplicate(candidates + _context_descendant_candidates(
+            field, inherited_context, cda, semantic_labels, semantic_neighbours,
+        ))
         actionable = [row for row in candidates if row["actionable"]]
         primary = actionable[0] if actionable else None
         fields[path] = (primary.get("mapping") if primary and primary.get("mapping") is not None else primary["target"] if primary else None)
@@ -994,16 +1287,19 @@ def _cda_mapping_analysis(
             "selected": fields[path],
             "primary": primary,
             "alternatives": [row for row in candidates if row is not primary][:8],
-            "context": None,
+            "context": inherited_context if primary is None else None,
         }
 
     value_set_members = _value_set_members(xml_paths)
     target_defaults: dict[str, dict[str, str]] = {}
     for path, field in model_fields.items():
-        certainty = _certainty_mapping(path, field, cda, value_set_members)
-        if certainty is None:
+        semantic = (
+            _certainty_mapping(path, field, cda, value_set_members)
+            or _bound_enum_mapping(field, cda, value_set_members)
+        )
+        if semantic is None:
             continue
-        selection, metadata = certainty
+        selection, metadata = semantic
         old_primary = details[path].get("primary")
         if old_primary is not None:
             details[path]["alternatives"] = [old_primary] + list(details[path].get("alternatives", []))
@@ -1021,7 +1317,6 @@ def _cda_mapping_analysis(
 
     for path in model_fields:
         if details[path]["primary"] is None:
-            details[path]["context"] = _context(path, model, group_results)
             details[path]["unresolved_reason"] = _unresolved_reason(
                 details[path].get("alternatives", []),
                 details[path].get("context"),
@@ -1053,7 +1348,9 @@ def _cda_mapping_analysis(
     for target_name, paths in field_claims.items():
         if len(paths) <= 1:
             continue
-        resolved = _fanout_rule(paths, target_name, model, cda, value_set_members)
+        resolved = _repeat_by_discriminator_rule(
+            paths, target_name, model, cda, value_set_members
+        )
         if resolved is None:
             resolved = _coalesce_rule(paths, target_name, model, cda)
         if resolved is not None:
@@ -1109,7 +1406,7 @@ def _cda_mapping_analysis(
     structures.update(_for_each_rules(model, cda, fields, group_results))
 
     proposal = {
-        "version": 5,
+        "version": 6,
         "model": {
             "dataset_id": model.get("meta", {}).get("dataset_id"),
             "transaction_id": model.get("meta", {}).get("transaction_id"),
@@ -1569,6 +1866,30 @@ def cda_mapping_proposal(
     """Return the editable proposal and user-facing report."""
     proposal, report, _ = cda_mapping_reports(model, cda, xml_paths)
     return proposal, report
+
+
+def mapping_field_delta(
+    baseline: Mapping[str, Any], current: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compare executable mappings field by field across two proposals."""
+    baseline_fields = {
+        str(path) for path, value in baseline.get("fields", {}).items()
+        if value is not None
+    }
+    current_fields = {
+        str(path) for path, value in current.get("fields", {}).items()
+        if value is not None
+    }
+    preserved = sorted(baseline_fields & current_fields)
+    lost = sorted(baseline_fields - current_fields)
+    gained = sorted(current_fields - baseline_fields)
+    return {
+        "baseline": len(baseline_fields),
+        "current": len(current_fields),
+        "preserved": preserved,
+        "lost": lost,
+        "gained": gained,
+    }
 
 
 def _headers(input_dir: Path | None) -> dict[str, list[str]]:

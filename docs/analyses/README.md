@@ -18,3 +18,9 @@ Current focused implementation plans:
   medication/pupil occurrence rules remain.
 - [`2026-08-30-cda-structural-expansion.md`](2026-08-30-cda-structural-expansion.md)
   records the normative XSD source and structural-to-datatype acceptance cases.
+- [`2026-08-31-cda-mapping-recovery.md`](2026-08-31-cda-mapping-recovery.md)
+  records the fresh-spec integration gates, PR #9 field-by-field comparison and
+  terminology-derived pupil discriminator evidence.
+- [`2026-09-01-cda-structural-expansion-checkpoint.md`](2026-09-01-cda-structural-expansion-checkpoint.md)
+  records the completed fresh-snapshot production gates, generic fixes found by
+  them, final coverage and publication criterion.
