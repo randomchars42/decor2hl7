@@ -338,6 +338,45 @@ Evidence: `src/decor2hl7/cda/core.py`, `src/decor2hl7/cda/compile.py`,
 `tests/test_cda_datatypes.py`,
 `docs/analyses/2026-08-31-cda-mapping-recovery.md`.
 
+## DEC-015 — Project ART-DECOR associations through common CDA/RIM slots
+
+**Decision:** accepted
+**Implementation:** verified
+
+ART-DECOR `staticAssociations/origconcept` is formal mapping evidence even when
+it references a legacy or profile constraint that is not itself present in the
+effective CDA branch. The compiler may project that association to the active
+branch only when the referenced constraint resolves to one unique CDA/RIM XSD
+owner-and-particle slot and the mapped target context contains one unique
+nearest occurrence of the same slot. Neither the source nor target leaf name is
+used to establish equivalence. Ambiguous class slots or occurrences remain
+visible evidence and are not executable proposals.
+
+XSD `complexType/@mixed` is compiled into an element-text value representation
+for a complex root. Rendering consumes that representation without knowing the
+datatype or template. A coded source associated with an open coded target may
+use the declarative `code_system` transform when exactly one target CodeSystem
+is specified; the transform preserves the normalized code and adds the
+CodeSystem OID without inventing a ValueSet crosswalk.
+
+Structural `for_each` rules are provisionally derived before field selection.
+Their explicit source-group/target-repeat alignment may satisfy repeat-depth
+compatibility for a scalar candidate, using the same occurrence check as
+mapping validation. This retains one shared medication section and one entry per
+source medication while making formally associated payload fields actionable.
+
+Applied to the fetched medication evidence, the generic mechanism selects
+manufactured-material name, product code, dosage narrative and route. It does
+not select lot number because no source association to that target has been
+found. The mapping and renderer contain no medication-class, template-OID or
+field-name exception.
+
+Evidence: `src/decor2hl7/compile/mapping.py`,
+`src/decor2hl7/cda/core.py`, `src/decor2hl7/cda/compile.py`,
+`src/decor2hl7/transforms.py`, `tests/test_core.py`,
+`tests/test_cda_datatypes.py`,
+`docs/analyses/2026-09-01-medication-common-base-slot.md`.
+
 ## Maintenance rule
 
 A pull request that changes project semantics must update the affected decision

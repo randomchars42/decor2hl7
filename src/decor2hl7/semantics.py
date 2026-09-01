@@ -214,6 +214,15 @@ def transformed_compatibility(
     elif kind == "not":
         if str(field.get("type") or "") != "boolean" or "boolean" not in logical_types:
             reasons.append("not transform requires boolean dataset and CDA values")
+    elif kind == "code_system":
+        if (
+            str(field.get("type") or "") != "code"
+            or kind_value != ValueRepresentationKind.CODED.value
+            or not str(transform.get("code_system") or "")
+        ):
+            reasons.append(
+                "code_system transform requires a coded dataset field, a coded CDA target, and one code system"
+            )
     else:
         reasons.append(f"unknown transform type {kind!r}")
     repeat_chain = list(field.get("repeat_chain") or ([] if not field.get("repeat") else [field.get("repeat")]))

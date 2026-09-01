@@ -42,6 +42,7 @@ class ModelDefinition:
     base: str | None
     parts: tuple[ModelPart, ...]
     attributes: tuple[ModelAttribute, ...]
+    mixed: bool = False
     category: str = "datatype"
     source: str = ""
 
@@ -171,6 +172,7 @@ def index_definitions(paths: Iterable[Path]) -> DefinitionIndex:
                     for item in content.findall(f".//{XSD}attribute")
                     if item.get("name") and item.get("type")
                 ),
+                mixed=node.get("mixed") == "true",
                 category=(
                     "structural"
                     if name.startswith("POCD_MT") or path.name == "POCD_MT000040.xsd"
@@ -211,8 +213,13 @@ def resolve_definition(
     attributes = {item.name: item for item in base.attributes}
     attributes.update({item.name: item for item in definition.attributes})
     return ModelDefinition(
-        definition.name, definition.base, tuple(parts.values()),
-        tuple(attributes.values()), definition.category, definition.source,
+        name=definition.name,
+        base=definition.base,
+        parts=tuple(parts.values()),
+        attributes=tuple(attributes.values()),
+        mixed=definition.mixed or base.mixed,
+        category=definition.category,
+        source=definition.source,
     )
 
 

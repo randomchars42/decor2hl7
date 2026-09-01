@@ -267,6 +267,7 @@ decision record, and both Markdown views are produced from the same analysis.
 Evidence includes:
 
 - direct/lineage-mediated `templateAssociation` (`TA`)
+- ART-DECOR `staticAssociations/origconcept` links (`STATIC_ASSOC`)
 - version-tolerant TA resolution
 - `SPEC`, `INHERIT`, reverse lineage, `ORIGINAL`, `ADAPT`, etc.
 - direct legacy `implementation/@xpath` declarations (`XPATH`)
@@ -281,6 +282,22 @@ semantic transform. Shared physical targets are also retained as evidence but ar
 not written into the executable proposal without explicit merge/repetition
 semantics. Strong mappings win; weaker alternatives remain visible and never
 downgrade the selected mapping.
+
+A static association can name a constraint from a legacy or profile template
+instead of the active template node. The mapper resolves that constraint to its
+unique owning CDA/RIM XSD class and particle, then projects the association to
+the same compiled structural slot in the active branch. Projection is
+executable only when the slot and the nearest occurrence inside the already
+mapped context are both unique. This is structural identity supplied by the
+pinned model, not a leaf-name match; ambiguous slots remain report-only
+evidence.
+
+The XSD graph also carries `complexType/@mixed`. A mixed-content root receives
+an element-text value representation during compilation, so mappings such as a
+profile-associated manufactured-material name remain renderer-independent.
+When a coded source has an explicit open target code system but no enumerated
+ValueSet, the proposal carries a declarative `code_system` transform that
+normalizes the source code and supplies that code-system OID.
 
 Identity-style lineage may enrich omitted dataset constraints. `ADAPT` and other
 derivation relationships are deliberately not treated as automatic identity
@@ -331,6 +348,9 @@ the generated rule proves identical source and physical-target identity.
 The compiler does not embed AKTIN paths, OIDs, or side codes in the runtime. A
 generated rule carries the resolved source paths, targets, and terminology
 members, so the same binding engine can execute another transaction/template.
+Occurrence rules are derived provisionally before scalar candidate selection,
+allowing a candidate to become executable when the established `for_each`
+alignment accounts for its otherwise incompatible repeated ancestors.
 
 Physical ART-DECOR source identity uses template id, effective date, element id
 and template-local path. Revisionless/path and element-id-only indexes remain

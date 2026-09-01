@@ -66,13 +66,58 @@ def _graph_and_associations(
     xml_paths: Iterable[Path],
 ) -> tuple[
     dict[str, set[tuple[str, str]]],
-    list[tuple[str, str, str, str]],
+    list[dict[str, Any]],
     dict[str, str],
 ]:
     graph: dict[str, set[tuple[str, str]]] = defaultdict(set)
-    associations: list[tuple[str, str, str, str]] = []
+    associations: list[dict[str, Any]] = []
     names: dict[str, str] = {}
     for root in _all_xml(xml_paths):
+        parents = {child: parent for parent in root.iter() for child in parent}
+        element_code_systems: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+        for element in root.iter():
+            if local(element.tag) != "element" or not element.get("id"):
+                continue
+            owner = parents.get(element)
+            while owner is not None and (
+                local(owner.tag) != "template" or not owner.get("id")
+            ):
+                owner = parents.get(owner)
+            if owner is None:
+                continue
+            key = (
+                str(owner.get("id") or ""),
+                str(owner.get("effectiveDate") or ""),
+                str(element.get("id") or ""),
+            )
+            element_code_systems[key].update(
+                str(child.get("codeSystem") or "")
+                for child in list(element)
+                if local(child.tag) == "vocabulary" and child.get("codeSystem")
+            )
+
+        def add_association(
+            concept: str, template_id: str, effective: str,
+            element_id: str, kind: str,
+        ) -> None:
+            systems = set(element_code_systems.get(
+                (template_id, effective, element_id), set()
+            ))
+            if not systems:
+                for (tid, _, eid), values in element_code_systems.items():
+                    if tid == template_id and eid == element_id:
+                        systems.update(values)
+            row = {
+                "concept": concept,
+                "template_id": template_id,
+                "effective_date": effective,
+                "element_id": element_id,
+                "kind": kind,
+                "code_systems": sorted(systems),
+            }
+            if row not in associations:
+                associations.append(row)
+
         for node in root.iter():
             if local(node.tag) == "concept" and node.get("id"):
                 source = node.get("id") or ""
@@ -94,12 +139,18 @@ def _graph_and_associations(
                 effective = node.get("effectiveDate") or ""
                 for child in list(node):
                     if local(child.tag) == "concept" and child.get("ref") and child.get("elementId"):
-                        associations.append((
-                            child.get("ref") or "",
-                            template_id,
-                            effective,
-                            child.get("elementId") or "",
-                        ))
+                        add_association(
+                            child.get("ref") or "", template_id, effective,
+                            child.get("elementId") or "", "templateAssociation",
+                        )
+            elif local(node.tag) == "origconcept" and node.get("ref") and node.get("elementId"):
+                add_association(
+                    node.get("ref") or "",
+                    node.get("templateId") or "",
+                    node.get("templateEffectiveDate") or "",
+                    node.get("elementId") or "",
+                    "staticAssociation",
+                )
     reverse: dict[str, set[tuple[str, str]]] = defaultdict(set)
     for source, edges in graph.items():
         for kind, target in edges:
@@ -276,10 +327,138 @@ def _is_payload(model_type: str, target: Mapping[str, Any]) -> bool:
     return payload_match(model_type, target)
 
 
-def _direct(field: Mapping[str, Any], target: Mapping[str, Any]) -> tuple[bool, list[str]]:
+def _direct(
+    field: Mapping[str, Any],
+    target: Mapping[str, Any],
+    *,
+    cda: Mapping[str, Any] | None = None,
+    occurrence_mapping: Mapping[str, Any] | None = None,
+    transform: Mapping[str, Any] | None = None,
+) -> tuple[bool, list[str]]:
     if not field.get("type"):
         return True, []
-    return direct_compatibility(field, target)
+    compatible, reasons = (
+        transformed_compatibility(field, target, transform)
+        if transform else direct_compatibility(field, target)
+    )
+    if cda is not None and occurrence_mapping is not None:
+        # Candidate selection must use the same occurrence contract as runtime
+        # validation.  A for_each rule may bind one source repeat below a
+        # shared target container, so raw repeat-depth equality is too strict.
+        from ..bindings import for_each_target_positions
+
+        if for_each_target_positions(
+            field, target, cda, occurrence_mapping
+        ) is not None:
+            reasons = [
+                reason for reason in reasons
+                if not reason.startswith("dataset has ")
+            ]
+            compatible = not reasons
+    return compatible, reasons
+
+
+def _rim_slots(target: Mapping[str, Any]) -> set[tuple[str, str]]:
+    """Return XSD structural slots recorded in a target's provenance."""
+    target_path = _xpath_shape(str(target.get("path") or ""))
+    return {
+        (str(item.get("datatype") or ""), str(item.get("datatype_part") or ""))
+        for item in target.get("provenance", [])
+        if isinstance(item, Mapping)
+        and item.get("datatype") and item.get("datatype_part")
+        and "cda-rim" in str(item.get("source") or "")
+        and _xpath_shape(str(item.get("path") or "")) == target_path
+    }
+
+
+def _association_reference_targets(
+    association: Mapping[str, Any], cda: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    template_id = str(association.get("template_id") or "")
+    element_id = str(association.get("element_id") or "")
+    return [
+        target for target in cda.get("targets", {}).values()
+        if str(target.get("template_id") or "") == template_id
+        and str(target.get("element_id") or "") == element_id
+    ]
+
+
+def _association_slots(
+    association: Mapping[str, Any], cda: Mapping[str, Any],
+) -> set[tuple[str, str]]:
+    """Resolve an associated legacy element to one CDA/RIM base slot.
+
+    Legacy profiles frequently use different element ids from the active
+    profile.  Their XML path identifies possible compiled nodes; the actual
+    projection key is the XSD-derived owning class + particle, never the leaf
+    spelling alone.
+    """
+    references = _association_reference_targets(association, cda)
+    slots = set().union(*(_rim_slots(target) for target in references)) if references else set()
+    if slots:
+        return slots
+    reference_paths = {
+        _xpath_shape(str(target.get("path") or ""))
+        for target in references if target.get("path")
+    }
+    reference_types = {
+        str(target.get("datatype") or "").upper()
+        for target in references if target.get("datatype")
+    }
+    for target in cda.get("targets", {}).values():
+        target_path = _xpath_shape(str(target.get("path") or ""))
+        if not target_path or not any(
+            target_path == path or target_path.endswith("/" + path)
+            for path in reference_paths
+        ):
+            continue
+        if reference_types and str(target.get("datatype") or "").upper() not in reference_types:
+            continue
+        slots.update(_rim_slots(target))
+    return slots
+
+
+def _projected_association_targets(
+    association: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> list[tuple[str, Mapping[str, Any]]]:
+    slots = _association_slots(association, cda)
+    # More than one structural slot means the legacy element cannot be
+    # projected without guessing which CDA/RIM particle it represented.
+    if len(slots) != 1:
+        return []
+    slot = next(iter(slots))
+    context_node = context.get("node", {}) if isinstance(context, Mapping) else {}
+    result = [
+        (str(name), target)
+        for name, target in _renderable_targets(cda).items()
+        if slot in _rim_slots(target)
+        and (
+            not context_node
+            or _is_descendant_target(target, context_node)
+        )
+    ]
+    if len(result) == 1:
+        return result
+    if result and context_node:
+        context_locations = [
+            str(value) for value in context_node.get("locations", [])
+        ]
+        if len(context_locations) == 1:
+            prefix_depth = len(context_locations[0].split("."))
+            ranked = sorted(
+                (
+                    len(str(target.get("locations", [""])[0]).split("."))
+                    - prefix_depth,
+                    name,
+                    target,
+                )
+                for name, target in result
+            )
+            if len(ranked) == 1 or ranked[0][0] < ranked[1][0]:
+                return [(ranked[0][1], ranked[0][2])]
+    return []
 
 
 def _lineage(
@@ -347,33 +526,51 @@ def _candidate(
 def _ta_candidates(
     field: Mapping[str, Any],
     graph: Mapping[str, set[tuple[str, str]]],
-    associations: list[tuple[str, str, str, str]],
+    associations: list[dict[str, Any]],
     concept_names: Mapping[str, str],
     cda: Mapping[str, Any],
+    context: Mapping[str, Any] | None = None,
+    occurrence_mapping: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    association_index: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
-    for concept, template_id, effective, element_id in associations:
-        association_index[concept].append((template_id, effective, element_id))
+    association_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for association in associations:
+        association_index[str(association.get("concept") or "")].append(
+            association
+        )
     source_index = cda.get("source_index", {})
     targets = cda.get("targets", {})
     concept_id = str(field.get("concept") or "")
     result: list[dict[str, Any]] = []
     for related, path in _lineage(concept_id, graph):
-        for template_id, effective, element_id in association_index.get(related, []):
+        for association in association_index.get(related, []):
+            template_id = str(association.get("template_id") or "")
+            effective = str(association.get("effective_date") or "")
+            element_id = str(association.get("element_id") or "")
             names = list(source_index.get(f"{template_id}|ID:{element_id}", []))
             if not names:
                 names = [
                     name for name, target in targets.items()
-                    if target.get("renderable", True)
-                    and str(target.get("template_id") or "") == template_id
+                    if str(target.get("template_id") or "") == template_id
                     and str(target.get("element_id") or "") == element_id
                 ]
-            for name in names:
-                target = targets.get(name, {})
-                if (not target or not target.get("renderable", True) or target.get("prohibited")
-                        or len(target.get("locations", [])) != 1):
-                    continue
-                specialization = str(target.get("template_id") or "") != template_id
+            direct = [
+                (str(name), targets.get(name, {})) for name in names
+                if targets.get(name, {}).get("renderable", True)
+                and not targets.get(name, {}).get("prohibited")
+                and len(targets.get(name, {}).get("locations", [])) == 1
+            ]
+            projected = False
+            selected = direct
+            if not selected:
+                selected = _projected_association_targets(
+                    association, cda, context
+                )
+                projected = bool(selected)
+            for name, target in selected:
+                specialization = (
+                    projected
+                    or str(target.get("template_id") or "") != template_id
+                )
                 version_shift = (
                     not specialization and bool(effective)
                     and bool(target.get("template_effective_date"))
@@ -388,8 +585,37 @@ def _ta_candidates(
                 if specialization:
                     score -= 6
                 chain = [edge for edge, _ in path]
-                chain.append("TA_SPEC" if specialization else "TA_VERSION" if version_shift else "TA")
-                actionable, direct_warnings = _direct(field, target)
+                association_kind = str(association.get("kind") or "")
+                if association_kind == "staticAssociation":
+                    chain.append("STATIC_ASSOC")
+                else:
+                    chain.append(
+                        "TA_SPEC" if specialization else
+                        "TA_VERSION" if version_shift else "TA"
+                    )
+                if projected:
+                    slot = next(iter(_rim_slots(target)))
+                    chain.append(f"CDA_RIM_SLOT({slot[0]}.{slot[1]})")
+                transform = None
+                systems = [
+                    str(value) for value in association.get("code_systems", [])
+                    if value
+                ]
+                if (
+                    str(field.get("type") or "") == "code"
+                    and not accepted_values(field)
+                    and len(set(systems)) == 1
+                ):
+                    transform = {
+                        "type": "code_system",
+                        "code_system": systems[0],
+                    }
+                    chain.append(f"OPEN_CODE_SYSTEM({systems[0]})")
+                actionable, direct_warnings = _direct(
+                    field, target, cda=cda,
+                    occurrence_mapping=occurrence_mapping,
+                    transform=transform,
+                )
                 warnings: list[str] = list(direct_warnings)
                 if not actionable:
                     warnings.insert(0, "requires transform or a different CDA payload")
@@ -400,17 +626,26 @@ def _ta_candidates(
                     # drift visible and lower its rank.
                     score -= 20
                     warnings.append("lineage name drift")
+                mapping = (
+                    {"target": name, "transform": transform}
+                    if transform is not None else None
+                )
                 result.append(_candidate(
                     name,
                     target,
                     chain,
                     confidence,
                     score,
-                    kind="TA",
+                    kind=(
+                        "STATIC_ASSOC_SLOT" if projected else
+                        "STATIC_ASSOC" if association_kind == "staticAssociation"
+                        else "TA"
+                    ),
                     actionable=actionable,
                     via=related,
                     via_name=concept_names.get(related),
                     warnings=warnings,
+                    mapping=mapping,
                 ))
     return result
 
@@ -891,7 +1126,7 @@ def _candidates(
     path: str,
     field: Mapping[str, Any],
     graph: Mapping[str, set[tuple[str, str]]],
-    associations: list[tuple[str, str, str, str]],
+    associations: list[dict[str, Any]],
     concept_names: Mapping[str, str],
     implementations: Mapping[str, list[dict[str, str]]],
     cda: Mapping[str, Any],
@@ -901,10 +1136,15 @@ def _candidates(
         dict[str, list[tuple[str, Mapping[str, Any]]]],
         dict[str, set[str]],
     ],
+    context: Mapping[str, Any] | None = None,
+    occurrence_mapping: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     by_vs, by_code, by_template, name_index = indexes
     result = _implementation_candidates(field, implementations, cda)
-    result.extend(_ta_candidates(field, graph, associations, concept_names, cda))
+    result.extend(_ta_candidates(
+        field, graph, associations, concept_names, cda,
+        context, occurrence_mapping,
+    ))
     result.extend(_name_candidates(path, field, cda, by_template, name_index))
     result.extend(_description_candidates(field, cda))
     result.extend(_vocabulary_candidates(field, by_vs, by_code, by_template))
@@ -986,6 +1226,7 @@ def _context_descendant_candidates(
     cda: Mapping[str, Any],
     labels: Mapping[str, set[str]],
     neighbours: Mapping[str, set[str]],
+    occurrence_mapping: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Resolve one writable descendant inside a formally mapped container."""
     context_node = context.get("node", {}) if isinstance(context, Mapping) else {}
@@ -1005,7 +1246,10 @@ def _context_descendant_candidates(
             or not _is_descendant_target(target, context_node)
         ):
             continue
-        compatible, _ = _direct(field, target)
+        compatible, _ = _direct(
+            field, target, cda=cda,
+            occurrence_mapping=occurrence_mapping,
+        )
         if not compatible:
             continue
         leaf = str(target.get("path") or "").rsplit("/", 1)[-1].lstrip("@")
@@ -1282,12 +1526,22 @@ def _cda_mapping_analysis(
         if result["primary"] is None:
             result["context"] = _context_for_node(groups[group_path], groups, group_results)
 
+    preliminary_structures = _for_each_rules(
+        model, cda, {}, group_results
+    )
+    occurrence_mapping = {"structures": preliminary_structures}
+
     fields: dict[str, Any] = {}
     for path, field in model_fields.items():
-        candidates = _candidates(path, field, graph, associations, concept_names, implementations, cda, indexes)
         inherited_context = _context(path, model, group_results)
+        candidates = _candidates(
+            path, field, graph, associations, concept_names,
+            implementations, cda, indexes,
+            inherited_context, occurrence_mapping,
+        )
         candidates = _deduplicate(candidates + _context_descendant_candidates(
-            field, inherited_context, cda, semantic_labels, semantic_neighbours,
+            field, inherited_context, cda, semantic_labels,
+            semantic_neighbours, occurrence_mapping,
         ))
         actionable = [row for row in candidates if row["actionable"]]
         primary = actionable[0] if actionable else None
@@ -1349,7 +1603,7 @@ def _cda_mapping_analysis(
                 if path in model_fields:
                     field_claims[target_name].append(path)
 
-    structures: dict[str, dict[str, Any]] = {}
+    structures: dict[str, dict[str, Any]] = dict(preliminary_structures)
 
     # Shared targets become executable only when their occurrence semantics are
     # explicit.  Repeat fan-out requires a terminology-backed discriminator;
@@ -1488,6 +1742,11 @@ def _cda_mapping_analysis(
             reasons = {
                 "XPATH": "An explicit ART-DECOR implementation XPath identifies this CDA target.",
                 "TA": "A formal template association connects the datapoint lineage to this CDA element.",
+                "STATIC_ASSOC": "An ART-DECOR static association connects the datapoint to this CDA element.",
+                "STATIC_ASSOC_SLOT": (
+                    "An ART-DECOR static association identifies a CDA/RIM base slot, "
+                    "which resolves uniquely in the mapped target context."
+                ),
                 "TERM+VS": "Terminology locates the CDA template and compatible value-set evidence identifies the target.",
                 "TERM+DT": "Terminology locates the CDA template and datatype compatibility identifies its unique payload.",
                 "TERM": "Compatible terminology provides an indirect bridge to this CDA target.",

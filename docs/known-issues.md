@@ -34,24 +34,31 @@ The medication section `1.2.276.0.76.3.1.195.10.64` and Medikation template
 `for_each` correctly binds each repeated source medication to one section
 `entry` and remains required occurrence semantics.
 
-Scalar medication mappings remain open. Source association evidence points to
-PMP Material `1.2.276.0.76.10.90022`, while the effective document branch uses
-UV Medication Information (simple) `2.16.840.1.113883.10.21.4.10`. The outer
-Medikation template prohibits direct `effectiveTime`, `doseQuantity`,
-`rateQuantity` and `administrationUnitCode`; dosage belongs to repeatable UV
-Subordinate administration `2.16.840.1.113883.10.21.4.6`. Compound product,
-dose, route and schedule values, cross-template field evidence, exact
-terminology and nested occurrence alignment must therefore be resolved before
-field mappings are proposed. See
-[`analyses/2026-08-30-medication-mapping-plan.md`](analyses/2026-08-30-medication-mapping-plan.md).
+Static ART-DECOR associations now project through unique common CDA/RIM slots
+from the associated legacy/profile constraints to the effective UV Medication
+Information branch. Combined with the existing `for_each`, this makes four
+source fields executable without a medication-specific rule: manufactured
+material name, product code with its declared open code system, dosage
+narrative, and route.
+
+The remaining medication boundary is narrower but still important. No formal
+source association has been found for lot number, so `chargennummer` remains
+unmapped even though the target structure exposes it. The outer Medikation
+template also prohibits direct `effectiveTime`, `doseQuantity`, `rateQuantity`
+and `administrationUnitCode`; detailed dose/rate/schedule data belongs to
+repeatable UV Subordinate administration
+`2.16.840.1.113883.10.21.4.6` and still needs compound-value terminology and
+nested-occurrence evidence. See
+[`analyses/2026-09-01-medication-common-base-slot.md`](analyses/2026-09-01-medication-common-base-slot.md).
 
 ## Transform vocabulary
 
 `cda-mapping.json` version 6 accepts direct target names, small declarative
 rules, and explicit structural bindings. The built-in scalar transform vocabulary is deliberately limited to `identity`,
-`enum`, `ordinal`, and `not`. The generated proposal uses it for the currently
+`enum`, `ordinal`, `not`, and `code_system`. The generated proposal uses it for the currently
 proven AKTIN semantics for Tetanusschutz, Isolation, modified Rankin, and
-diagnosis certainty. Structural `for_each`, `repeat_by_discriminator`, and
+diagnosis certainty, and to carry a normalized source code into one explicitly
+declared open target CodeSystem. Structural `for_each`, `repeat_by_discriminator`, and
 `coalesce` behavior is implemented in the generic binding layer and is generated
 only from formal repeat/discriminator evidence. Legacy reviewed `fan_out`
 configuration remains executable for compatibility.
