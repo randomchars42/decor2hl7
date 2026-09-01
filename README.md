@@ -370,9 +370,15 @@ unmapped fields are recorded in `expected.json` and `results.md` rather than
 being silently treated as covered.
 
 `cda-mapping.md` is the working report for completing the mapping: it includes
-the target-document outline and directly aligns human dataset names,
-`model.json` datapoints, editable `cda-mapping.json` targets, and human CDA
-template names. JSON configuration excerpts precede read-only XML previews.
+one comparison-ready coverage headline plus two status-gutter trees. The first
+shows every `model.json` datapoint through the dataset hierarchy and marks it as
+mapped, suggested, or without a suitable writable CDA leaf. The inverse tree
+shows reportable template-level CDA leaves through the CDA hierarchy and marks
+leaves with no dataset source. Generic datatype plumbing and fixed/system values
+are excluded from that inverse coverage surface. Tree leaves keep human names
+and complete stable identifiers on one physical line. The remaining guide
+directly aligns editable `cda-mapping.json` targets with human CDA template
+names; JSON configuration excerpts precede read-only XML previews.
 `cda-mapping-details.md` adds the build summary, evidence chains, scores,
 template/element identifiers, and structural group context. The reusable,
 target-neutral format is specified in

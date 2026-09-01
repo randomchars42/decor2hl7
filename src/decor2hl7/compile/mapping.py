@@ -507,8 +507,9 @@ def _candidate(
     via_name: str | None = None,
     warnings: list[str] | None = None,
     mapping: Any = None,
+    suggested: bool = False,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "target": name,
         "node": target,
         "chain": chain,
@@ -522,6 +523,9 @@ def _candidate(
         "warnings": warnings or [],
         "mapping": mapping,
     }
+    if suggested:
+        result["suggested"] = True
+    return result
 
 
 def _ta_candidates(
@@ -1150,7 +1154,67 @@ def _candidates(
     result.extend(_description_candidates(field, cda))
     result.extend(_vocabulary_candidates(field, by_vs, by_code, by_template))
     result.extend(_semantic_transform_candidates(field, list(result), cda))
+    result.extend(_unbridged_writable_candidates(
+        field, context, cda, occurrence_mapping,
+    ))
     return _deduplicate(result)
+
+
+def _unbridged_writable_candidates(
+    field: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    cda: Mapping[str, Any],
+    occurrence_mapping: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Expose one exact-name writable descendant without selecting it.
+
+    This is deliberately report-only evidence.  Exact source/leaf wording and
+    runtime compatibility can show a reviewer that a physical destination
+    exists, but cannot replace a formal ART-DECOR bridge.
+    """
+    context_node = context.get("node", {}) if isinstance(context, Mapping) else {}
+    if not isinstance(context_node, Mapping) or not context_node:
+        return []
+    source_names = {
+        _norm(str(field.get(key) or ""))
+        for key in ("name", "short_name")
+        if field.get(key)
+    }
+    source_names.discard("")
+    if not source_names:
+        return []
+    matches: list[tuple[str, Mapping[str, Any]]] = []
+    for name, target in cda.get("targets", {}).items():
+        if (
+            not target.get("writable")
+            or target.get("prohibited")
+            or len(target.get("locations", [])) != 1
+            or target.get("datatype_derived")
+            or not _is_descendant_target(target, context_node)
+        ):
+            continue
+        leaf = str(target.get("path") or target.get("element_name") or "").rsplit("/", 1)[-1]
+        leaf = leaf.lstrip("@").split(":", 1)[-1]
+        target_names = {
+            _norm(leaf),
+            _norm(str(target.get("description") or "")),
+        }
+        target_names.discard("")
+        if not source_names & target_names:
+            continue
+        compatible, _ = _direct(
+            field, target, cda=cda, occurrence_mapping=occurrence_mapping,
+        )
+        if compatible:
+            matches.append((str(name), target))
+    if len(matches) != 1:
+        return []
+    name, target = matches[0]
+    return [_candidate(
+        name, target, ["WRITABLE_NAME"], "WEAK", 20,
+        kind="WRITABLE_NAME", actionable=False, suggested=True,
+        warnings=["writable target exists, but no formal association was found"],
+    )]
 
 
 def _context_for_node(
@@ -1923,7 +1987,11 @@ def _cda_mapping_analysis(
         for alt in detail.get("alternatives", []):
             if len(rows) >= limit:
                 break
-            rows.append((alt, "alternative" if alt.get("actionable") else "evidence only"))
+            rows.append((
+                alt,
+                "suggested / no formal bridge" if alt.get("suggested") else
+                "alternative" if alt.get("actionable") else "evidence only",
+            ))
         if not rows and detail.get("context"):
             context = detail["context"]
             rows.append(({

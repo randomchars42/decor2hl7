@@ -13,5 +13,9 @@ mypy-report:
 		echo; \
 		echo '=== mypy output ==='; \
 		python -m mypy --show-error-codes --show-column-numbers src tests; \
+		status=$$?; \
+		echo; \
+		echo "=== mypy exit status: $$status ==="; \
+		true; \
 	} > mypy-output.txt 2>&1
 	@echo "Wrote mypy-output.txt"

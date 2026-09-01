@@ -96,18 +96,6 @@ def _section_label(
     return _template_label(target) if target else "CDA section"
 
 
-def _dataset_group_labels(rows: list[Mapping[str, Any]], model: Mapping[str, Any]) -> str:
-    labels: list[str] = []
-    groups = model.get("groups", {})
-    for row in rows:
-        path = str(row["dataset_path"])
-        root = path.split(".", 1)[0]
-        label = str(groups.get(root, {}).get("name") or root)
-        if label not in labels:
-            labels.append(label)
-    return ", ".join(labels)
-
-
 def _mapping_view(
     model: Mapping[str, Any], cda: Mapping[str, Any], mapping: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -168,66 +156,243 @@ def _outline_datapoint_lines(
     row: Mapping[str, Any],
     *,
     last: bool,
-    width: int = 96,
+    status: str = "",
 ) -> list[str]:
-    """Render one human datapoint and its logical target without hiding either."""
+    """Render one status-gutter leaf on one physical line."""
     branch = "└──" if last else "├──"
     name = str(row["dataset_name"])
     target = f"{{{row['target']}}}"
-    inline = f"{stem}{branch} {name} → {target}"
-    if len(inline) <= width:
-        return [inline]
-    target_stem = stem + ("    " if last else "│   ")
-    return [f"{stem}{branch} {name}", f"{target_stem}→ {target}"]
+    return [f"{status:<3}{stem}{branch} {name} → {target}"]
 
 
-def _outline(view: Mapping[str, Any], model: Mapping[str, Any], cda: Mapping[str, Any]) -> list[str]:
-    rows_by_section = view["rows"]
-    header_entities = _entity_groups(rows_by_section.get(None, []))
+def _ordered_model_paths(model: Mapping[str, Any]) -> list[str]:
+    fields = model.get("fields", {})
+    order = [str(path) for path in model.get("order", []) if path in fields]
+    order.extend(sorted(str(path) for path in fields if path not in order))
+    return order
+
+
+def _selected_targets(selection: Any) -> list[str]:
+    return list(dict.fromkeys(
+        str(rule.get("target") or "")
+        for rule in mapping_rules(selection)
+        if rule.get("target") and rule.get("mode") != "fallback"
+    ))
+
+
+def _suggested_targets(
+    detail: Mapping[str, Any], cda: Mapping[str, Any],
+) -> list[str]:
+    """Return unselected candidates that can write one physical CDA leaf."""
+    targets: list[str] = []
+    for candidate in _candidate_rows(detail):
+        name = str(candidate.get("target") or "")
+        target = cda.get("targets", {}).get(name, {})
+        if (
+            name
+            and (candidate.get("actionable") or candidate.get("suggested"))
+            and target.get("writable")
+            and not target.get("prohibited")
+            and len(target.get("locations", [])) == 1
+            and name not in targets
+        ):
+            targets.append(name)
+    return targets
+
+
+def _coverage_index(
+    model: Mapping[str, Any], cda: Mapping[str, Any],
+    mapping: Mapping[str, Any], audit: Mapping[str, Any],
+) -> dict[str, Any]:
+    configured = mapping.get("fields", {})
+    audited = audit.get("fields", {})
+    selected: dict[str, list[str]] = {}
+    suggested: dict[str, list[str]] = {}
+    missing: list[str] = []
+    for path in _ordered_model_paths(model):
+        selection = configured.get(path) if isinstance(configured, Mapping) else None
+        targets = _selected_targets(selection)
+        if targets:
+            selected[path] = targets
+            continue
+        detail = audited.get(path, {}) if isinstance(audited, Mapping) else {}
+        candidates = _suggested_targets(
+            detail if isinstance(detail, Mapping) else {}, cda,
+        )
+        if candidates:
+            suggested[path] = candidates
+        else:
+            missing.append(path)
+    return {"selected": selected, "suggested": suggested, "missing": missing}
+
+
+def _dataset_coverage_tree(
+    model: Mapping[str, Any], coverage: Mapping[str, Any],
+) -> list[str]:
+    """Render every dataset field in its source hierarchy."""
+    groups = model.get("groups", {})
+    fields = model.get("fields", {})
+    children: dict[str | None, list[tuple[str, str]]] = defaultdict(list)
+    for path, group in groups.items():
+        parent = str(group.get("parent") or "") or None
+        children[parent].append(("group", str(path)))
+    for path in _ordered_model_paths(model):
+        field = fields.get(path, {})
+        parent = str(field.get("parent") or "") or None
+        children[parent].append(("field", path))
+
+    selected = coverage.get("selected", {})
+    suggested = coverage.get("suggested", {})
+    lines = ["```text", "   Dataset model"]
+
+    def render(parent: str | None, stem: str = "") -> None:
+        items = children.get(parent, [])
+        for index, (kind, path) in enumerate(items):
+            last = index == len(items) - 1
+            branch = "└──" if last else "├──"
+            next_stem = stem + ("    " if last else "│   ")
+            if kind == "group":
+                name = str(groups.get(path, {}).get("name") or path.rsplit(".", 1)[-1])
+                lines.append(f"   {stem}{branch} {name}")
+                render(path, next_stem)
+                continue
+            name = str(fields.get(path, {}).get("name") or path.rsplit(".", 1)[-1])
+            if path in selected:
+                status = "✓"
+                targets = selected[path]
+                consequence = " → " + ", ".join(f"{{{target}}}" for target in targets)
+            elif path in suggested:
+                status = "!"
+                targets = suggested[path]
+                consequence = " → " + ", ".join(f"{{{target}}}" for target in targets)
+            else:
+                status = "×"
+                consequence = " → — no suitable writable CDA leaf"
+            lines.append(f"{status:<3}{stem}{branch} {name}{consequence}")
+
+    render(None)
+    return lines + ["```"]
+
+
+def _reportable_cda_target(target: Mapping[str, Any]) -> bool:
+    """Limit inverse coverage to template-level payload leaves.
+
+    Generic datatype descendants, fixed/conditional values and system supplied
+    values remain available in cda.json but would swamp a mapping-coverage view.
+    """
+    return bool(
+        target.get("writable")
+        and not target.get("prohibited")
+        and len(target.get("locations", [])) == 1
+        and not target.get("datatype_derived")
+        and target.get("system_value") is None
+        and not target.get("fixed")
+        and not target.get("conditional_fixed")
+    )
+
+
+def _cda_coverage_tree(
+    view: Mapping[str, Any], model: Mapping[str, Any], cda: Mapping[str, Any],
+    mapping: Mapping[str, Any], coverage: Mapping[str, Any],
+) -> tuple[list[str], int]:
+    """Render the inverse CDA-leaf-to-dataset coverage tree."""
+    fields = model.get("fields", {})
+    selected_sources: dict[str, list[str]] = defaultdict(list)
+    suggested_sources: dict[str, list[str]] = defaultdict(list)
+    for path, targets in coverage.get("selected", {}).items():
+        for target in targets:
+            selected_sources[str(target)].append(str(path))
+    for path, targets in coverage.get("suggested", {}).items():
+        for target in targets:
+            suggested_sources[str(target)].append(str(path))
+
+    included = {
+        str(name) for name, target in cda.get("targets", {}).items()
+        if _reportable_cda_target(target)
+    }
+    included.update(selected_sources)
+    included.update(suggested_sources)
+    included.update(str(name) for name in mapping.get("target_defaults", {}))
+
+    nodes, parents = view["nodes"], view["parents"]
+    rows_by_section: dict[tuple[int, ...] | None, list[dict[str, Any]]] = defaultdict(list)
+    no_source = 0
+    for name in included:
+        target = cda.get("targets", {}).get(name, {})
+        locations = list(target.get("locations", []))
+        if len(locations) != 1 or _location(locations[0]) is None:
+            continue
+        location = _location(locations[0])
+        assert location is not None
+        selected_paths = selected_sources.get(name, [])
+        suggested_paths = suggested_sources.get(name, [])
+        if not selected_paths and not suggested_paths and _reportable_cda_target(target):
+            no_source += 1
+        rows_by_section[_section_of(location, nodes, parents)].append({
+            "name": name,
+            "target": target,
+            "location": location,
+            "entity": _template_label(target),
+            "selected": selected_paths,
+            "suggested": suggested_paths,
+        })
+
+    for rows in rows_by_section.values():
+        rows.sort(key=lambda row: (row["location"], row["name"]))
+
     template = view["template"]
     title = str(template.get("display_name") or template.get("name") or "ClinicalDocument")
-    lines = ["```text", f"{title} (ClinicalDocument)", "├── Document header"]
-
-    for entity_index, (entity, rows) in enumerate(header_entities):
-        entity_last = entity_index == len(header_entities) - 1
-        lines.append(f"│   {'└──' if entity_last else '├──'} {entity}")
-        stem = "│       " if entity_last else "│   │   "
-        for row_index, row in enumerate(rows):
-            lines.extend(
-                _outline_datapoint_lines(
-                    stem, row, last=row_index == len(rows) - 1,
-                )
-            )
-
-    lines.append("└── Document body (structuredBody)")
-    sections = view["sections"]
-    for section_index, section in enumerate(sections):
+    lines = ["```text", f"   {title} (ClinicalDocument)"]
+    areas: list[tuple[str, tuple[int, ...] | None]] = [("Document header", None)] + [
+        (_section_label(section, nodes, cda), section) for section in view["sections"]
+    ]
+    for area_index, (area_name, section) in enumerate(areas):
         rows = rows_by_section.get(section, [])
-        last_section = section_index == len(sections) - 1
-        section_stem = "    " if last_section else "│   "
-        suffix = (
-            f" — dataset: {_dataset_group_labels(rows, model)}"
-            if rows else " — no selected dataset mapping"
-        )
-        lines.append(
-            f"    {'└──' if last_section else '├──'} "
-            f"{_section_label(section, view['nodes'], cda)}{suffix}"
-        )
-        entities = _entity_groups(rows)
+        if not rows:
+            continue
+        area_last = area_index == len(areas) - 1
+        area_branch = "└──" if area_last else "├──"
+        area_stem = "    " if area_last else "│   "
+        lines.append(f"   {area_branch} {area_name}")
+        entities = _entity_groups([
+            {"entity": row["entity"], **row} for row in rows
+        ])
         for entity_index, (entity, entity_rows) in enumerate(entities):
-            last_entity = entity_index == len(entities) - 1
-            lines.append(
-                f"    {section_stem}{'└──' if last_entity else '├──'} {entity}"
-            )
-            entity_stem = section_stem + ("    " if last_entity else "│   ")
+            entity_last = entity_index == len(entities) - 1
+            entity_branch = "└──" if entity_last else "├──"
+            entity_stem = area_stem + ("    " if entity_last else "│   ")
+            lines.append(f"   {area_stem}{entity_branch} {entity}")
             for row_index, row in enumerate(entity_rows):
-                lines.extend(
-                    _outline_datapoint_lines(
-                        f"    {entity_stem}", row,
-                        last=row_index == len(entity_rows) - 1,
-                    )
+                last = row_index == len(entity_rows) - 1
+                branch = "└──" if last else "├──"
+                selected_paths = row["selected"]
+                suggested_paths = row["suggested"]
+                if selected_paths:
+                    status = "✓!" if suggested_paths else "✓"
+                    source_names = [
+                        str(fields.get(path, {}).get("name") or path)
+                        for path in selected_paths
+                    ]
+                    consequence = " ← " + ", ".join(source_names)
+                    if suggested_paths:
+                        names = [str(fields.get(path, {}).get("name") or path) for path in suggested_paths]
+                        consequence += "; suggested: " + ", ".join(names)
+                elif suggested_paths:
+                    status = "!"
+                    names = [str(fields.get(path, {}).get("name") or path) for path in suggested_paths]
+                    consequence = " ← " + ", ".join(names)
+                else:
+                    status = "○"
+                    consequence = " ← no dataset counterpart"
+                    default = mapping.get("target_defaults", {}).get(row["name"], {})
+                    if isinstance(default, Mapping) and default.get("nullFlavor"):
+                        consequence += f"; default nullFlavor=\"{default['nullFlavor']}\""
+                leaf = _leaf(row["target"].get("path") or row["target"].get("element_name"))
+                lines.append(
+                    f"{status:<3}{area_stem}{entity_stem[len(area_stem):]}{branch} "
+                    f"{leaf} {{{row['name']}}}{consequence}"
                 )
-    return lines + ["```"]
+    return lines + ["```"], no_source
 
 
 def _target_label(row: Mapping[str, Any]) -> str:
@@ -241,6 +406,11 @@ def _target_label(row: Mapping[str, Any]) -> str:
 
 def _md(value: Any) -> str:
     return str(value or "").replace("|", "\\|").replace("\n", " ")
+
+
+def _counted(count: int, singular: str) -> str:
+    plural = {"leaf": "leaves"}.get(singular, singular + "s")
+    return f"{count} {singular if count == 1 else plural}"
 
 
 def _mapping_status(row: Mapping[str, Any]) -> str:
@@ -289,6 +459,7 @@ def _candidate_rows(detail: Mapping[str, Any]) -> list[dict[str, Any]]:
             **dict(alternative),
             "result": (
                 "transform required" if alternative.get("mapping") is not None else
+                "suggested without formal bridge" if alternative.get("suggested") else
                 "selectable after review" if alternative.get("actionable") else
                 "evidence only"
             ),
@@ -328,7 +499,10 @@ def _review_required(
             action = "Define the required repetition or merge rule."
         elif candidates:
             selectable = any(
-                row.get("result") in {"selectable after review", "transform required"}
+                row.get("result") in {
+                    "selectable after review", "suggested without formal bridge",
+                    "transform required",
+                }
                 for row in candidates
             )
             action = (
@@ -360,6 +534,11 @@ def _review_reason(
         return (
             "The dataset and CDA represent the same information differently; review "
             "the proposed declarative transform before enabling it."
+        )
+    if any(row.get("result") == "suggested without formal bridge" for row in candidates):
+        return (
+            "A compatible writable CDA leaf has the same semantic name in the mapped "
+            "context, but no formal ART-DECOR bridge proves the mapping."
         )
     reason = str(detail.get("unresolved_reason") or "")
     if reason == "ambiguous_value_target":
@@ -662,20 +841,37 @@ def render_cda_mapping_markdown(
 ) -> str:
     """Render the concise, review-oriented dataset-to-CDA mapping guide."""
     view = _mapping_view(model, cda, mapping)
+    coverage = _coverage_index(model, cda, mapping, audit)
+    cda_tree, no_source_count = _cda_coverage_tree(
+        view, model, cda, mapping, coverage,
+    )
     rows_by_section = view["rows"]
-    all_rows = [row for rows in rows_by_section.values() for row in rows]
     sections = view["sections"]
     template = view["template"]
-    summary = audit.get("summary", {})
+    mapped_datapoints = len(coverage["selected"])
+    mapped_leaves = sum(len(targets) for targets in coverage["selected"].values())
+    suggested_datapoints = len(coverage["suggested"])
+    suggested_leaves = sum(len(targets) for targets in coverage["suggested"].values())
+    no_target_datapoints = len(coverage["missing"])
     lines = [
         "# Dataset-to-CDA mapping",
         "",
         f"Template: **{template.get('display_name') or template.get('name') or 'ClinicalDocument'}** "
         f"(`{template.get('id')}` @ `{template.get('effective_date')}`)",
         "",
-        f"Selected dataset fields: **{len({row['dataset_path'] for row in all_rows})}**; "
-        f"target assignments: **{len(all_rows)}**; "
-        f"unresolved fields: **{summary.get('field_coverage', {}).get('NO', 0)}**.",
+        f"Model: **{_counted(len(model.get('fields', {})), 'datapoint')}** · "
+        f"✓ mapped **{mapped_datapoints} dp → {_counted(mapped_leaves, 'leaf')}** · "
+        f"! suggested **{suggested_datapoints} dp → {_counted(suggested_leaves, 'leaf')}** · "
+        f"× no target **{no_target_datapoints} dp** · "
+        f"○ no source **{_counted(no_source_count, 'leaf')}**",
+        "",
+        "- ✓ **Mapped** — selected executable mapping.",
+        "- ! **Suggested** — a suitable writable CDA leaf exists, but no executable mapping is selected.",
+        "- × **No target** — no suitable writable CDA leaf was found.",
+        "- ○ **No source** — a reportable writable CDA leaf has no corresponding dataset datapoint.",
+        "",
+        "The CDA-side count excludes generic datatype-expansion plumbing and fixed, "
+        "conditional-fixed, or system-supplied values.",
         "",
         "Edit `cda-mapping.json`; do not edit the XML examples in this report. The",
         "mapping table explicitly connects the dataset model, the editable JSON",
@@ -685,11 +881,17 @@ def render_cda_mapping_markdown(
         f"`nullFlavor=\"{required_unmapped_null_flavor(mapping)}\"`; an unmapped "
         "optional element is omitted.",
         "",
-        "## Document outline",
+        "## Dataset coverage",
         "",
-        "`Dataset name` → `{logical CDA target datapoint}`",
+        "`Dataset datapoint` → `{logical CDA target}`",
         "",
-        *_outline(view, model, cda),
+        *_dataset_coverage_tree(model, coverage),
+        "",
+        "## CDA coverage",
+        "",
+        "`Logical CDA target` ← `dataset datapoint`",
+        "",
+        *cda_tree,
         "",
         "## Sections and entities",
         "",
