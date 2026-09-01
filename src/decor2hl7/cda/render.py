@@ -93,6 +93,20 @@ def _subtree_has_assignment(
         for child in node.get("children", [])
     )
 
+
+def _has_physical_value_below(
+    location: tuple[int, ...],
+    physical_values: Mapping[tuple[int, ...], tuple[Any, Mapping[str, Any]]],
+) -> bool:
+    """Return whether a compiled physical descendant has a runtime value.
+
+    Reusable ART-DECOR includes can expose the same logical target in several
+    document contexts.  Such a target is correctly non-writable, but a
+    compiler-assigned system role still belongs to one concrete occurrence.
+    Physical locations let that role activate only its owning branch.
+    """
+    return any(here[:len(location)] == location for here in physical_values)
+
 def _set_xsi_type(element: ET.Element, representation: Mapping[str, Any]) -> None:
     xsi_type = representation.get("xsi_type")
     if xsi_type:
@@ -410,11 +424,15 @@ def _render_transparent(
     problems: list[str],
     assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]],
     occurrence: tuple[int, ...],
+    physical_values: Mapping[tuple[int, ...], tuple[Any, Mapping[str, Any]]],
 ) -> list[ET.Element]:
     if str(node.get("conformance") or "").upper() == "NP":
         return []
     required = _has_required_content(node)
-    active = location in active_locations and _subtree_has_assignment(node, assignments, occurrence)
+    active = location in active_locations and (
+        _subtree_has_assignment(node, assignments, occurrence)
+        or _has_physical_value_below(location, physical_values)
+    )
     if not required and not active:
         return []
     maximum = node.get("max")
@@ -430,7 +448,7 @@ def _render_transparent(
                 _render_node(
                     child, parent, assignments, target_defaults, active_locations, cda,
                     location + (index,), null_flavor, problems, assertion_contexts,
-                    current_occurrence,
+                    current_occurrence, physical_values,
                 )
             )
     return result
@@ -448,17 +466,25 @@ def _render_node(
     problems: list[str],
     assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]],
     occurrence: tuple[int, ...] = (),
+    physical_values: Mapping[
+        tuple[int, ...], tuple[Any, Mapping[str, Any]]
+    ] | None = None,
 ) -> list[ET.Element]:
+    physical_values = physical_values or {}
     if node.get("kind") in {"include", "template"}:
         return _render_transparent(
             node, parent, assignments, target_defaults, active_locations, cda, location,
             null_flavor, problems, assertion_contexts, occurrence,
+            physical_values,
         )
 
     if str(node.get("conformance") or "").upper() == "NP":
         return []
     required = _has_required_content(node)
-    active = location in active_locations and _subtree_has_assignment(node, assignments, occurrence)
+    active = location in active_locations and (
+        _subtree_has_assignment(node, assignments, occurrence)
+        or _has_physical_value_below(location, physical_values)
+    )
     if not required and not active:
         return []
 
@@ -472,12 +498,14 @@ def _render_node(
                 _render_node_once(
                     node, parent, assignments, target_defaults, active_locations, cda, location,
                     null_flavor, problems, assertion_contexts, occurrence + (index,),
+                    physical_values,
                 )
             )
         return result
     return _render_node_once(
         node, parent, assignments, target_defaults, active_locations, cda, location,
         null_flavor, problems, assertion_contexts, occurrence,
+        physical_values,
     )
 
 
@@ -488,6 +516,7 @@ def _render_node_once(
     location: tuple[int, ...], null_flavor: str, problems: list[str],
     assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]],
     occurrence: tuple[int, ...],
+    physical_values: Mapping[tuple[int, ...], tuple[Any, Mapping[str, Any]]],
 ) -> list[ET.Element]:
     required = _has_required_content(node)
     source = node.get("origin", {})
@@ -582,6 +611,9 @@ def _render_node_once(
             element.set(_qname(name), str(value))
 
     assigned, target_name = _value_for_node(node, assignments)
+    physical_target: Mapping[str, Any] | None = None
+    if target_name is None and location in physical_values:
+        assigned, physical_target = physical_values[location]
     if target_name is not None:
         target = cda.get("targets", {}).get(str(target_name), {})
         if (
@@ -592,6 +624,12 @@ def _render_node_once(
             assigned = _generated_identifier(assigned, str(target_name), occurrence)
         else:
             assigned = _at(assigned, occurrence)
+    if isinstance(assigned, Mapping) and assigned.get("__presence__") is True:
+        # Presence-mode assignments activate an optional, fully constrained
+        # structural statement.  Its fixed descendants carry the CDA payload;
+        # the container itself is intentionally not a scalar writable target.
+        assigned = None
+        target_name = None
     default = next(
         (
             target_defaults[str(name)]
@@ -601,7 +639,7 @@ def _render_node_once(
         None,
     )
     if assigned is not None:
-        target = cda.get("targets", {}).get(str(target_name), {})
+        target = physical_target or cda.get("targets", {}).get(str(target_name), {})
         _write_value(element, assigned, target, node)
     elif len(node.get("codes") or []) == 1:
         codes = node.get("codes") or []
@@ -664,7 +702,7 @@ def _render_node_once(
             _render_node(
                 child, element, assignments, target_defaults, active_locations, cda,
                 location + (index,), null_flavor, problems, assertion_contexts,
-                occurrence,
+                occurrence, physical_values,
             )
         )
 
@@ -763,11 +801,40 @@ def emit(
     document = cda.get("document", [])
     if not document:
         raise ValueError("compiled CDA model contains no document element")
+
+    physical_values: dict[
+        tuple[int, ...], tuple[Any, Mapping[str, Any]]
+    ] = {}
+
+    def collect_physical_values(
+        nodes: list[Mapping[str, Any]], location: tuple[int, ...] = (),
+    ) -> None:
+        for index, node in enumerate(nodes):
+            here = location + (index,)
+            role = str(node.get("system_value") or "")
+            value = system_values.get(role)
+            if node.get("kind") == "element" and role and value is not None:
+                representation_target = next(
+                    (
+                        targets.get(str(name), {})
+                        for name in node.get("targets", [])
+                        if targets.get(str(name), {}).get("value_representation")
+                    ),
+                    {},
+                )
+                physical_values[here] = (value, representation_target)
+            collect_physical_values(list(node.get("children", [])), here)
+
+    collect_physical_values(list(document))
     _complete_value_companions(list(document), targets, assignments)
     _complete_content_roles(
         list(document), targets, assignments, explicit_assignment_names
     )
     active_locations = _active_target_locations(cda, assignments)
+    for location in physical_values:
+        active_locations.update(
+            location[:depth] for depth in range(1, len(location) + 1)
+        )
     null_flavor = required_unmapped_null_flavor(mapping)
     roots: list[ET.Element] = []
     assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]] = []
@@ -775,7 +842,7 @@ def emit(
         roots.extend(
             _render_node(
                 node, None, assignments, target_defaults, active_locations, cda, (index,),
-                null_flavor, problems, assertion_contexts, (),
+                null_flavor, problems, assertion_contexts, (), physical_values,
             )
         )
     if len(roots) != 1:

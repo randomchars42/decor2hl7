@@ -304,10 +304,19 @@ generic parts. Ambiguous or structural-only targets stay in `cda.json` for
 evidence/provenance but cannot be selected for scalar rendering. `decor2hl7
 check` verifies these compiled-model invariants before transformation.
 
+ART-DECOR `<choice>` branches are compiled as transparent alternatives of their
+underlying CDA/RIM particle. Abstract `ANY` values expose concrete typed scalar
+targets carrying their compiled `xsi:type`; the renderer remains unaware of the
+clinical class or datatype choice.
+
 The compiler can also retain exact, terminology-validated construction
 fallbacks from neutral template examples and compiled companion-content roles.
 Explicit mapped values take precedence. ART-DECOR XPath predicates continue to
 identify constraint branches but are never serialized as part of an XML tag.
+Compiler-assigned system roles are likewise consumed from the compiled node.
+If a shared include has several logical-target locations, only the exact
+physical occurrence carrying the role receives the runtime value; the shared
+target does not become writable.
 Generated target names keep their compact flattened form for stable mappings;
 use target `path`/`locations` or the expanded readable model when inspecting the
 actual nested CDA structure.
@@ -505,6 +514,14 @@ ancestors are not populated positionally. The transform vocabulary is
 intentionally small (`identity`, `enum`, `ordinal`, `not`, `code_system`,
 `coded_fallback`) and remains data
 rather than clinical Python code.
+
+A boolean coded act uses inverse `negationInd` when that attribute is the target
+representation. Separately, `mode: "presence"` may activate an optional
+ART-DECOR statement whose complete payload is fixed and whose template is
+uniquely identified by exact source terminology; false omits the statement.
+Occurrence-level values may be selected as the unique nearest compatible
+descendant of an already-derived `for_each` boundary. Structural containers do
+not become scalar writable targets through either rule.
 
 Existing reviewed version-5 `fan_out` rules remain executable. During
 `init-cda-mapping`, an old rule is migrated only when the newly generated

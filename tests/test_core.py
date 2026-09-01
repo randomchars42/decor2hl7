@@ -465,7 +465,7 @@ class CoreTests(unittest.TestCase):
             ],
         )
 
-    def test_unbridged_writable_name_is_report_only_suggestion(self) -> None:
+    def test_explicit_leaf_role_inside_mapped_context_is_actionable(self) -> None:
         field = {"name": "Name", "short_name": "name", "type": "text"}
         target = {
             "writable": True, "prohibited": False, "locations": ["0.1"],
@@ -482,9 +482,96 @@ class CoreTests(unittest.TestCase):
         )
         self.assertEqual(len(suggestions), 1)
         self.assertEqual(suggestions[0]["target"], "Organization.name")
-        self.assertTrue(suggestions[0]["suggested"])
-        self.assertFalse(suggestions[0]["actionable"])
-        self.assertEqual(suggestions[0]["chain"], ["WRITABLE_NAME"])
+        self.assertTrue(suggestions[0]["actionable"])
+        self.assertEqual(suggestions[0]["confidence"], "MEDIUM")
+        self.assertEqual(suggestions[0]["chain"], ["ARTDECOR_ROLE(name)"])
+
+    def test_exact_structural_description_projects_to_deepest_writable_leaf(self) -> None:
+        context = {"chain": ["CTX[link]"], "node": {
+            "locations": ["0"], "path": "hl7:observation",
+        }}
+        targets = {
+            "ExternalDocument": {
+                "locations": ["0.1"],
+                "path": "hl7:observation/hl7:externalDocument",
+                "description": "Link zur Definition", "writable": False,
+            },
+            "ExternalDocument.text": {
+                "locations": ["0.1.0"],
+                "path": "hl7:observation/hl7:externalDocument/hl7:text",
+                "datatype": "ED", "writable": True,
+                "logical_types": ["text"], "value_representation": {
+                    "kind": "element_text", "logical_types": ["text"],
+                },
+            },
+            "ExternalDocument.reference": {
+                "locations": ["0.1.0.0"],
+                "path": "hl7:observation/hl7:externalDocument/hl7:text/hl7:reference",
+                "datatype": "URL", "writable": True,
+                "logical_types": ["text"], "value_representation": {
+                    "kind": "attribute", "attribute": "value",
+                    "logical_types": ["text"],
+                },
+            },
+        }
+        candidates = mapping_compiler._context_description_candidates(
+            {"name": "Definitorischer Link", "description": "Link zur Definition", "type": "text"},
+            context, {"targets": targets}, {"structures": {}},
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["target"], "ExternalDocument.reference")
+        self.assertTrue(candidates[0]["actionable"])
+        self.assertIn("CDA_DESCENDANT", candidates[0]["chain"])
+
+    def test_choice_branch_prefers_atomic_value_and_follows_complex_duration(self) -> None:
+        context = {"chain": ["CTX[time]"], "node": {
+            "locations": ["0"], "path": "hl7:observation",
+            "repeat_ancestors": [],
+        }}
+        common = {
+            "kind": "element", "writable": True, "prohibited": False,
+            "locations": ["0.1"], "repeat_ancestors": [],
+        }
+        targets = {
+            "Time.interval": {
+                **common, "path": "hl7:observation/hl7:effectiveTime[@xsi:type='IVL_TS']",
+                "datatype": "IVL_TS", "has_children": True,
+                "logical_types": ["datetime"], "value_representation": {
+                    "kind": "timestamp", "logical_types": ["datetime"],
+                    "attribute": "value",
+                },
+            },
+            "Time.point": {
+                **common, "locations": ["0.2"],
+                "path": "hl7:observation/hl7:effectiveTime[not(@xsi:type)]",
+                "datatype": "TS", "has_children": False,
+                "logical_types": ["datetime"], "value_representation": {
+                    "kind": "timestamp", "logical_types": ["datetime"],
+                    "attribute": "value",
+                },
+            },
+            "Time.width": {
+                "kind": "element", "writable": True, "prohibited": False,
+                "datatype_derived": True, "locations": ["0.1.0"],
+                "repeat_ancestors": [],
+                "path": "hl7:observation/hl7:effectiveTime[@xsi:type='IVL_TS']/hl7:width",
+                "datatype": "PQ", "has_children": False,
+                "logical_types": ["duration"], "value_representation": {
+                    "kind": "quantity", "logical_types": ["duration"],
+                    "attributes": ["value", "unit"], "scalar_attribute": "value",
+                },
+            },
+        }
+        point = mapping_compiler._choice_branch_candidates(
+            {"type": "datetime", "repeat_chain": []}, context,
+            {"targets": targets}, {"structures": {}},
+        )
+        duration = mapping_compiler._choice_branch_candidates(
+            {"type": "duration", "repeat_chain": []}, context,
+            {"targets": targets}, {"structures": {}},
+        )
+        self.assertEqual(point[0]["target"], "Time.point")
+        self.assertEqual(duration[0]["target"], "Time.width")
 
     def test_cda_guide_merges_xml_context_and_explains_candidates(self) -> None:
         def element(name: str, children: list[dict] | None = None, **values: object) -> dict:
@@ -1235,6 +1322,196 @@ class CoreTests(unittest.TestCase):
             audit["fields"]["measures.isolation"]["alternatives"][0]["target"],
             "isolation.statusCode",
         )
+
+    def test_boolean_act_presence_uses_template_negation_semantics(self) -> None:
+        model = {"groups": {}, "fields": {"diagnostics.spine_xray": {
+            "name": "Röntgen-Wirbelsäule durchgeführt",
+            "short_name": "spine_xray", "concept": "spine-xray",
+            "description": "Wurde ein Röntgen der Wirbelsäule durchgeführt?",
+            "type": "boolean", "repeat_chain": [], "value_sets": [],
+            "codes": [{
+                "code": "79760008", "code_system": "2.16.840.1.113883.6.96",
+                "display_name": "Radiography of spine (procedure)",
+            }],
+        }}}
+        target = {
+            "template_id": "spine", "template_name": "Radiographyofspine",
+            "template_display_name": "Radiography of spine",
+            "path": "hl7:observation/@negationInd", "datatype": "BL",
+            "renderable": True, "writable": True, "locations": ["0.100000"],
+            "repeat_ancestors": [], "datatype_derived": False,
+            "logical_types": ["boolean"],
+            "value_representation": {"kind": "boolean", "attribute": "value"},
+        }
+        proposal, _ = mapping_compiler.cda_mapping_proposal(
+            model, {"targets": {"Radiographyofspine.negationInd": target}}, []
+        )
+        self.assertEqual(proposal["fields"]["diagnostics.spine_xray"], {
+            "target": "Radiographyofspine.negationInd",
+            "transform": {"type": "not"},
+        })
+
+    def test_boolean_can_activate_optional_fixed_statement(self) -> None:
+        model = {"groups": {}, "fields": {"triage.direct_contact": {
+            "name": "Direkter Arztkontakt", "short_name": "direct_contact",
+            "concept": "direct-contact", "type": "boolean", "repeat_chain": [],
+            "value_sets": [], "codes": [{
+                "code": "FLN-13", "code_system": "1.2.3",
+                "display_name": "Direkter Arztkontakt", "equivalence": "equal",
+            }],
+        }}}
+        root = {
+            "template_id": "contact", "template_name": "direct_contact",
+            "template_display_name": "Direkter Arztkontakt", "kind": "element",
+            "path": "hl7:observation", "renderable": True, "writable": False,
+            "has_children": True, "locations": ["0.0"], "repeat_ancestors": [],
+        }
+        code = {
+            **root, "path": "hl7:observation/hl7:code", "has_children": True,
+            "locations": ["0.0.0"], "codes": [{
+                "code": "FLN-13", "code_system": "1.2.3",
+            }],
+            "value_representation": {
+                "kind": "coded", "attributes": ["code", "codeSystem"],
+                "scalar_attribute": "code",
+            },
+        }
+        cda_model = {"targets": {
+                "direct_contact.observation": root,
+                "direct_contact.code": code,
+            }, "document": [{
+                "kind": "element", "name": "hl7:ClinicalDocument",
+                "min": 1, "mandatory": True, "fixed": {"classCode": "DOCCLIN"},
+                "attributes": [], "codes": [], "targets": [], "children": [{
+                    "kind": "element", "name": "hl7:observation",
+                    "min": 0, "mandatory": False, "fixed": {},
+                    "attributes": [], "codes": [],
+                    "targets": ["direct_contact.observation"], "children": [{
+                        "kind": "element", "name": "hl7:code", "datatype": "CD",
+                        "min": 1, "mandatory": True, "fixed": {},
+                        "attributes": [], "codes": [{
+                            "code": "FLN-13", "code_system": "1.2.3",
+                        }], "targets": ["direct_contact.code"], "children": [],
+                    }],
+                }],
+            }]}
+        proposal, audit, _, _ = mapping_compiler.cda_mapping_audit(
+            model, cda_model, []
+        )
+        self.assertEqual(proposal["fields"]["triage.direct_contact"], {
+            "target": "direct_contact.observation", "mode": "presence",
+        })
+        self.assertEqual(
+            audit["fields"]["triage.direct_contact"]["primary"]["kind"],
+            "CONDITIONAL_PRESENCE",
+        )
+
+        cda_model["targets"]["direct_contact.value"] = {
+            **root, "path": "hl7:observation/hl7:value", "datatype": "ST",
+            "writable": True, "has_children": False, "locations": ["0.0.1"],
+            "value_representation": {
+                "kind": "element_text", "logical_types": ["text"],
+            },
+        }
+        cda_model["document"][0]["children"][0]["children"].append({
+            "kind": "element", "name": "hl7:value", "datatype": "ST",
+            "min": 1, "mandatory": True, "fixed": {}, "attributes": [],
+            "codes": [], "targets": ["direct_contact.value"], "children": [],
+        })
+        incomplete, _ = mapping_compiler.cda_mapping_proposal(
+            model, cda_model, []
+        )
+        self.assertIsNone(incomplete["fields"]["triage.direct_contact"])
+
+    def test_repeat_scope_selects_nearest_unique_value(self) -> None:
+        field = {
+            "parent": "vitals", "repeat_chain": ["vitals"], "type": "datetime",
+        }
+        section = {
+            "path": "hl7:section", "locations": ["0"], "renderable": True,
+        }
+        common = {
+            "kind": "element", "writable": True, "renderable": True,
+            "prohibited": False, "logical_types": ["datetime"],
+            "value_representation": {"kind": "timestamp"},
+            "repeat_ancestors": ["0.2"],
+        }
+        cda_model = {"targets": {
+            "section": section,
+            "entry": {
+                "path": "hl7:section/hl7:entry", "locations": ["0.2"],
+                "renderable": True, "repeatable": True,
+            },
+            "organizer.effectiveTime": {
+                **common, "path": "hl7:organizer/hl7:effectiveTime",
+                "locations": ["0.2.0.3"],
+            },
+            "observation.effectiveTime": {
+                **common, "path": "hl7:observation/hl7:effectiveTime",
+                "locations": ["0.2.0.4.0.3"],
+            },
+        }}
+        candidates = mapping_compiler._repeat_scope_candidates(
+            field, {"node": section, "chain": ["CTX[vitals]"]}, cda_model,
+            {"structures": {"for-each-vitals": {
+                "type": "for_each", "source_group": "vitals",
+                "target_repeat": "entry",
+            }}},
+        )
+        self.assertEqual(
+            [candidate["target"] for candidate in candidates],
+            ["organizer.effectiveTime"],
+        )
+
+    def test_presence_assignment_emits_fixed_statement_only_for_true(self) -> None:
+        compiled = {
+            "targets": {
+                "Contact.observation": {
+                    "kind": "element", "path": "hl7:observation",
+                    "renderable": True, "writable": False, "has_children": True,
+                    "locations": ["0.0"], "repeat_ancestors": [],
+                },
+                "Contact.code": {
+                    "kind": "element", "path": "hl7:observation/hl7:code",
+                    "renderable": True, "writable": False, "has_children": True,
+                    "locations": ["0.0.0"], "repeat_ancestors": [],
+                    "value_representation": {
+                        "kind": "coded", "attributes": ["code", "codeSystem"],
+                        "scalar_attribute": "code",
+                    },
+                },
+            },
+            "document": [{
+                "kind": "element", "name": "hl7:ClinicalDocument", "min": 1,
+                "max": 1, "mandatory": True, "attributes": [], "codes": [],
+                "fixed": {"classCode": "DOCCLIN"}, "targets": [], "asserts": [], "lets": {},
+                "children": [{
+                    "kind": "element", "name": "hl7:observation", "min": 0,
+                    "max": 1, "mandatory": False, "attributes": [], "codes": [],
+                    "fixed": {}, "targets": ["Contact.observation"],
+                    "asserts": [], "lets": {}, "children": [{
+                        "kind": "element", "name": "hl7:code", "min": 1,
+                        "max": 1, "mandatory": True, "attributes": [],
+                        "codes": [{"code": "FLN-13", "code_system": "1.2.3"}],
+                        "fixed": {}, "targets": ["Contact.code"], "children": [],
+                        "asserts": [], "lets": {},
+                    }],
+                }],
+            }],
+        }
+        model = {"fields": {"contact": {"type": "boolean"}}}
+        mapping_cfg = {"fields": {"contact": {
+            "target": "Contact.observation", "mode": "presence",
+        }}}
+        true_record = {"key": "P1", "values": {"contact": True}, "instances": {}}
+        false_record = {"key": "P2", "values": {"contact": False}, "instances": {}}
+        true_xml, _ = cda.emit(true_record, model, compiled, mapping_cfg, {})
+        false_xml, _ = cda.emit(false_record, model, compiled, mapping_cfg, {})
+        true_root = ET.fromstring(true_xml)
+        false_root = ET.fromstring(false_xml)
+        self.assertEqual(len(true_root), 1)
+        self.assertEqual(list(true_root)[0][0].get("code"), "FLN-13")
+        self.assertEqual(len(false_root), 0)
 
     def test_compiler_infers_shared_section_entry_occurrences(self) -> None:
         model = {

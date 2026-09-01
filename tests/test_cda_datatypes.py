@@ -542,6 +542,58 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(org.find(f"{{{HL7}}}id").get("root"), "1.2.3.4")
             self.assertEqual(org.find(f"{{{HL7}}}name").text, "Example ED")
 
+    def test_custodian_roles_address_one_physical_reused_include(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "templates.xml"
+            source.write_text('''<decor>
+<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument">
+    <element name="hl7:author" minimumMultiplicity="0" maximumMultiplicity="1">
+      <element name="hl7:assignedAuthor" minimumMultiplicity="1" maximumMultiplicity="1">
+        <include ref="organization" flexibility="2026"/>
+      </element>
+    </element>
+    <element name="hl7:custodian" minimumMultiplicity="1" maximumMultiplicity="1">
+      <element name="hl7:assignedCustodian" minimumMultiplicity="1" maximumMultiplicity="1">
+        <element name="hl7:representedCustodianOrganization"
+                 minimumMultiplicity="1" maximumMultiplicity="1">
+          <include ref="organization" flexibility="2026"/>
+        </element>
+      </element>
+    </element>
+  </element>
+</template>
+<template id="organization" effectiveDate="2026" name="OrganizationElements">
+  <element name="hl7:id" datatype="II" minimumMultiplicity="1"
+           maximumMultiplicity="1"/>
+  <element name="hl7:name" datatype="ST" minimumMultiplicity="1"
+           maximumMultiplicity="1"/>
+</template>
+</decor>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {}, "fields": {},
+            }
+            compiled = compile_cda([source], model)
+            shared = compiled["targets"]["OrganizationElements.id"]
+            self.assertEqual(len(shared["locations"]), 2)
+            self.assertFalse(shared["writable"])
+
+            payload, problems = cda.emit(
+                {"key": "P1", "values": {}, "instances": {}},
+                model, compiled, {"fields": {}},
+                {"organization": {"oid": "1.2.3.4", "name": "Example ED"}},
+            )
+            self.assertEqual(problems, [])
+            root = ET.fromstring(payload)
+            self.assertIsNone(root.find(f"{{{HL7}}}author"))
+            org = root.find(
+                f"{{{HL7}}}custodian/{{{HL7}}}assignedCustodian/"
+                f"{{{HL7}}}representedCustodianOrganization"
+            )
+            self.assertEqual(org.find(f"{{{HL7}}}id").get("root"), "1.2.3.4")
+            self.assertEqual(org.find(f"{{{HL7}}}name").text, "Example ED")
+
     def test_active_section_title_and_narrative_follow_compiled_roles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "template.xml"
@@ -747,8 +799,59 @@ class CdaDatatypeTests(unittest.TestCase):
                 target for target in compiled["targets"].values()  # type: ignore[union-attr]
                 if str(target.get("path") or "").endswith("/hl7:observation/hl7:value")
             ]
-            self.assertEqual(len(observation_value), 1)
-            self.assertFalse(observation_value[0].get("writable"))
+            self.assertEqual(len(observation_value), 8)
+            self.assertEqual(
+                sum(not target.get("writable") for target in observation_value), 1,
+            )
+            self.assertEqual(
+                {
+                    target.get("value_representation", {}).get("xsi_type")
+                    for target in observation_value if target.get("writable")
+                },
+                {"BL", "CD", "II", "INT", "PQ", "ST", "TS"},
+            )
+
+    def test_cda_particle_overlay_ignores_artdecor_predicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "POCD_MT000040.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="substanceAdministration" type="POCD_MT000040.SubstanceAdministration"/>
+  <xs:complexType name="POCD_MT000040.SubstanceAdministration"><xs:sequence>
+    <xs:element name="entryRelationship" type="POCD_MT000040.EntryRelationship" minOccurs="0" maxOccurs="unbounded"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.EntryRelationship"><xs:sequence>
+    <xs:element name="sequenceNumber" type="INT" minOccurs="0"/>
+  </xs:sequence></xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            template = root / "template.xml"
+            template.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:substanceAdministration">
+    <choice maximumMultiplicity="1">
+      <element name="hl7:entryRelationship[exists(hl7:substanceAdministration)]">
+        <element name="hl7:sequenceNumber"/>
+      </element>
+      <element name="hl7:entryRelationship[exists(hl7:observation)]"/>
+    </choice>
+  </element>
+</template>''', encoding="utf-8")
+            compiled = compile_cda(
+                [template],
+                {"meta": {"template_id": "doc", "template_effective_date": "2026"}},
+                core_definition_paths=[schema, write_datatype_schema(root)],
+            )
+            _, sequence = target_at(
+                compiled,
+                "entryRelationship[exists(hl7:substanceAdministration)]/hl7:sequenceNumber",
+            )
+            self.assertEqual(sequence["datatype"], "INT")
+            self.assertEqual(sequence["value_representation"]["kind"], "quantity")
+            self.assertEqual(len(sequence["locations"]), 1)
+            self.assertTrue(any(
+                item.get("source") == "template + cda-rim"
+                and item.get("datatype_part") == "hl7:sequenceNumber"
+                for item in sequence["provenance"]
+            ))
 
     def test_contained_template_satisfies_structural_child_without_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -854,10 +957,57 @@ class CdaDatatypeTests(unittest.TestCase):
         self.assertEqual(classify_datatype("NOT_A_DATATYPE"), "unsupported")
         self.assertEqual(expand_datatype("PN").base, "EN")
         self.assertEqual(expand_datatype("PN").parts, ())
+        self.assertEqual(base_datatype("EIVL.event"), "CD")
+        self.assertEqual(expand_datatype("SXPR_TS").kind.value, "complex")
         self.assertEqual(
             datatype_definition("TS.DATE.MIN").profile,
             "DATE.MIN",
         )
+
+    def test_url_uses_the_cda_value_attribute(self) -> None:
+        representation = expand_datatype("URL").value_representation
+        self.assertIsNotNone(representation)
+        self.assertEqual(representation.kind.value, "attribute")
+        self.assertEqual(representation.attribute, "value")
+
+    def test_any_exposes_typed_writable_choices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:observation"><element name="hl7:value" datatype="ANY"
+      minimumMultiplicity="0" maximumMultiplicity="1"/></element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {}, "fields": {
+                    "result": {"type": "text", "repeat_chain": []},
+                },
+            }
+            compiled = compile_cda([source], model)
+            choices = [
+                (name, target) for name, target in compiled["targets"].items()
+                if target.get("declared_datatype") == "ANY"
+                and target.get("datatype") == "ST"
+            ]
+            self.assertEqual(len(choices), 1)
+            name, target = choices[0]
+            self.assertTrue(target["writable"])
+            self.assertEqual(target["value_representation"]["xsi_type"], "ST")
+            self.assertEqual(
+                validate.verify_compiled_against_artdecor(compiled, [source]), []
+            )
+
+            payload, problems = cda.emit(
+                {"key": "P1", "values": {"result": "free text"}, "instances": {}},
+                model, compiled, {"fields": {"result": name}}, {},
+            )
+            self.assertEqual(problems, [])
+            value = ET.fromstring(payload).find(f".//{{{HL7}}}value")
+            self.assertEqual(value.text, "free text")
+            self.assertEqual(
+                value.get("{http://www.w3.org/2001/XMLSchema-instance}type"),
+                "ST",
+            )
 
     def test_xsd_mixed_content_makes_complex_root_text_writable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -14,6 +14,7 @@ from .assertions import evaluate as evaluate_assertion
 from .bindings import (
     for_each_target_positions,
     covered_shared_claims,
+    presence_target_complete,
     structure_rules,
     validate_structures,
     validate_target_defaults,
@@ -159,14 +160,22 @@ def check_config(
                     f"cda-mapping: {path} references unknown CDA target {cda_target_name}"
                 )
                 continue
-            if rule.get("mode") not in {None, "fallback"}:
+            mode = rule.get("mode")
+            if mode not in {None, "fallback", "presence"}:
                 errors.append(
                     f"cda-mapping: {path} -> {target_name}: unknown assignment mode "
                     f"{rule.get('mode')!r}"
                 )
-            if rule.get("mode") != "fallback":
+            if mode != "fallback":
                 claims[cda_target_name].append(path)
-            if target.get("prohibited") or not target.get("writable"):
+            valid_presence_target = bool(
+                mode == "presence" and target.get("renderable")
+                and target.get("has_children") and not target.get("prohibited")
+                and presence_target_complete(cda, target)
+            )
+            if target.get("prohibited") or (
+                not target.get("writable") and not valid_presence_target
+            ):
                 errors.append(
                     f"cda-mapping: {path} references prohibited/non-renderable "
                     f"target {cda_target_name}"
@@ -177,6 +186,12 @@ def check_config(
             transform = rule.get("transform")
             for reason in validate_transform(transform):
                 errors.append(f"cda-mapping: {path} -> {target_name}: {reason}")
+            if mode == "presence":
+                if str(field.get("type") or "") != "boolean":
+                    errors.append(
+                        f"cda-mapping: {path} -> {target_name}: presence mode requires a boolean source"
+                    )
+                continue
             compatibility_field = field
             structure_name = rule.get("structure")
             structure = structures_by_id.get(str(structure_name or ""), {})
@@ -369,7 +384,18 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
         if source is None:
             continue
         explicit_type = source.get("datatype")
-        if explicit_type and str(target.get("datatype") or "") != explicit_type:
+        target_type = str(target.get("datatype") or "")
+        typed_alternative = bool(
+            target.get("polymorphic")
+            and str(target.get("declared_datatype") or "") == explicit_type
+            and any(
+                item.get("source") == "hl7-datatype-choice"
+                and str(item.get("datatype") or "") == explicit_type
+                and str(item.get("datatype_part") or "") == target_type
+                for item in target.get("provenance", [])
+            )
+        )
+        if explicit_type and target_type != explicit_type and not typed_alternative:
             errors.append(f"source verification: {name} datatype {target.get('datatype')!r} != explicit {explicit_type!r}")
         if local(source.tag) == "element":
             if source.get("conformance") == "NP" and not target.get("prohibited"):

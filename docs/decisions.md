@@ -31,6 +31,7 @@ is not necessarily an accepted clinical policy.
 | DEC-014 | Pinned CDA/RIM structural model expansion | accepted | verified |
 | DEC-015 | Project ART-DECOR associations through common CDA/RIM slots | accepted | verified |
 | DEC-016 | Empty owned coded domains and target-governed fallback | accepted | verified |
+| DEC-017 | Specification-derived choice, occurrence and fixed-statement rules | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -427,6 +428,50 @@ Evidence: `src/decor2hl7/compile/transaction.py`,
 `src/decor2hl7/compile/mapping.py`, `src/decor2hl7/compile/structural.py`,
 `src/decor2hl7/transforms.py`, `tests/test_core.py`,
 `docs/analyses/2026-09-01-open-coded-allergy.md`.
+
+## DEC-017 — Specification-derived choice, occurrence and fixed-statement rules
+
+**Decision:** accepted
+**Implementation:** verified
+
+ART-DECOR `<choice>` is transparent XML structure. Each branch is compiled, and
+predicate variants of one element overlay the same CDA/RIM or datatype particle
+without losing their distinct constraint identities. An abstract `ANY` value
+exposes concrete typed scalar targets whose compiled representations carry the
+required `xsi:type`; the mapper and renderer do not dispatch on clinical class
+or template name. Choice selection requires one unique datatype-compatible
+atomic branch or one unique compatible value descendant of a complex branch.
+
+A generated `for_each` establishes an occurrence boundary. A source field owned
+directly by that repeated group may map to the unique nearest compatible
+writable descendant at the boundary; deeper statement values do not compete.
+This permits an occurrence-level timestamp such as the vital-sign organizer
+time to be derived from structure rather than from a path-name exception.
+
+Boolean presence and CDA negation are separate semantics. A boolean mapped to a
+coded act's `@negationInd` uses the declarative `not` transform. When exact
+source terminology instead locates one optional statement whose complete
+clinical payload is fixed by ART-DECOR, `mode: "presence"` activates that
+structural statement for true and omits it for false. The container remains
+non-writable as a scalar target.
+
+Exact contextual ART-DECOR leaf roles, descriptions, section narrative roles
+and URL/datatype descendants may be selected only when the mapped container,
+datatype compatibility, physical location and occurrence checks leave one
+candidate. These mechanisms contain no wildcard, vital-sign, direct-contact,
+medication, allergy, CDA class or template-OID table.
+
+A compiler-assigned system role is bound to its exact physical node. Reuse of
+the same included logical target elsewhere does not make that target writable
+and does not copy the system value into the other occurrences. This permits the
+mandatory custodian organization to be completed from site configuration while
+preserving ambiguity safeguards for the reusable Organization Elements target.
+
+Evidence: `src/decor2hl7/cda/compile.py`,
+`src/decor2hl7/compile/mapping.py`, `src/decor2hl7/bindings.py`,
+`src/decor2hl7/cda/render.py`, `tests/test_cda_datatypes.py`,
+`tests/test_core.py`,
+`docs/analyses/2026-09-01-spec-derived-target-recovery.md`.
 
 ## Maintenance rule
 

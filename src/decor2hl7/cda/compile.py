@@ -121,6 +121,16 @@ def _xml_key(value: str) -> str:
     return head.split(":", 1)[-1] + (sep + tail if sep else "")
 
 
+def _particle_key(value: str) -> str:
+    """Return the CDA/XSD particle name behind an ART-DECOR selector.
+
+    ART-DECOR may repeat one XML particle with predicates that select different
+    semantic branches.  Those predicates remain part of the compiled template
+    identity, but they do not change the particle's CDA/RIM datatype.
+    """
+    return _xml_key(value).partition("[")[0]
+
+
 def _int(value: str | None) -> int | None:
     return int(value) if value and value.isdigit() else None
 
@@ -674,6 +684,14 @@ def _parse_element(element: ET.Element, template: ET.Element, path: tuple[str, .
             attributes.append(_parse_attribute(child, template, current_path + "/@" + (child.get("name") or "attribute")))
         elif kind == "element":
             children.append(_parse_element(child, template, current))
+        elif kind == "choice":
+            # ART-DECOR choices constrain alternative instances of the same
+            # CDA particle.  They are transparent in XML, so retain each
+            # branch as a normal child while preserving its predicate in the
+            # design name.
+            for branch in list(child):
+                if local(branch.tag) == "element":
+                    children.append(_parse_element(branch, template, current))
         elif kind == "include" and child.get("ref"):
             children.append(_parse_include(child))
         elif kind == "let" and child.get("name") and child.get("value"):
@@ -746,6 +764,10 @@ def _direct_template(template: ET.Element) -> list[dict[str, Any]]:
         kind = local(child.tag)
         if kind == "element":
             result.append(_parse_element(child, template, ()))
+        elif kind == "choice":
+            for branch in list(child):
+                if local(branch.tag) == "element":
+                    result.append(_parse_element(branch, template, ()))
         elif kind == "include" and child.get("ref"):
             result.append(_parse_include(child))
     return result
@@ -1151,10 +1173,11 @@ def _expand_datatype_structure(
                 represented_attributes.add(
                     representation_definition.value_representation.attribute
                 )
-            existing_attributes = {
-                _xml_key("@" + str(item.get("name") or "")): item
-                for item in node.get("attributes", [])
-            }
+            existing_attributes: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for item in node.get("attributes", []):
+                existing_attributes[
+                    _particle_key("@" + str(item.get("name") or ""))
+                ].append(item)
             attributes = (
                 schema_definition.attributes if schema_definition is not None
                 else representation_definition.attributes  # type: ignore[union-attr]
@@ -1162,13 +1185,14 @@ def _expand_datatype_structure(
             for attribute in attributes:
                 if attribute.name in represented_attributes:
                     continue
-                key = _xml_key("@" + attribute.name)
+                key = _particle_key("@" + attribute.name)
                 if key in existing_attributes:
-                    existing_attributes[key].setdefault("datatype", attribute.datatype)
-                    existing_attributes[key].setdefault("provenance", []).append({
-                        **_datatype_source(node, current_path + "/@" + attribute.name, "@" + attribute.name),
-                        "source": "template + datatype",
-                    })
+                    for existing in existing_attributes[key]:
+                        existing.setdefault("datatype", attribute.datatype)
+                        existing.setdefault("provenance", []).append({
+                            **_datatype_source(node, current_path + "/@" + attribute.name, "@" + attribute.name),
+                            "source": "template + datatype",
+                        })
                 else:
                     derived_attribute = _datatype_attribute(
                         node, attribute.name, attribute.datatype, attribute.optional,
@@ -1177,10 +1201,12 @@ def _expand_datatype_structure(
                     if attribute.name in node.get("fixed", {}):
                         derived_attribute["value"] = node["fixed"][attribute.name]
                     node.setdefault("attributes", []).append(derived_attribute)
-            existing_children = {
-                _xml_key(str(item.get("name") or "")): item
-                for item in node.get("children", []) if item.get("kind") == "element"
-            }
+            existing_children: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for item in node.get("children", []):
+                if item.get("kind") == "element":
+                    existing_children[
+                        _particle_key(str(item.get("name") or ""))
+                    ].append(item)
             if (
                 normalized not in stack
                 # A derived node that already has a scalar XML representation
@@ -1197,23 +1223,23 @@ def _expand_datatype_structure(
                     else representation_definition.parts  # type: ignore[union-attr]
                 )
                 for part in parts:
-                    key = _xml_key(part.name)
+                    key = _particle_key(part.name)
                     part_path = current_path + "/" + part.name
                     if key in existing_children:
-                        child = existing_children[key]
-                        if not child.get("datatype"):
-                            child["datatype"] = part.datatype
-                        child.setdefault("provenance", []).append({
-                            **_datatype_source(node, part_path, part.name),
-                            "source": "template + datatype",
-                        })
+                        for child in existing_children[key]:
+                            if not child.get("datatype"):
+                                child["datatype"] = part.datatype
+                            child.setdefault("provenance", []).append({
+                                **_datatype_source(node, part_path, part.name),
+                                "source": "template + datatype",
+                            })
                     else:
                         child = _datatype_child(
                             node, part.name, part.datatype,
                             part.minimum, part.maximum, part_path,
                         )
                         node.setdefault("children", []).append(child)
-                        existing_children[key] = child
+                        existing_children[key].append(child)
         _expand_datatype_structure(
             list(node.get("children", [])),
             definitions,
@@ -1277,11 +1303,11 @@ def _expand_cda_model_structure(
                 list(node.get("children", []))
             ):
                 existing_children[
-                    _xml_key(str(item.get("name") or ""))
+                    _particle_key(str(item.get("name") or ""))
                 ].append(item)
             for part in definition.parts:
                 part_path = current_path + "/" + part.name
-                key = _xml_key(part.name)
+                key = _particle_key(part.name)
                 source = _model_source(node, part_path, part.name, "cda-rim")
                 if key in existing_children:
                     for child in existing_children[key]:
@@ -1303,11 +1329,11 @@ def _expand_cda_model_structure(
                     node.setdefault("children", []).append(child)
                     existing_children[key].append(child)
             existing_attributes = {
-                _xml_key("@" + str(item.get("name") or "")): item
+                _particle_key("@" + str(item.get("name") or "")): item
                 for item in node.get("attributes", [])
             }
             for attribute in definition.attributes:
-                key = _xml_key("@" + attribute.name)
+                key = _particle_key("@" + attribute.name)
                 path = current_path + "/@" + attribute.name
                 source = _model_source(node, path, "@" + attribute.name, "cda-rim")
                 if key in existing_attributes:
@@ -1646,6 +1672,83 @@ def _annotate_targets(
     return dict(source_index)
 
 
+def _materialize_polymorphic_targets(
+    document: list[dict[str, Any]],
+    targets: dict[str, dict[str, Any]],
+    source_index: dict[str, list[str]],
+) -> None:
+    """Expose typed scalar choices for an abstract ``ANY`` element.
+
+    CDA requires a concrete ``xsi:type`` when an abstract value is written.
+    The choices are derived from the same datatype representation policy used
+    for ordinary targets; the renderer consumes the compiled representation
+    and remains unaware of particular templates or clinical classes.
+    """
+    scalar_types = ("ST", "CD", "PQ", "TS", "BL", "II", "INT")
+
+    def visit(nodes: list[dict[str, Any]]) -> None:
+        for node in nodes:
+            own_name = str(node.get("target") or "")
+            if (
+                node.get("kind") == "element"
+                and str(node.get("datatype") or "").upper() == "ANY"
+                and own_name in targets
+            ):
+                original = targets[own_name]
+                for datatype in scalar_types:
+                    representation = value_representation(datatype)
+                    if representation is None:
+                        continue
+                    name = f"{own_name}_as_{_ascii_name(datatype)}"
+                    if name in targets:
+                        raise ValueError(f"duplicate polymorphic CDA target {name!r}")
+                    target = deepcopy(original)
+                    serialized = representation.to_dict()
+                    serialized["xsi_type"] = datatype
+                    target.update(_typed_value_target(
+                        name,
+                        str(original.get("path") or ""),
+                        representation,
+                        node.get("provenance", []),
+                    ))
+                    target.update({
+                        "datatype": datatype,
+                        "declared_datatype": "ANY",
+                        "polymorphic": True,
+                        "value_representation": serialized,
+                        "logical_types": list(representation.logical_types),
+                        "writable": bool(
+                            not original.get("prohibited")
+                            and node.get("fixed_text") is None
+                        ),
+                        "renderable": bool(not original.get("prohibited")),
+                    })
+                    target["provenance"] = deepcopy(node.get("provenance", [])) + [{
+                        "source": "hl7-datatype-choice",
+                        "template_id": str(original.get("template_id") or ""),
+                        "template_effective_date": str(
+                            original.get("template_effective_date") or ""
+                        ),
+                        "element_id": original.get("element_id"),
+                        "path": str(original.get("path") or ""),
+                        "datatype": "ANY",
+                        "datatype_part": datatype,
+                    }]
+                    targets[name] = target
+                    node.setdefault("targets", []).append(name)
+                    for source in node.get("sources", []):
+                        for key in {
+                            _source_key(source),
+                            _revisionless_source_key(source),
+                            _tolerant_source_key(source),
+                        }:
+                            if key and name not in source_index.setdefault(key, []):
+                                source_index[key].append(name)
+            visit(list(node.get("children", [])))
+
+    visit(document)
+
+
 def _compiled_content_roles(
     nodes: list[dict[str, Any]], element_path: tuple[str, ...] = (),
 ) -> None:
@@ -1769,6 +1872,7 @@ def compile_cda(
             node["mandatory"] = True
             break
     source_index = _annotate_targets(document, targets)
+    _materialize_polymorphic_targets(document, targets, source_index)
     assertions: list[dict[str, Any]] = []
     def collect_assertions(nodes: list[Mapping[str, Any]], prefix: tuple[int, ...] = ()) -> None:
         for index, node in enumerate(nodes):

@@ -25,6 +25,116 @@ NULL_FLAVORS = frozenset({
 })
 
 
+def presence_target_complete(
+    cda: Mapping[str, Any], target: Mapping[str, Any],
+) -> bool:
+    """Return whether presence can activate a fully supplied statement.
+
+    Every required descendant must be supplied by the compiled template or a
+    compiler-owned runtime role. This keeps a fixed identifying code from
+    hiding an unrelated mandatory, empty clinical value.
+    """
+    locations = list(target.get("locations", []))
+    if len(locations) != 1:
+        return False
+    nodes = list(cda.get("document", []))
+    root: Mapping[str, Any] | None = None
+    try:
+        for raw_index in str(locations[0]).split("."):
+            root = nodes[int(raw_index)]
+            nodes = list(root.get("children", []))
+    except (IndexError, TypeError, ValueError):
+        return False
+    if root is None:
+        return False
+
+    targets = cda.get("targets", {})
+
+    def complete(node: Mapping[str, Any]) -> bool:
+        if str(node.get("conformance") or "").upper() == "NP":
+            return True
+        codes = list(node.get("codes", []))
+        fixed = dict(node.get("fixed", {}))
+        representation = next((
+            targets.get(str(name), {}).get("value_representation")
+            for name in node.get("targets", [])
+            if targets.get(str(name), {}).get("value_representation")
+        ), {})
+        represented_attributes = {
+            str(name) for name in (
+                list(representation.get("attributes", []))
+                + [representation.get("attribute")]
+                + [representation.get("scalar_attribute")]
+            ) if name
+        } if isinstance(representation, Mapping) else set()
+        scalar_attributes = {
+            str(name) for name in (
+                [representation.get("attribute")]
+                + [representation.get("scalar_attribute")]
+            ) if name
+        } if isinstance(representation, Mapping) else set()
+        representation_kind = (
+            str(representation.get("kind") or "")
+            if isinstance(representation, Mapping) else ""
+        )
+        scalar_fixed = bool(
+            node.get("fixed_text") is not None
+            or len(codes) == 1
+            or node.get("compiled_default") is not None
+            or node.get("system_value")
+            or any(name in fixed for name in scalar_attributes)
+            or (
+                representation_kind == "identifier"
+                and any(name in fixed for name in represented_attributes)
+            )
+        )
+        for attribute in node.get("attributes", []):
+            if attribute.get("optional") is not False:
+                continue
+            name = str(attribute.get("name") or "")
+            supplied_by_code = bool(
+                len(codes) == 1
+                and (
+                    (name == "code" and codes[0].get("code") is not None)
+                    or (
+                        name == "codeSystem"
+                        and codes[0].get("code_system") is not None
+                    )
+                )
+            )
+            if (
+                attribute.get("value") is None
+                and name not in fixed
+                and not supplied_by_code
+                and not (scalar_fixed and name in represented_attributes)
+            ):
+                return False
+
+        required_children = [
+            child for child in node.get("children", [])
+            if str(child.get("conformance") or "").upper() != "NP"
+            and (
+                child.get("mandatory")
+                or int(child.get("min") or 0) >= 1
+            )
+        ]
+        if not all(complete(child) for child in required_children):
+            return False
+
+        required = bool(
+            node.get("mandatory") or int(node.get("min") or 0) >= 1
+        )
+        if not required:
+            return True
+        if representation:
+            return scalar_fixed
+        return bool(
+            fixed or node.get("fixed_text") is not None or required_children
+        )
+
+    return complete(root)
+
+
 def structure_rules(mapping: Mapping[str, Any]) -> list[dict[str, Any]]:
     raw = mapping.get("structures", {})
     if isinstance(raw, Mapping):
@@ -426,7 +536,17 @@ def build_assignments(
             logical_name = str(rule["target"])
             name = _physical_target_name(cda, rule)
             target = targets.get(name)
-            if not target or not target.get("writable") or target.get("prohibited"):
+            presence = rule.get("mode") == "presence"
+            valid_presence_target = bool(
+                presence and target and target.get("renderable")
+                and target.get("has_children") and not target.get("prohibited")
+                and presence_target_complete(cda, target)
+            )
+            if (
+                not target
+                or (not target.get("writable") and not valid_presence_target)
+                or target.get("prohibited")
+            ):
                 problems.append(
                     f"unknown, prohibited or non-renderable CDA target {name!r} "
                     f"for {path} via logical datapoint {logical_name!r}"
@@ -437,6 +557,10 @@ def build_assignments(
                     f"CDA target {name!r} for {path} has {len(target.get('locations', []))} "
                     "physical locations; resolve the ambiguity before rendering"
                 )
+            if presence:
+                if bool(value):
+                    _assign(assignments, name, {"__presence__": True})
+                continue
             transformed = apply_transform(value, rule.get("transform"))
             prepared = _prepare_identifier(name, target, transformed, site)
             prepared = align_for_each_value(

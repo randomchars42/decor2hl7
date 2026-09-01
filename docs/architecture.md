@@ -214,6 +214,19 @@ sees only targets whose compiled
 `value_representation` marks them writable. The renderer executes that
 representation and does not contain a second datatype dispatch table.
 
+ART-DECOR choices are transparent structural constraints. Predicate variants
+retain distinct identities but overlay one underlying XSD particle. Abstract
+`ANY` values expose typed scalar alternatives with compiled `xsi:type`
+representations; mapping chooses a branch only when datatype and context leave
+one legal endpoint.
+
+Compiler-assigned runtime roles belong to concrete compiled nodes, not to
+clinical path logic in the renderer. When a reusable include gives one logical
+target several physical locations, that target remains non-writable. A role
+such as the configured custodian organization identifier/name is delivered to
+its exact compiled physical occurrence, so it neither activates nor populates
+the same include under author, recipient or participant branches.
+
 Generated target identifiers remain flattened and stable for configuration and
 runtime compatibility. They are identifiers, not an alternate XML hierarchy.
 The effective unflattened hierarchy remains available in each target's `path`
@@ -278,6 +291,9 @@ Evidence includes:
 - guarded template-name (`NAME`) bridge
 - exact terminology/value-set/datatype combinations (`TERM`, `VS`, `DT`)
 - exact unique element-description (`DESC`) bridge as weak fallback evidence
+- unique contextual ART-DECOR role/description and compiled content role
+- unique choice branch or datatype descendant inside a mapped container
+- nearest compatible value at an already-derived `for_each` occurrence boundary
 - contextual (`CTX`) placement
 
 Evidence strength and executability are separate. A formal link may remain in the
@@ -340,6 +356,10 @@ cardinality, terminology, and template evidence:
   `equal_or_error` unless a different policy is explicitly configured;
 - `mode: "fallback"` remains available for an explicitly configured
   source-dependent fallback and fills each occurrence independently;
+- `mode: "presence"` lets a boolean activate one optional statement only when
+  exact terminology identifies the template and ART-DECOR fixes its complete
+  clinical payload. False omits it. The structural target does not become a
+  scalar writable endpoint;
 - `defaults.required_unmapped` fills an otherwise empty required leaf in an
   active template branch with `nullFlavor="NI"` by default;
 - `target_defaults` records reviewed target-specific completion, such as
@@ -364,6 +384,10 @@ members, so the same binding engine can execute another transaction/template.
 Occurrence rules are derived provisionally before scalar candidate selection,
 allowing a candidate to become executable when the established `for_each`
 alignment accounts for its otherwise incompatible repeated ancestors.
+After sibling scalar mappings establish an additional `for_each`, one bounded
+second pass may select the unique nearest compatible value for a field directly
+owned by that repeated source group. This cannot project nested group fields or
+choose between equally near targets.
 
 Physical ART-DECOR source identity uses template id, effective date, element id
 and template-local path. Revisionless/path and element-id-only indexes remain

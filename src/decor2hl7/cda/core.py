@@ -227,7 +227,7 @@ def structural_definition(
     definitions: dict[str, ModelDefinition], xml_name: str,
 ) -> ModelDefinition | None:
     """Resolve an XML element through XSD element declarations only."""
-    local = xml_name.split(":", 1)[-1]
+    local = xml_name.partition("[")[0].split(":", 1)[-1]
     if isinstance(definitions, DefinitionIndex):
         candidates = set(definitions.element_types.get(local, set()))
         global_type = definitions.global_elements.get(local)
@@ -254,7 +254,7 @@ def element_definition(
     declared = _local_type(declared_type)
     if declared in definitions:
         return resolve_definition(definitions, declared)
-    local = xml_name.split(":", 1)[-1]
+    local = xml_name.partition("[")[0].split(":", 1)[-1]
     if parent is not None:
         matches = {
             part.datatype for part in parent.parts
