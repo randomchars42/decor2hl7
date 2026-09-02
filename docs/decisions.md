@@ -33,6 +33,7 @@ is not necessarily an accepted clinical policy.
 | DEC-016 | Empty owned coded domains and target-governed fallback | accepted | verified |
 | DEC-017 | Specification-derived choice, occurrence and fixed-statement rules | accepted | verified |
 | DEC-018 | Neutral-example boolean discriminator occurrences | accepted | verified |
+| DEC-019 | DECOR-core and complete CDA validation stack | open | none |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -515,6 +516,39 @@ Evidence: `src/decor2hl7/compile/structural.py`,
 `src/decor2hl7/compile/mapping.py`, `src/decor2hl7/bindings.py`,
 `tests/test_core.py`,
 `docs/analyses/2026-09-02-allergy-example-discriminators.md`.
+
+## DEC-019 — DECOR-core and complete CDA validation stack
+
+**Decision:** open — deferred
+**Implementation:** none
+
+The official DECOR-core XSD, DECOR Schematron, Schematron-generation transforms
+and datatype Core Schematrons would add authoritative ART-DECOR representation
+checks and independent output validation. The current CDA compiler already
+uses pinned official CDA R2 XSD material for structural expansion and retains
+the effective inline ART-DECOR assertions, but it does not yet execute the
+complete DECOR/template/datatype Schematron stack or independently validate
+output against the full CDA schema import graph.
+
+This work is deferred while additional dataset-to-CDA coverage is the priority.
+The analysis found no new semantic source-to-target bridge. Core packages may
+expose structural candidates or eliminate invalid ones, but legal structure is
+not mapping evidence. In particular, the DECOR-core `EIVL_TS` rule requires a
+non-null event-related interval to contain `event`; the previously selected
+medication offset is therefore not independently executable while the source
+event lacks a proven target TimingEvent correspondence.
+
+Before implementation, the project must select the DECOR-core version matching
+the producing ART-DECOR environment, pin its checksum and license, select an
+XPath 2.0-capable Schematron processor, keep source-project and compiled-project
+validation distinct, and choose the exact CDA/SDTC schema baseline required by
+the active template closure. Current CDA StructureDefinitions may be used as an
+informative cross-check, not as a replacement for the CDA specification.
+
+Evidence:
+`docs/analyses/2026-09-02-decor-core-validation-follow-up.md`,
+`src/decor2hl7/cda/core.py`, `src/decor2hl7/cda/compile.py`,
+`docs/known-issues.md`.
 
 ## Maintenance rule
 

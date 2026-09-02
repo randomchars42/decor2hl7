@@ -10,11 +10,19 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-02-decor-core-validation-follow-up.md`](2026-09-02-decor-core-validation-follow-up.md)
+  records the deferred DECOR-core/full-CDA validation integration, the
+  source-versus-compiled association distinction, exact package evidence,
+  additional datatype/template rules, the EIVL event dependency that requires
+  revalidating the medication offset, and the complete restart checklist. It
+  finds no current mapping-coverage gain.
 - [`2026-09-02-residual-mapping-boundaries.md`](2026-09-02-residual-mapping-boundaries.md)
-  records the post-PR #20 93/120 fresh-snapshot audit, all six executable
-  medication mappings, the three-way medication timing collision, the
-  secondary ICD occurrence-versus-translation decision, seven smaller
-  residuals and the formal physical-plus-semantic evidence boundary.
+  records the post-PR #20 93/120 fresh-snapshot audit, the six medication
+  mappings then considered executable, the three-way medication timing
+  collision, the secondary ICD occurrence-versus-translation decision, seven
+  smaller residuals and the formal physical-plus-semantic evidence boundary.
+  The newer DECOR-core analysis above requires revalidating or downgrading the
+  event offset and deliberately does not rewrite this dated snapshot.
 - [`2026-09-02-allergy-example-discriminators.md`](2026-09-02-allergy-example-discriminators.md)
   records the exact active-template examples that close the antibiotic/contrast
   flag boundary, the generic inverse-negation/discriminator rule, exact-agent
