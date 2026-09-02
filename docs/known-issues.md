@@ -76,7 +76,7 @@ fields to those alternatives. In particular, start, stop and dosage-time fields
 would otherwise claim one atomic timing target, while dose and rate are two
 equally compatible quantities. They remain unmapped instead of being resolved
 by German/English path vocabulary or positional guessing. See
-[`analyses/2026-09-01-medication-common-base-slot.md`](analyses/2026-09-01-medication-common-base-slot.md).
+[`analyses/2026-09-02-residual-mapping-boundaries.md`](analyses/2026-09-02-residual-mapping-boundaries.md).
 
 ## Transform vocabulary
 
@@ -140,6 +140,24 @@ whether each secondary code becomes another Problem Observation, how it relates
 to the leading diagnosis, and whether text/certainty are repeated with it. Until
 that is resolved, no semicolon parser or inferred clinical relationship is
 implemented.
+
+The post-PR #20 audit also rejects `CD.translation`: the ART-DECOR CDA datatype
+documentation defines a translation as an alternative code for the same
+concept, while the source defines a secondary member of a multiply coded ICD-10
+diagnosis. See
+[`analyses/2026-09-02-residual-mapping-boundaries.md`](analyses/2026-09-02-residual-mapping-boundaries.md).
+
+## Remaining active-profile mapping boundaries
+
+Seven non-medication datapoints remain without a suitable target after the
+fresh-snapshot audit. The insurance-relationship identifier has a physically
+suitable historical insured-number slot but no formal edge from the selected
+concept. General event onset and the MRI/X-ray region choice lists have no
+unique active statement mapping. Exact draft templates for export interval,
+EDIS name and EDIS version exist in project evidence as `.10.85`, `.10.86` and
+`.10.87`, but are not reachable from the selected document. They are retained
+as evidence rather than forced into the active CDA closure. See
+[`analyses/2026-09-02-residual-mapping-boundaries.md`](analyses/2026-09-02-residual-mapping-boundaries.md).
 
 ## ART-DECOR assertion expression coverage
 
