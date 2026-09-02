@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-02-medication-compound-dependency.md`](2026-09-02-medication-compound-dependency.md)
+  records the completed medication audit after the DECOR-core follow-up, the
+  generic occurrence-aware compound-datatype safety mechanism, the offset
+  downgrade, current 92/120 coverage, five executable medication mappings and
+  the exact evidence needed before the remaining medication fields can reopen.
 - [`2026-09-02-decor-core-validation-follow-up.md`](2026-09-02-decor-core-validation-follow-up.md)
   records the deferred DECOR-core/full-CDA validation integration, the
   source-versus-compiled association distinction, exact package evidence,

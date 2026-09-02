@@ -15,6 +15,7 @@ from typing import Any, Mapping
 from ..assertions import validate_contexts
 from ..bindings import (
     build_assignments,
+    non_null_requirement_problems,
     required_unmapped_null_flavor,
     target_default_values,
 )
@@ -830,6 +831,12 @@ def emit(
     _complete_content_roles(
         list(document), targets, assignments, explicit_assignment_names
     )
+    compound_problems = non_null_requirement_problems(cda, assignments)
+    if compound_problems:
+        raise ValueError(
+            "generated CDA violates compound datatype requirements:\n"
+            + "\n".join(compound_problems)
+        )
     active_locations = _active_target_locations(cda, assignments)
     for location in physical_values:
         active_locations.update(

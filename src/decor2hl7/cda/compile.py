@@ -1158,6 +1158,13 @@ def _expand_datatype_structure(
         )
         if representation_name:
             node["representation_datatype"] = representation_name
+        if (
+            representation_definition is not None
+            and representation_definition.non_null_required_parts
+        ):
+            node["non_null_required_parts"] = list(
+                representation_definition.non_null_required_parts
+            )
         current_path = str(node.get("origin", {}).get("path") or node.get("name") or "")
         if representation_definition is not None or schema_definition is not None:
             represented_attributes = set(
@@ -1672,6 +1679,82 @@ def _annotate_targets(
     return dict(source_index)
 
 
+def _annotate_non_null_requirements(
+    document: list[dict[str, Any]], targets: dict[str, dict[str, Any]],
+) -> None:
+    """Attach normative compound-datatype companion requirements to targets.
+
+    The CDA XSD intentionally permits some combinations that the V3 datatype
+    rules reject.  Requirements are compiled from datatype policy onto the
+    concrete target tree so mapping and runtime code can stay independent of
+    datatype names and XML paths.
+    """
+
+    Requirement = tuple[str, str, bool]
+
+    def target_name(node: Mapping[str, Any]) -> str:
+        return str(node.get("target") or "")
+
+    def visit_node(
+        node: dict[str, Any], inherited: tuple[Requirement, ...],
+    ) -> None:
+        own_name = target_name(node)
+        active = [
+            (owner, required, satisfied or own_name == required)
+            for owner, required, satisfied in inherited
+        ]
+        for part in node.get("non_null_required_parts", []):
+            matches = [
+                child for child in node.get("children", [])
+                if child.get("kind") == "element"
+                and _particle_key(str(child.get("name") or ""))
+                == _particle_key(str(part))
+                and target_name(child)
+            ]
+            if len(matches) == 1 and own_name:
+                active.append((own_name, target_name(matches[0]), False))
+
+        requirements = sorted({
+            required for _, required, satisfied in active if not satisfied
+        })
+        if own_name in targets and requirements:
+            targets[own_name]["non_null_requires"] = requirements
+            targets[own_name]["non_null_requirement_owners"] = {
+                required: sorted({
+                    owner for owner, candidate, satisfied in active
+                    if candidate == required and not satisfied
+                })
+                for required in requirements
+            }
+
+        for attr in node.get("attributes", []):
+            attr_name = target_name(attr)
+            if attr_name not in targets:
+                continue
+            applicable = {
+                required for owner, required, satisfied in active
+                if not satisfied and not (
+                    str(attr.get("name") or "") == "nullFlavor"
+                    and owner == own_name
+                )
+            }
+            if applicable:
+                targets[attr_name]["non_null_requires"] = sorted(applicable)
+                targets[attr_name]["non_null_requirement_owners"] = {
+                    required: sorted({
+                        owner for owner, candidate, satisfied in active
+                        if candidate == required and not satisfied
+                    })
+                    for required in sorted(applicable)
+                }
+
+        for child in node.get("children", []):
+            visit_node(child, tuple(active))
+
+    for node in document:
+        visit_node(node, ())
+
+
 def _materialize_polymorphic_targets(
     document: list[dict[str, Any]],
     targets: dict[str, dict[str, Any]],
@@ -1872,6 +1955,7 @@ def compile_cda(
             node["mandatory"] = True
             break
     source_index = _annotate_targets(document, targets)
+    _annotate_non_null_requirements(document, targets)
     _materialize_polymorphic_targets(document, targets, source_index)
     assertions: list[dict[str, Any]] = []
     def collect_assertions(nodes: list[Mapping[str, Any]], prefix: tuple[int, ...] = ()) -> None:

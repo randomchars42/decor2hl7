@@ -34,6 +34,7 @@ is not necessarily an accepted clinical policy.
 | DEC-017 | Specification-derived choice, occurrence and fixed-statement rules | accepted | verified |
 | DEC-018 | Neutral-example boolean discriminator occurrences | accepted | verified |
 | DEC-019 | DECOR-core and complete CDA validation stack | open | none |
+| DEC-020 | Compound-datatype companion requirements | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -549,6 +550,51 @@ Evidence:
 `docs/analyses/2026-09-02-decor-core-validation-follow-up.md`,
 `src/decor2hl7/cda/core.py`, `src/decor2hl7/cda/compile.py`,
 `docs/known-issues.md`.
+
+The concrete `EIVL_TS` event dependency identified here is implemented under
+DEC-020. That bounded correction does not implement or replace the deferred
+complete DECOR/template/datatype validation stack.
+
+## DEC-020 — Compound-datatype companion requirements
+
+**Decision:** accepted
+**Implementation:** verified
+
+A writable datatype component is not independently executable when a normative
+compound-datatype rule requires another component for every non-null
+occurrence. These dependencies are declared in the generic HL7 datatype policy,
+compiled to concrete CDA targets as `non_null_requires`, and enforced at three
+boundaries:
+
+1. proposal generation retains the supported target as review evidence but
+   leaves its `cda-mapping.json` field `null` until a mapping supplies the
+   required element or one of its descendants;
+2. configuration validation rejects reviewed mappings that omit the required
+   companion; and
+3. rendering checks the populated values occurrence by occurrence after
+   mapping and runtime completion, so a companion in one repeated occurrence
+   cannot satisfy another.
+
+A null-flavored compound value is exempt because the requirement applies only
+to non-null values. A required target-template child is also sufficient because
+it is rendered for every active parent occurrence. The mechanism is independent
+of clinical field names, target-template identities and XML path constants.
+
+The first applied rule is the normative `EIVL_TS` constraint
+`@nullFlavor or hl7:event`. It downgrades the medication event offset from an
+executable selection to a review-required candidate because source concept 528
+has no proven correspondence to the target TimingEvent domain. No event code or
+date is invented. The five unaffected medication mappings remain executable.
+
+This decision encodes one verified datatype invariant; it does not claim full
+DECOR-core, CDA XSD or Core Schematron validation, which remains open under
+DEC-019.
+
+Evidence: `src/decor2hl7/cda/datatypes.py`,
+`src/decor2hl7/cda/compile.py`, `src/decor2hl7/compile/mapping.py`,
+`src/decor2hl7/validate.py`, `src/decor2hl7/bindings.py`,
+`src/decor2hl7/cda/render.py`, `tests/test_cda_datatypes.py`,
+`docs/analyses/2026-09-02-medication-compound-dependency.md`.
 
 ## Maintenance rule
 

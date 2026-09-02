@@ -452,7 +452,10 @@ def _candidate_rows(detail: Mapping[str, Any]) -> list[dict[str, Any]]:
     primary = detail.get("primary")
     if isinstance(primary, Mapping) and primary.get("target"):
         result = "selectable after review"
-        if detail.get("runtime_blocked"):
+        blocked = str(detail.get("runtime_blocked") or "")
+        if blocked.startswith("REQUIRED_COMPANION("):
+            result = "required companion missing"
+        elif blocked:
             result = "rule required"
         elif primary.get("mapping") is not None:
             result = "transform required"
@@ -504,7 +507,17 @@ def _review_required(
         detail = audited.get(path, {}) if isinstance(audited, Mapping) else {}
         detail = detail if isinstance(detail, Mapping) else {}
         candidates = _candidate_rows(detail)
-        if detail.get("runtime_blocked"):
+        blocked = str(detail.get("runtime_blocked") or "")
+        if blocked.startswith("REQUIRED_COMPANION("):
+            companions = ", ".join(
+                f"`{item}`" for item in detail.get("required_companions", [])
+            )
+            action = (
+                "Map the required compound-datatype companion"
+                + (f" {companions}" if companions else "")
+                + " for the same occurrence, or retain `null`."
+            )
+        elif blocked:
             action = "Define the required repetition or merge rule."
         elif candidates:
             selectable = any(
@@ -534,7 +547,17 @@ def _review_required(
 def _review_reason(
     detail: Mapping[str, Any], candidates: list[Mapping[str, Any]],
 ) -> str:
-    if detail.get("runtime_blocked"):
+    blocked = str(detail.get("runtime_blocked") or "")
+    if blocked.startswith("REQUIRED_COMPANION("):
+        companions = ", ".join(
+            f"`{item}`" for item in detail.get("required_companions", [])
+        )
+        return (
+            "The candidate is a child of a non-null compound CDA datatype, "
+            "which also requires " + (companions or "a companion target")
+            + ". No source mapping currently supplies that companion."
+        )
+    if blocked:
         return (
             "The best-supported CDA target is shared with another dataset field. "
             "A repetition, fan-out, or merge rule is required before it is executable."
