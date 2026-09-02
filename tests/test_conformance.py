@@ -1,0 +1,367 @@
+from __future__ import annotations
+
+import io
+import json
+import shutil
+import tarfile
+import tempfile
+import unittest
+import xml.etree.ElementTree as ET
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+
+from decor2hl7.cda.core import CORE_FILES, CORE_REVISION, core_paths
+from decor2hl7.conformance import (
+    _complete_schematron_namespaces,
+    _safe_member,
+    _extract_cda,
+    _extract_decor,
+    assemble_decor_closure,
+    sha256_file,
+    validate_cda_documents,
+    validate_xsd,
+    validation_package_problems,
+    write_conformance_report,
+)
+from decor2hl7.retrieval.fetch import _fetch_direct
+
+
+class ConformanceTests(unittest.TestCase):
+    def test_generated_schematron_declares_qname_string_namespaces(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            assembled = root / "assembled.xml"
+            assembled.write_text(
+                '<decor xmlns:pharm="urn:example:pharm" '
+                'pharm:dummy="urn:example:pharm"/>',
+                encoding="utf-8",
+            )
+            schematron = root / "generated.sch"
+            schematron.write_text(
+                '<schema xmlns="http://purl.oclc.org/dsdl/schematron">'
+                '<title>Generated</title><pattern>'
+                '<include href="include/medicine.sch"/>'
+                '</pattern></schema>',
+                encoding="utf-8",
+            )
+            include = root / "include"
+            include.mkdir()
+            (include / "medicine.sch").write_text(
+                '<rule xmlns="http://purl.oclc.org/dsdl/schematron" '
+                'context="pharm:medicine">'
+                '<assert test="pharm:code">code required</assert></rule>',
+                encoding="utf-8",
+            )
+
+            _complete_schematron_namespaces(assembled, schematron)
+
+            namespace = ET.parse(schematron).getroot().find(
+                "{http://purl.oclc.org/dsdl/schematron}ns"
+            )
+            self.assertIsNotNone(namespace)
+            self.assertEqual(namespace.get("prefix"), "pharm")
+            self.assertEqual(namespace.get("uri"), "urn:example:pharm")
+
+    def test_package_extractors_preserve_required_relative_graphs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            decor_archive = root / "decor.xar"
+            decor_members = (
+                "DECOR.xsd",
+                "DECOR-datatypes.xsd",
+                "DECOR.sch",
+                "DECOR2schematron.xsl",
+                "iso-schematron/iso_svrl_for_xslt2.xsl",
+                "coreschematrons/DTr1_EIVL_TS.sch",
+            )
+            with zipfile.ZipFile(decor_archive, "w") as archive:
+                for name in decor_members:
+                    archive.writestr(name, name)
+            decor_output = root / "decor"
+            extracted_decor = _extract_decor(decor_archive, decor_output)
+            self.assertEqual(len(extracted_decor), len(decor_members))
+            self.assertTrue((decor_output / decor_members[-1]).is_file())
+
+            cda_archive = root / "cda.tar.gz"
+            cda_members = (
+                "schema/normative/infrastructure/cda/CDA.xsd",
+                "schema/normative/infrastructure/cda/POCD_MT000040.xsd",
+                "schema/normative/processable/coreschemas/NarrativeBlock.xsd",
+                "schema/normative/processable/coreschemas/voc.xsd",
+                "schema/extensions/SDTC/infrastructure/cda/CDA_SDTC.xsd",
+                "schema/extensions/SDTC/infrastructure/cda/SDTC.xsd",
+            )
+            with tarfile.open(cda_archive, "w:gz") as archive:
+                for name in cda_members:
+                    payload = name.encode("utf-8")
+                    item = tarfile.TarInfo(f"repository-revision/{name}")
+                    item.size = len(payload)
+                    archive.addfile(item, io.BytesIO(payload))
+            cda_output = root / "cda"
+            extracted_cda = _extract_cda(cda_archive, cda_output)
+            self.assertEqual(len(extracted_cda), len(cda_members))
+            self.assertTrue((cda_output / cda_members[-1]).is_file())
+
+    def test_assembled_closure_excludes_artdecor_result_envelopes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_dir = root / "spec"
+            release_dir.mkdir()
+            (release_dir / "project.xml").write_text(
+                '<project prefix="demo-"><name>Demo</name></project>',
+                encoding="utf-8",
+            )
+            dataset = root / "dataset.xml"
+            dataset.write_text(
+                '<dataset id="1.2.3" effectiveDate="2026-01-01T00:00:00"/>',
+                encoding="utf-8",
+            )
+            transaction = root / "transaction.xml"
+            transaction.write_text(
+                '<transaction id="1.2.3.4.5" effectiveDate="2026-01-02T00:00:00"/>',
+                encoding="utf-8",
+            )
+            template = root / "template.xml"
+            template.write_text(
+                '<result xmlns:pharm="urn:example:pharm"><template id="9.8.7">'
+                '<template id="9.8.7" name="Actual" '
+                'effectiveDate="2026-01-03T00:00:00">'
+                '<element name="pharm:medicine"/></template></template></result>',
+                encoding="utf-8",
+            )
+            other_template = root / "other-template.xml"
+            other_template.write_text(
+                '<result xmlns:pharm="urn:other:pharm">'
+                '<template id="9.8.6" name="Other" '
+                'effectiveDate="2026-01-03T00:00:00">'
+                '<element name="pharm:product"/></template></result>',
+                encoding="utf-8",
+            )
+            terminology = root / "terminology.xml"
+            terminology.write_text(
+                '<valueSets><project><valueSet id="7.8.9" name="Codes" '
+                'effectiveDate="2026-01-04T00:00:00"/></project></valueSets>',
+                encoding="utf-8",
+            )
+            output = root / "assembled.xml"
+            assemble_decor_closure(
+                release_dir,
+                {
+                    "transaction_analysis": dataset,
+                    "transaction_source": transaction,
+                    "model_resources": [],
+                    "terminology_resources": [terminology],
+                    "templates": [template, other_template],
+                },
+                {"key": "2026.1", "date": "2026-01-05T00:00:00"},
+                {"id": "1.2.3.4.5", "effective_date": "2026-01-02T00:00:00"},
+                output,
+            )
+            assembled = ET.parse(output).getroot()
+            templates = assembled.find("rules").findall("template")  # type: ignore[union-attr]
+            self.assertEqual(len(templates), 2)
+            self.assertEqual(templates[0].get("name"), "Actual")
+            self.assertEqual(templates[0].get("effectiveDate"), "2026-01-03T00:00:00")
+            self.assertIn('xmlns:pharm="urn:example:pharm"', output.read_text(encoding="utf-8"))
+            self.assertIn('xmlns:pharm2="urn:other:pharm"', output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                templates[1].find("element").get("name"),  # type: ignore[union-attr]
+                "pharm2:product",
+            )
+            values = assembled.find("terminology").findall("valueSet")  # type: ignore[union-attr]
+            self.assertEqual([(item.get("id"), item.get("effectiveDate")) for item in values], [
+                ("7.8.9", "2026-01-04T00:00:00")
+            ])
+
+    def test_markdown_report_is_bounded_but_json_is_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "report"
+            diagnostics = [
+                {
+                    "phase": "source",
+                    "severity": "warning",
+                    "kind": "failed-assert",
+                    "rule_id": "",
+                    "test": "",
+                    "location": f"/{index}",
+                    "document": "source.xml",
+                    "message": f"warning {index}",
+                }
+                for index in range(205)
+            ]
+            result = write_conformance_report(
+                base,
+                scope="build",
+                diagnostics=diagnostics,
+                stages=[{"phase": "packages", "status": "not-run", "detail": "missing"}],
+                policy="report-only",
+            )
+            self.assertEqual(result["status"], "not-run")
+            stored = json.loads(base.with_suffix(".json").read_text(encoding="utf-8"))
+            self.assertEqual(len(stored["diagnostics"]), 205)
+            markdown = base.with_suffix(".md").read_text(encoding="utf-8")
+            self.assertIn("first 200 of 205 diagnostics", markdown)
+            self.assertNotIn("warning 204 |", markdown)
+
+    def test_partly_unrun_conformance_report_is_degraded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = write_conformance_report(
+                Path(temporary) / "report",
+                scope="build",
+                diagnostics=[],
+                stages=[
+                    {"phase": "source", "status": "passed", "detail": "complete"},
+                    {"phase": "compiled", "status": "not-run", "detail": "absent"},
+                ],
+                policy="report-only",
+            )
+            self.assertEqual(result["status"], "degraded")
+
+    @unittest.skipUnless(shutil.which("java"), "Java source-file mode is unavailable")
+    def test_xsd_backend_reports_document_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            schema = root / "schema.xsd"
+            schema.write_text(
+                '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">'
+                '<xs:element name="count" type="xs:integer"/>'
+                '</xs:schema>',
+                encoding="utf-8",
+            )
+            invalid = root / "invalid.xml"
+            invalid.write_text("<count>not-an-integer</count>", encoding="utf-8")
+            diagnostics = validate_xsd(schema, [invalid], phase="test-xsd")
+            self.assertTrue(any(item["severity"] == "error" for item in diagnostics))
+            self.assertTrue(all(item["phase"] == "test-xsd" for item in diagnostics))
+
+    def test_pinned_download_rejects_unexpected_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            release_dir = Path(temporary)
+            manifest: dict[str, object] = {"resources": {}}
+            with patch("decor2hl7.retrieval.fetch.get", return_value=b"wrong"):
+                result = _fetch_direct(
+                    release_dir,
+                    manifest,  # type: ignore[arg-type]
+                    key="validation-package:test",
+                    relative_file="validation/packages/test.bin",
+                    url="https://example.invalid/test.bin",
+                    ipv4=True,
+                    retry_missing=False,
+                    expected_sha256="0" * 64,
+                    binary=True,
+                )
+            self.assertIsNone(result)
+            self.assertFalse((release_dir / "validation/packages/test.bin").exists())
+            resource = manifest["resources"]["validation-package:test"]  # type: ignore[index]
+            self.assertEqual(resource["status"], "error")
+
+    def test_pinned_binary_package_is_reused_offline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            release_dir = Path(temporary)
+            target = release_dir / "validation/packages/test.bin"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"not XML, but checksum-pinned")
+            expected = sha256_file(target)
+            manifest: dict[str, object] = {
+                "resources": {
+                    "validation-package:test": {"status": "unavailable"},
+                },
+            }
+            with patch("decor2hl7.retrieval.fetch.get") as get:
+                result = _fetch_direct(
+                    release_dir,
+                    manifest,  # type: ignore[arg-type]
+                    key="validation-package:test",
+                    relative_file="validation/packages/test.bin",
+                    url="https://example.invalid/test.bin",
+                    ipv4=True,
+                    retry_missing=False,
+                    offline=True,
+                    expected_sha256=expected,
+                    binary=True,
+                )
+            self.assertEqual(result, target)
+            self.assertEqual(
+                manifest["resources"]["validation-package:test"]["status"],  # type: ignore[index]
+                "ok",
+            )
+            get.assert_not_called()
+
+    def test_cda_gate_does_not_run_a_nonexecutable_validator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_dir = root / "spec"
+            model_dir = root / "model"
+            conformance = model_dir / "conformance-validation"
+            conformance.mkdir(parents=True)
+            validator = conformance / "cda-template.xsl"
+            validator.write_text("validator", encoding="utf-8")
+            (conformance / "validator-manifest.json").write_text(
+                json.dumps({
+                    "executable": False,
+                    "complete": False,
+                    "validator_sha256": sha256_file(validator),
+                }),
+                encoding="utf-8",
+            )
+            document = root / "document.xml"
+            document.write_text("<ClinicalDocument/>", encoding="utf-8")
+            with (
+                patch("decor2hl7.conformance.validation_packages_available", return_value=True),
+                patch("decor2hl7.conformance.cda_schema_path", return_value=root / "cda.xsd"),
+                patch("decor2hl7.conformance.validate_xsd", return_value=[]),
+                patch("decor2hl7.conformance.validate_schematron", return_value=[]) as schematron,
+            ):
+                result = validate_cda_documents(
+                    release_dir, model_dir, [document], root / "report"
+                )
+            self.assertEqual(result["status"], "failed")
+            schematron.assert_not_called()
+            self.assertEqual(
+                result["stages"][0],
+                {
+                    "phase": "template-validator-provenance",
+                    "status": "failed",
+                    "detail": (
+                        "validator compilation probe failed; see "
+                        "validator-compilation-errors.txt"
+                    ),
+                },
+            )
+
+    def test_package_lock_paths_cannot_escape_extraction_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            release_dir = Path(temporary)
+            lock = release_dir / "validation/package-lock.json"
+            lock.parent.mkdir(parents=True)
+            lock.write_text(
+                json.dumps({
+                    "packages": [],
+                    "extracted": {
+                        "decor_core": {"../../outside": "unused"},
+                        "cda_core": {"../../outside": "unused"},
+                    },
+                }),
+                encoding="utf-8",
+            )
+            problems = validation_package_problems(release_dir)
+            self.assertTrue(any("unsafe validation-package member" in item for item in problems))
+            with self.assertRaises(ValueError):
+                _safe_member("../outside.xsd")
+
+    def test_cda_compiler_prefers_preserved_normative_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            release_dir = Path(temporary)
+            normative = release_dir / "validation" / "cda-core" / CORE_REVISION
+            expected = []
+            for source in CORE_FILES.values():
+                path = normative / source
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("schema", encoding="utf-8")
+                expected.append(path)
+            self.assertEqual(core_paths(release_dir), expected)
+
+
+if __name__ == "__main__":
+    unittest.main()

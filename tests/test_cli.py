@@ -174,6 +174,11 @@ class CliTests(unittest.TestCase):
         fetch = parser().parse_args(["fetch", "--offline"])
         self.assertTrue(fetch.offline)
         self.assertFalse(fetch.retry_missing)
+        conformance = parser().parse_args([
+            "validate-cda", "document.xml", "--report", "/tmp/conformance",
+        ])
+        self.assertEqual(conformance.files, ["document.xml"])
+        self.assertEqual(conformance.report, "/tmp/conformance")
 
     def test_propose_input_writes_only_csv_and_code_proposals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

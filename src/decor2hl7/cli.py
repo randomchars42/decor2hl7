@@ -235,6 +235,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         api_base=api_base,
         source_hints=load_source_hints(root / "config" / "sources.json"),
         cda_core=True,
+        validation_packages=True,
     )
     closure = result["closure"]
     summary = closure.get("summary", {})
@@ -331,6 +332,10 @@ def cmd_build(args: argparse.Namespace) -> int:
         inputs["mapping_evidence"], model_dir, model, cda
     )
     diagnostics = write_build_diagnostics(model_dir, inputs, cda)
+    from .conformance import build_conformance_artifacts
+    conformance = build_conformance_artifacts(
+        release_spec_dir(root, release), model_dir, inputs, release, transaction
+    )
     _say(f"model: {len(model['fields'])} datapoints, {len(model['groups'])} groups")
     _say(f"code mapping defaults: {sum(len(values) for values in code_mapping['fields'].values())} aliases across {len(code_mapping['fields'])} coded fields")
     _say(
@@ -347,7 +352,42 @@ def cmd_build(args: argparse.Namespace) -> int:
             f"{summary['unresolved_templates']} unresolved CDA references; "
             f"see {model_dir / 'build-diagnostics.md'}"
         )
+    validation_summary = conformance.get("summary", {})
+    _say(
+        f"conformance validation (report-only, {str(conformance.get('status')).upper()}): "
+        f"{validation_summary.get('error', 0)} errors, "
+        f"{validation_summary.get('warning', 0)} warnings; "
+        f"see {model_dir / 'conformance-validation' / 'build-conformance.md'}"
+    )
     return 0
+
+
+def cmd_validate_cda(args: argparse.Namespace) -> int:
+    """Independently validate CDA XML against the pinned schema and rules."""
+    from .conformance import validate_cda_documents
+
+    root = _root(args)
+    release = selected_release(root)
+    transaction = selected_transaction(root)
+    model_dir = transaction_model_dir(root, release, transaction)
+    documents = [_explicit_path(value) for value in args.files]
+    for document in documents:
+        _require(document, "CDA document does not exist")
+    report = (
+        _explicit_path(args.report)
+        if args.report else model_dir / "conformance-validation" / "cda-validation"
+    )
+    result = validate_cda_documents(
+        release_spec_dir(root, release), model_dir, documents, report
+    )
+    summary = result["summary"]
+    print(json.dumps({
+        "status": result["status"],
+        "errors": summary["error"],
+        "warnings": summary["warning"],
+        "report": str(report.with_suffix(".md")),
+    }, ensure_ascii=False))
+    return 1 if result["status"] == "failed" else 0
 
 
 def cmd_propose_input(args: argparse.Namespace) -> int:
@@ -1183,6 +1223,14 @@ def parser() -> argparse.ArgumentParser:
     q.add_argument("--out", help="result directory; defaults to the fixture's out directory")
     _add_runtime_config_overrides(q, site=False)
     q.set_defaults(func=cmd_test_cda_mapping)
+
+    q = sub.add_parser(
+        "validate-cda",
+        help="validate CDA XML against the pinned CDA/SDTC XSD and generated Schematron",
+    )
+    q.add_argument("files", nargs="+", help="CDA XML document(s) to validate")
+    q.add_argument("--report", help="report path without extension; defaults below model/")
+    q.set_defaults(func=cmd_validate_cda)
 
     q = sub.add_parser("check-input", help="validate the external CSV input snapshot without emitting CDA")
     q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")

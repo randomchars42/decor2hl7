@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-03-core-package-validation.md`](2026-09-03-core-package-validation.md)
+  records the implemented checksum-pinned DECOR-core/full-CDA validation stack,
+  the source-versus-compiled execution boundary, reference diagnostics,
+  fail-closed exact-validator provenance and the unchanged mapping conclusions.
 - [`2026-09-02-seven-active-profile-gaps.md`](2026-09-02-seven-active-profile-gaps.md)
   records the post-medication investigation of the seven smaller no-target
   fields: one bounded insurance-number review candidate, three exact EDIS

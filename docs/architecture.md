@@ -65,6 +65,9 @@ src/decor2hl7/
     validate.py         config + record/source-constraint validation
     transforms.py       small declarative mapping transforms
     assertions.py       ART-DECOR assert evaluator + Schematron output
+    conformance.py      pinned packages + XSD/Schematron validation gates
+    validation/
+        XsdValidator.java  JAXP full-schema validation adapter
     testing.py          synthetic fixture generation + isolated mapping test
     state.py            fingerprint/change/sent history
     transport.py        receiver transport
@@ -379,6 +382,29 @@ element or a descendant is mapped; configuration validation rejects an
 incomplete reviewed selection, and rendering checks companion presence for each
 populated occurrence after runtime completion. This is compiled datatype
 policy, not a medication/template/path special case.
+
+## Package conformance boundary
+
+Acquisition pins and hashes DECOR-core, the complete CDA R2/SDTC schema graph,
+Saxon-HE and XML Resolver. Extraction retains original relative schema/include
+paths, rejects unsafe archive members and records every extracted checksum.
+These are setup/build tools; the transformation runtime neither loads them nor
+requires Java.
+
+`build` applies DECOR XSD and Core Schematron to the source-project evidence as
+a report-only quality check. It separately assembles the exact fetched
+transaction closure and invokes DECOR-core's publication transform to generate
+and compile a selected-template validator candidate. Saxon probes the generated
+stylesheet before it can be used. The assembled closure is not
+called a native compiled ART-DECOR project; that unavailable form remains an
+explicit `not-run` stage. Upstream generation errors make the validator
+degraded and are preserved rather than hidden.
+
+`validate-cda` is the independent, fail-closed output gate. It validates CDA
+against the complete SDTC schema entry point and then executes the generated
+transaction/datatype Schematron. It verifies validator and package provenance
+before use and treats incomplete Schematron generation as failure. Conformance
+results neither create mapping candidates nor alter mapping coverage.
 
 Completion rules do not activate optional branches. They cannot nullify
 attributes, optional targets, complex elements, or mandatory constraints that

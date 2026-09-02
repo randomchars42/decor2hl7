@@ -266,5 +266,9 @@ def element_definition(
 
 
 def core_paths(release_dir: Path) -> list[Path]:
+    complete = release_dir / "validation" / "cda-core" / CORE_REVISION
+    preserved = [complete / source for source in CORE_FILES.values()]
+    if all(path.is_file() for path in preserved):
+        return preserved
     directory = release_dir / "cda-core"
     return [directory / name for name in CORE_FILES if (directory / name).exists()]

@@ -50,6 +50,10 @@ from .resolution import (
 )
 from ..workspace import load_json, write_json
 from ..cda.core import CORE_FILES, CORE_RAW_BASE, CORE_REVISION
+from ..conformance import (
+    VALIDATION_ARCHIVES, extract_validation_packages, package_archive_path,
+    validation_package_problems,
+)
 
 
 class RequestBudgetExceeded(RuntimeError):
@@ -424,7 +428,12 @@ def _requests(
     ]
 
 
-def _existing_cache_payload(target: Path, old: Mapping[str, Any]) -> bytes | None:
+def _existing_cache_payload(
+    target: Path,
+    old: Mapping[str, Any],
+    *,
+    classify_xml: bool = True,
+) -> bytes | None:
     """Return a usable on-disk cache payload, even if the manifest is stale.
 
     A valid file is enough to reconstruct a missing/stale manifest entry.  If an
@@ -438,9 +447,10 @@ def _existing_cache_payload(target: Path, old: Mapping[str, Any]) -> bytes | Non
         payload = target.read_bytes()
     except OSError:
         return None
-    status, _detail = classify_payload(payload)
-    if status != "ok":
-        return None
+    if classify_xml:
+        status, _detail = classify_payload(payload)
+        if status != "ok":
+            return None
     expected = str(old.get("sha256") or "")
     if old.get("status") == "ok" and expected and _digest(payload) != expected:
         return None
@@ -645,12 +655,17 @@ def _fetch_direct(
     progress: Progress | None = None,
     label: str | None = None,
     identity: Mapping[str, str] | None = None,
+    expected_sha256: str | None = None,
+    binary: bool = False,
+    metadata: Mapping[str, Any] | None = None,
 ) -> Path | None:
     resources = manifest.setdefault("resources", {})
     old = resources.get(key, {})
     target = release_dir / relative_file
     display = label or key
-    existing = _existing_cache_payload(target, old)
+    existing = _existing_cache_payload(target, old, classify_xml=not binary)
+    if existing is not None and expected_sha256 and _digest(existing) != expected_sha256:
+        existing = None
     if existing is not None:
         resources[key] = {
             **old,
@@ -659,7 +674,9 @@ def _fetch_direct(
             "url": old.get("url") or url,
             "bytes": len(existing),
             "sha256": _digest(existing),
+            **({"expected_sha256": expected_sha256} if expected_sha256 else {}),
             **({"identity": dict(identity)} if identity else {}),
+            **dict(metadata or {}),
         }
         repaired = old.get("status") != "ok" or old.get("file") != relative_file
         suffix = " (manifest repaired)" if repaired else ""
@@ -673,32 +690,53 @@ def _fetch_direct(
             "status": "unavailable",
             "url": old.get("url") or url,
             "reason": "not cached; network disabled by --offline",
+            **({"expected_sha256": expected_sha256} if expected_sha256 else {}),
             **({"identity": dict(identity)} if identity else {}),
+            **dict(metadata or {}),
         }
         _emit(progress, f"fetch: {display}: not cached (offline)")
         return None
     target.parent.mkdir(parents=True, exist_ok=True)
     _emit(progress, f"fetch: {display}: requesting")
     try:
-        payload = get(url, ipv4=ipv4)
+        payload = get(
+            url, ipv4=ipv4,
+            accept="application/octet-stream" if binary else "application/xml",
+        )
     except urllib.error.HTTPError as error:
         status_name = "missing" if error.code in FINAL_STATUS else "error"
         resources[key] = {
             "status": status_name,
             "url": url,
             "http_status": error.code,
+            **({"expected_sha256": expected_sha256} if expected_sha256 else {}),
             **({"identity": dict(identity)} if identity else {}),
+            **dict(metadata or {}),
         }
         _emit(progress, f"fetch: {display}: {status_name} (HTTP {error.code})")
         return None
     except OSError as error:
         resources[key] = {
             "status": "error", "url": url, "error": str(error),
+            **({"expected_sha256": expected_sha256} if expected_sha256 else {}),
             **({"identity": dict(identity)} if identity else {}),
+            **dict(metadata or {}),
         }
         _emit(progress, f"fetch: {display}: error ({error})")
         return None
-    status, detail = classify_payload(payload)
+    actual_sha256 = _digest(payload)
+    if expected_sha256 and actual_sha256 != expected_sha256:
+        resources[key] = {
+            "status": "error", "url": url,
+            "detail": "pinned checksum mismatch",
+            "expected_sha256": expected_sha256,
+            "actual_sha256": actual_sha256,
+            **({"identity": dict(identity)} if identity else {}),
+            **dict(metadata or {}),
+        }
+        _emit(progress, f"fetch: {display}: error (pinned checksum mismatch)")
+        return None
+    status, detail = ("ok", "") if binary else classify_payload(payload)
     if status == "empty":
         resources[key] = {
             "status": "missing", "url": url, "detail": detail,
@@ -714,11 +752,75 @@ def _fetch_direct(
         "url": url,
         "bytes": len(payload),
         "sha256": _digest(payload),
+        **({"expected_sha256": expected_sha256} if expected_sha256 else {}),
         **({"identity": dict(identity)} if identity else {}),
+        **dict(metadata or {}),
         **({"detail": detail} if detail else {}),
     }
     _emit(progress, f"fetch: {display}: {stored_status} ({_size_text(len(payload))})")
     return target
+
+
+def _fetch_validation_packages(
+    release_dir: Path,
+    manifest: dict[str, Any],
+    *,
+    ipv4: bool,
+    retry_missing: bool,
+    offline: bool,
+    progress: Progress | None,
+) -> bool:
+    available = True
+    for package in VALIDATION_ARCHIVES:
+        target = package_archive_path(release_dir, package)
+        path = _fetch_direct(
+            release_dir,
+            manifest,
+            key=package.key,
+            relative_file=str(target.relative_to(release_dir)),
+            url=package.url,
+            ipv4=ipv4,
+            retry_missing=retry_missing,
+            offline=offline,
+            progress=progress,
+            label=f"pinned {package.project} {package.version}",
+            identity={
+                "type": (
+                    "validation-tool"
+                    if package.key.startswith("validation-tool:")
+                    else "validation-package"
+                ),
+                "id": package.project,
+                "effective_date": package.version,
+                "project": package.project,
+                "api_base": package.url.rsplit("/", 1)[0],
+            },
+            expected_sha256=package.sha256,
+            binary=True,
+            metadata={"version": package.version, "license": package.license},
+        )
+        available = available and path is not None
+    if not available:
+        manifest["validation_packages"] = {
+            "status": "unavailable",
+            "error": "one or more pinned validation packages are unavailable",
+        }
+        return False
+    try:
+        lock = extract_validation_packages(release_dir)
+    except (OSError, ValueError) as error:
+        manifest["validation_packages"] = {
+            "status": "error", "error": str(error),
+        }
+        _emit(progress, f"fetch: validation packages: error ({error})")
+        return False
+    manifest["validation_packages"] = {
+        "status": "ok",
+        "lock": "validation/package-lock.json",
+        "packages": len(lock.get("packages", [])),
+    }
+    _emit(progress, "fetch: validation packages: verified and extracted")
+    return True
 
 
 def _fetch_openapi(
@@ -1262,6 +1364,11 @@ def verify_manifest(release_dir: Path) -> list[str]:
             errors.append(f"{label}: missing downloaded file {relative}")
         elif entry.get("sha256") and _digest(path.read_bytes()) != entry["sha256"]:
             errors.append(f"{label}: checksum mismatch for {relative}")
+        elif (
+            entry.get("expected_sha256")
+            and _digest(path.read_bytes()) != entry["expected_sha256"]
+        ):
+            errors.append(f"{label}: pinned checksum mismatch for {relative}")
 
     for key, entry in manifest.get("resources", {}).items():
         if not isinstance(entry, Mapping):
@@ -1272,6 +1379,12 @@ def verify_manifest(release_dir: Path) -> list[str]:
             for form, representation in representations.items():
                 if isinstance(representation, Mapping):
                     verify_entry(f"{key}[{form}]", representation)
+    validation_packages = manifest.get("validation_packages", {})
+    if isinstance(validation_packages, Mapping) and validation_packages.get("status") == "ok":
+        errors.extend(
+            f"validation packages: {problem}"
+            for problem in validation_package_problems(release_dir)
+        )
     return errors
 
 
@@ -1309,6 +1422,7 @@ def fetch_spec(
     api_base: str = DEFAULT_API_BASE,
     source_hints: Mapping[str, Mapping[str, str]] | None = None,
     cda_core: bool = False,
+    validation_packages: bool = False,
 ) -> dict[str, Any]:
     """Fetch the selected transaction and recursively close its dependencies.
 
@@ -1354,6 +1468,7 @@ def fetch_spec(
     root_errors: list[str] = []
     root_status = {
         "cda_core": "pending" if cda_core else "not-requested",
+        "validation_packages": "pending" if validation_packages else "not-requested",
         "api_contract": "pending",
         "project_config": "pending",
         "transaction": "pending",
@@ -1428,6 +1543,8 @@ def fetch_spec(
             readiness_errors.append("selected transaction source form is unavailable")
         if cda_core and root_status["cda_core"] != "ok":
             readiness_errors.append("pinned CDA core definition set is unavailable")
+        if validation_packages and root_status["validation_packages"] != "ok":
+            readiness_errors.append("pinned validation package set is unavailable")
         degradation_warnings = [
             f"dependency unavailable: {key}" for key in required_failures
         ]
@@ -1498,6 +1615,13 @@ def fetch_spec(
         return closure
 
     try:
+        if validation_packages:
+            validation_ok = _fetch_validation_packages(
+                release_dir, manifest, ipv4=ipv4,
+                retry_missing=retry_missing, offline=offline, progress=progress,
+            )
+            root_status["validation_packages"] = "ok" if validation_ok else "missing"
+
         if cda_core:
             core_ok = True
             for filename, source_path in CORE_FILES.items():

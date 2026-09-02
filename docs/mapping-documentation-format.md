@@ -20,6 +20,12 @@ It connects three representations:
 2. the editable assignment or rule in `cda-mapping.json`;
 3. the human-readable CDA template concept and its logical CDA target.
 
+Package/XSD/Schematron conformance is a separate axis. The mapping guide may
+link to a conformance report, but conformance findings must not change the
+mapping coverage categories or be presented as source-to-target evidence. A
+legal CDA leaf is not thereby a meaningful dataset correspondence, and a
+selected mapping is not thereby a schema-valid complete document.
+
 The report should answer, in order:
 
 1. Where would mapped data appear in the CDA?

@@ -33,7 +33,7 @@ is not necessarily an accepted clinical policy.
 | DEC-016 | Empty owned coded domains and target-governed fallback | accepted | verified |
 | DEC-017 | Specification-derived choice, occurrence and fixed-statement rules | accepted | verified |
 | DEC-018 | Neutral-example boolean discriminator occurrences | accepted | verified |
-| DEC-019 | DECOR-core and complete CDA validation stack | open | none |
+| DEC-019 | DECOR-core and complete CDA validation stack | accepted | verified |
 | DEC-020 | Compound-datatype companion requirements | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
@@ -520,40 +520,45 @@ Evidence: `src/decor2hl7/compile/structural.py`,
 
 ## DEC-019 — DECOR-core and complete CDA validation stack
 
-**Decision:** open — deferred
-**Implementation:** none
+**Decision:** accepted
+**Implementation:** verified
 
-The official DECOR-core XSD, DECOR Schematron, Schematron-generation transforms
-and datatype Core Schematrons would add authoritative ART-DECOR representation
-checks and independent output validation. The current CDA compiler already
-uses pinned official CDA R2 XSD material for structural expansion and retains
-the effective inline ART-DECOR assertions, but it does not yet execute the
-complete DECOR/template/datatype Schematron stack or independently validate
-output against the full CDA schema import graph.
+Specification acquisition pins DECOR-core 2.2.28, the complete CDA R2
+normative and SDTC schema trees at the compiler's existing HL7 revision,
+Saxon-HE 12.5 and XML Resolver 5.2.2. The manifest and package lock retain
+version, source URL, checksum and license identity; archive extraction is
+path-safe and every extracted file is hashed. The complete normative graph is
+also preferred by the CDA compiler over the legacy four-file cache.
 
-This work is deferred while additional dataset-to-CDA coverage is the priority.
-The analysis found no new semantic source-to-target bridge. Core packages may
-expose structural candidates or eliminate invalid ones, but legal structure is
-not mapping evidence. In particular, the DECOR-core `EIVL_TS` rule requires a
-non-null event-related interval to contain `event`; the previously selected
-medication offset is therefore not independently executable while the source
-event lacks a proven target TimingEvent correspondence.
+`build` validates the live source-project evidence with the DECOR XSD and Core
+Schematron under a report-only policy. It then assembles only exact fetched
+transaction artifacts, generates the selected template Schematron through the
+pinned DECOR publication transform, resolves datatype Core Schematron includes,
+compiles an XSLT 2.0 validator candidate and probes the stylesheet with Saxon
+before use. The assembler is explicitly not a native compiled ART-DECOR
+project. Since no complete native compiled project
+is published by the fetched API forms, that distinct validation stage is
+recorded as `not-run` rather than inferred from source or analysis views.
 
-Before implementation, the project must select the DECOR-core version matching
-the producing ART-DECOR environment, pin its checksum and license, select an
-XPath 2.0-capable Schematron processor, keep source-project and compiled-project
-validation distinct, and choose the exact CDA/SDTC schema baseline required by
-the active template closure. Current CDA StructureDefinitions may be used as an
-informative cross-check, not as a replacement for the CDA specification.
+`validate-cda` is a separate enforced gate: it validates documents against the
+complete SDTC schema entry point and the generated transaction/datatype
+Schematron. It fails closed if package or validator checksums differ, generation
+reported unresolved terminology, or either validator emits errors. Setup and
+validation may use Java; transformation remains standard-library-only.
 
-Evidence:
+Conformance and mapping coverage remain independent. Core rules can disqualify
+a representation, as DEC-020 did for the medication event offset, but neither
+a valid structural slot nor a package rule supplies a semantic dataset-to-CDA
+bridge. The current source extract's Core Schematron errors, unavailable native
+compiled form and incomplete terminology used during generation remain visible
+quality boundaries in `docs/known-issues.md`; the implementation does not turn
+them into false success claims.
+
+Evidence: `src/decor2hl7/conformance.py`,
+`src/decor2hl7/validation/XsdValidator.java`, `src/decor2hl7/retrieval/fetch.py`,
+`tests/test_conformance.py`,
 `docs/analyses/2026-09-02-decor-core-validation-follow-up.md`,
-`src/decor2hl7/cda/core.py`, `src/decor2hl7/cda/compile.py`,
-`docs/known-issues.md`.
-
-The concrete `EIVL_TS` event dependency identified here is implemented under
-DEC-020. That bounded correction does not implement or replace the deferred
-complete DECOR/template/datatype validation stack.
+`docs/analyses/2026-09-03-core-package-validation.md`.
 
 ## DEC-020 — Compound-datatype companion requirements
 
@@ -586,9 +591,9 @@ executable selection to a review-required candidate because source concept 528
 has no proven correspondence to the target TimingEvent domain. No event code or
 date is invented. The five unaffected medication mappings remain executable.
 
-This decision encodes one verified datatype invariant; it does not claim full
-DECOR-core, CDA XSD or Core Schematron validation, which remains open under
-DEC-019.
+This decision encodes one verified datatype invariant. DEC-019 now provides
+the independent package gate; its upstream source and terminology findings do
+not change the semantic basis of this mapping decision.
 
 Evidence: `src/decor2hl7/cda/datatypes.py`,
 `src/decor2hl7/cda/compile.py`, `src/decor2hl7/compile/mapping.py`,

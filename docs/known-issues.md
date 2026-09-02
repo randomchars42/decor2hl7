@@ -193,28 +193,41 @@ ART-DECOR tests and variables so a standards Schematron processor can apply the
 authoritative expressions independently. Full CDA XSD and repository-provided
 Schematron validation are still useful additional deployment gates.
 
-## DECOR-core and complete CDA validation — deferred
+## Package validation exposes upstream conformance gaps
 
-Decision record: open `DEC-019` in [`decisions.md`](decisions.md).
+Decision record: accepted `DEC-019` in [`decisions.md`](decisions.md).
 
-The project does not yet pin or execute the official DECOR-core XSD,
-cross-artifact Schematron, template Schematron-generation transforms and
-datatype Core Schematrons. It also uses a selected subset of the pinned official
-CDA R2 XSD graph for compilation rather than running an independent output
-validation against the complete schema closure.
+The pinned validation stack is implemented. On the 2026.1.2 reference
+snapshot, DECOR XSD validation of `project-evidence.xml` passes, while the
+DECOR Core Schematron reports 381 error, 1,780 warning and 536 information
+events. These are source-project quality findings and remain report-only; they
+do not make a local compiler build fail or change mapping coverage.
 
-This is primarily validation debt, not an identified mapping-coverage
-opportunity. It may expose additional structural candidates, but no new
-semantic source-to-target bridge was found. Core rules can also remove apparent
-mappings. The medication EIVL event dependency is now enforced as the bounded,
-generic DEC-020 correction; this does not replace the complete stack described
-here.
+The exact-closure template generator currently reports 65 errors for missing
+or undefined ValueSet contents, including dynamic bindings. The generated
+structural and datatype rules are still retained for evidence, but
+`validator-manifest.json` marks the validator incomplete and `validate-cda`
+fails closed. Missing terminology is never filled from the live project
+evidence or a different revision merely to make validation pass.
 
-Before implementation, establish the DECOR-core version compatible with the
-selected ART-DECOR release, pin its checksum, use an XPath 2.0-capable
-Schematron processor, validate source and compiled DECOR forms under their
-different completeness rules, and select the exact CDA/SDTC schema baseline.
-The full deferred design and restart checklist are recorded in
+The Saxon compilation probe also rejects the current generated validator. The
+assembler restores the QName-string namespace declarations omitted by the
+publication transform, including the two distinct pharmaceutical namespaces.
+The remaining failure is two malformed source XPath match expressions,
+`[[hl7:supply]`, from two revisions of the same fetched template. Complete
+compiler diagnostics are retained in `validator-compilation-errors.txt`; the
+invalid stylesheet is never executed by `validate-cda`.
+
+The fetched API forms also do not publish one native complete compiled DECOR
+project. Source-project validation and exact-closure generation are therefore
+implemented, while native compiled-project Schematron validation is explicitly
+reported as `not-run`. Resolving this boundary requires the producer's compiled
+publication artifact or complete exact terminology closure—not reconstruction
+from unmatched views.
+
+The source counts and package identities are recorded in
+[`analyses/2026-09-03-core-package-validation.md`](analyses/2026-09-03-core-package-validation.md).
+The pre-implementation rationale remains in
 [`analyses/2026-09-02-decor-core-validation-follow-up.md`](analyses/2026-09-02-decor-core-validation-follow-up.md).
 
 ## Exact/static historical template resolution

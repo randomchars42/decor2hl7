@@ -23,4 +23,5 @@ decor2hl7 = [
   "py.typed",
   "retrieval/*.json",
   "retrieval/external/*.xml",
+  "validation/*.java",
 ]
