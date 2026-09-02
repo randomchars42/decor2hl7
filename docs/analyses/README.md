@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-02-residual-mapping-boundaries.md`](2026-09-02-residual-mapping-boundaries.md)
+  records the post-PR #20 93/120 fresh-snapshot audit, all six executable
+  medication mappings, the three-way medication timing collision, the
+  secondary ICD occurrence-versus-translation decision, seven smaller
+  residuals and the formal physical-plus-semantic evidence boundary.
 - [`2026-09-02-allergy-example-discriminators.md`](2026-09-02-allergy-example-discriminators.md)
   records the exact active-template examples that close the antibiotic/contrast
   flag boundary, the generic inverse-negation/discriminator rule, exact-agent

@@ -178,7 +178,8 @@ with text, certainty and the leading diagnosis require AKTIN clarification.
 Until then it remains unmapped: no delimiter parser, `CD.translation`, or
 inferred additional Problem Observation is introduced.
 
-Evidence: `docs/known-issues.md`.
+Evidence: `docs/known-issues.md`,
+`docs/analyses/2026-09-02-residual-mapping-boundaries.md`.
 
 ## DEC-010 — Missing-artifact tolerance
 
