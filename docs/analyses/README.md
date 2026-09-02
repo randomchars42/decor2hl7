@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-02-allergy-example-discriminators.md`](2026-09-02-allergy-example-discriminators.md)
+  records the exact active-template examples that close the antibiotic/contrast
+  flag boundary, the generic inverse-negation/discriminator rule, exact-agent
+  coalescing, the 91→93 fresh-snapshot gain and the still-open Concern Act time.
 - [`2026-09-01-spec-derived-target-recovery.md`](2026-09-01-spec-derived-target-recovery.md)
   records the fresh-snapshot 74→91 recovery, choice/ANY/occurrence/presence
   mechanisms, corrected boolean negation semantics and deliberately unresolved

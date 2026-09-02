@@ -461,6 +461,14 @@ logical datapoints `Pupilsize_right.value` and `Pupilsize_left.value`.
 ```
 
 ```markdown
+`allergy-category-occurrences`: create an allergy observation when a category
+boolean is present. Invert the boolean into `negationInd` and use only the coded
+discriminator supplied by the exact effective-template example. If an explicit
+agent has the same code and code system, merge the values into one occurrence;
+otherwise keep separate occurrences. An absent category boolean creates none.
+```
+
+```markdown
 Diagnosis certainty is mapped within each diagnosis occurrence. Code `A` also
 sets `negationInd=true`. No diagnosis end is derived from code `Z`, because
 “Zustand nach” supplies no timepoint. The required diagnosis onset that the

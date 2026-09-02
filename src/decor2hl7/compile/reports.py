@@ -1099,7 +1099,15 @@ def render_cda_mapping_markdown(
                     f"`{branch.get('source')}` → `{{{branch.get('target')}}}`"
                     for branch in rule.get("branches", []) if isinstance(branch, Mapping)
                 ]
-                explanation = "Create one discriminated CDA occurrence for each present branch: " + "; ".join(branches) + "."
+                explanation = (
+                    "Create one discriminated CDA occurrence for each present "
+                    "branch: " + "; ".join(branches) + "."
+                )
+                if rule.get("coalesce_existing_discriminator"):
+                    explanation += (
+                        " Merge a branch with an existing occurrence when their "
+                        "coded discriminators are equal."
+                    )
             elif kind == "for_each":
                 explanation = (
                     f"Create one `{rule.get('target_repeat')}` occurrence for every "

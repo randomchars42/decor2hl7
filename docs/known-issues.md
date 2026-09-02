@@ -27,22 +27,24 @@ ValueSet contains an `OTH` exception and whose datatype exposes
 `nullFlavor="OTH"` plus their source wording. A supplied target member is kept
 only when both code and code system match exactly.
 
+The allergy description now maps to the unique compiled section narrative role;
+it no longer remains a structural-only suggestion. The antibiotic-allergy and
+contrast-agent-allergy flags are also executable through exact neutral examples
+in the active Allergy Intolerance Observation template. The examples supply the
+target ValueSet discriminators `A07AA` and `V08`; the source disorder codes
+`Z88.1` and `293637006` are not written as allergen identities. A present
+boolean is inverted into `negationInd`, an absent source emits no occurrence,
+and an equal explicit `Agens` code/code-system occurrence is coalesced rather
+than duplicated.
+
 The complete allergy occurrence is not yet executable from this transaction by
-itself. Activating `Agens` also activates Allergy Concern Act
-`1.2.276.0.76.10.4065`, where ART-DECOR requires
+itself. Activating any of these structured allergy values also activates Allergy
+Concern Act `1.2.276.0.76.10.4065`, where ART-DECOR requires
 `effectiveTime/low` as the time the allergy was first documented as a concern.
 The source allergy group has no timestamp, and the mandatory target does not
-permit a null flavor. The compiler therefore retains the valid agent mapping
-evidence but the synthetic full-proposal fixture reports this missing required
-sibling instead of substituting document time or inventing a clinical date.
-
-The allergy description now maps to the unique compiled section narrative role;
-it no longer remains a structural-only suggestion. Two source fields remain
-contextual: the antibiotic-allergy and contrast-agent-allergy flags. They carry
-diagnosis/disorder concepts (`Z88.1` and `293637006`), not allergenic-substance
-codes, and must not be written directly as `playingEntity/code`. They need an
-explicit occurrence/negation representation rather than being treated as
-allergen identities.
+permit a null flavor. The compiler therefore retains the valid field mappings,
+but the synthetic full-proposal fixture reports this missing required sibling
+instead of substituting document time or inventing a clinical date.
 
 ## Medication payload mapping — priority 2
 

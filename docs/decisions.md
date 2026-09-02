@@ -32,6 +32,7 @@ is not necessarily an accepted clinical policy.
 | DEC-015 | Project ART-DECOR associations through common CDA/RIM slots | accepted | verified |
 | DEC-016 | Empty owned coded domains and target-governed fallback | accepted | verified |
 | DEC-017 | Specification-derived choice, occurrence and fixed-statement rules | accepted | verified |
+| DEC-018 | Neutral-example boolean discriminator occurrences | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -420,9 +421,10 @@ indirect evidence rather than EXACT evidence.
 
 For the selected AKTIN snapshot this resolves `Agens` to Allergy Intolerance
 Observation `playingEntity/code` through the already mapped allergy section and
-ValueSet `1.2.276.0.76.11.52`. The antibiotic and contrast-derived flags remain
-unmapped because they are diagnosis/disorder assertions rather than allergen
-identities.
+ValueSet `1.2.276.0.76.11.52`. The antibiotic and contrast-derived source
+disorder codes remain ineligible as allergen identities. DEC-018 later
+establishes their occurrence representation from exact target-template examples
+without changing that terminology boundary.
 
 Evidence: `src/decor2hl7/compile/transaction.py`,
 `src/decor2hl7/compile/mapping.py`, `src/decor2hl7/compile/structural.py`,
@@ -472,6 +474,46 @@ Evidence: `src/decor2hl7/cda/compile.py`,
 `src/decor2hl7/cda/render.py`, `tests/test_cda_datatypes.py`,
 `tests/test_core.py`,
 `docs/analyses/2026-09-01-spec-derived-target-recovery.md`.
+
+## DEC-018 — Neutral-example boolean discriminator occurrences
+
+**Decision:** accepted
+**Implementation:** verified
+
+A neutral ART-DECOR example may establish a repeated coded occurrence for a
+boolean source only when all of the following are unique and exact:
+
+1. the source already has a mapped CDA container context;
+2. its category-specific name matches one example caption, not merely a generic
+   clinical word;
+3. the example belongs to the exact effective target template;
+4. its coded discriminator is an exact code/code-system member of the target's
+   one bound ValueSet revision; and
+5. the boolean target is that occurrence's writable `@negationInd`, at exactly
+   one additional repeat depth.
+
+The generated branch uses the declarative `not` transform: source `true`
+represents a positive assertion (`negationInd=false`), source `false` represents
+an explicit negative assertion (`negationInd=true`), and an absent source emits
+no branch. The target discriminator comes from the exact template example, not
+from the source field's disorder code.
+
+When a separately mapped coded field already supplies the discriminator, the
+runtime merges an example-derived branch only if code and code system are equal.
+Otherwise it creates another occurrence. Differing values for one equal
+discriminator are an error; no clinical precedence rule is inferred.
+
+For the selected AKTIN snapshot, the active Allergy Intolerance Observation
+examples establish `A07AA` for the antibiotic flag and `V08` for the contrast-
+agent flag. A matching explicit `Agens` occurrence is coalesced rather than
+duplicated. This decision does not complete Allergy Concern Act
+`effectiveTime/low`; the transaction still supplies no time at which the
+allergy was first documented as a concern.
+
+Evidence: `src/decor2hl7/compile/structural.py`,
+`src/decor2hl7/compile/mapping.py`, `src/decor2hl7/bindings.py`,
+`tests/test_core.py`,
+`docs/analyses/2026-09-02-allergy-example-discriminators.md`.
 
 ## Maintenance rule
 
