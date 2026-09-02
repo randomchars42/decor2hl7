@@ -10,6 +10,13 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-02-seven-active-profile-gaps.md`](2026-09-02-seven-active-profile-gaps.md)
+  records the post-medication investigation of the seven smaller no-target
+  fields: one bounded insurance-number review candidate, three exact EDIS
+  metadata entries stranded outside the selected containment, and three fields
+  needing a complete active representation or crosswalk. It also corrects the
+  earlier MRI wording: the statement is reachable, but has no region-bearing
+  target.
 - [`2026-09-02-medication-compound-dependency.md`](2026-09-02-medication-compound-dependency.md)
   records the completed medication audit after the DECOR-core follow-up, the
   generic occurrence-aware compound-datatype safety mechanism, the offset

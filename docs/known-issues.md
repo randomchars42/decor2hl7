@@ -156,13 +156,28 @@ diagnosis. See
 ## Remaining active-profile mapping boundaries
 
 Seven non-medication datapoints remain without a suitable target after the
-fresh-snapshot audit. The insurance-relationship identifier has a physically
-suitable historical insured-number slot but no formal edge from the selected
-concept. General event onset and the MRI/X-ray region choice lists have no
-unique active statement mapping. Exact draft templates for export interval,
-EDIS name and EDIS version exist in project evidence as `.10.85`, `.10.86` and
-`.10.87`, but are not reachable from the selected document. They are retained
-as evidence rather than forced into the active CDA closure. See
+fresh-snapshot audit. The insurance-relationship identifier has a unique
+writable `associatedEntity/id` in the active open participant after CDA/RIM
+expansion, and the active description plus historical specialization support
+the intended insured-number meaning. The selected concept still has no formal
+edge to that leaf, so using it requires an explicit reviewed semantic decision;
+it is not inferred automatically.
+
+General event onset has no uniquely owned active event/problem statement. The
+MRI statement is reachable, correcting the earlier residual wording, but it
+has no region-bearing target. The X-ray choice list has only three unqualified
+synonym strings matching fixed statements and lacks a complete 13-member
+crosswalk plus repeat/coalescing rules.
+
+Exact draft templates for export interval, EDIS name and EDIS version exist in
+project evidence as `.10.85`, `.10.86` and `.10.87`. The selected Addendum
+Dokumentationsinformationen section `.10.73` contains only `.10.75`–`.10.77`,
+so the three exact entries have no active physical placement. Explicit selected
+containment is expected to make them directly recoverable. They are retained as
+evidence rather than forced into the active CDA closure. See the current
+field-by-field investigation in
+[`analyses/2026-09-02-seven-active-profile-gaps.md`](analyses/2026-09-02-seven-active-profile-gaps.md)
+and the earlier snapshot in
 [`analyses/2026-09-02-residual-mapping-boundaries.md`](analyses/2026-09-02-residual-mapping-boundaries.md).
 
 ## ART-DECOR assertion expression coverage
