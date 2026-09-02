@@ -60,10 +60,15 @@ source fields executable without a medication-specific rule: manufactured
 material name, product code with its declared open code system, dosage
 narrative, and route.
 
-Predicate-aware structural overlay now recovers the associated medication
-`sequenceNumber`, and datatype expansion exposes the event-related timing
-`offset`. Both follow the existing medication `for_each`; neither is a
-medication-name exception.
+Predicate-aware structural overlay recovers the associated medication
+`sequenceNumber`. The post-PR #20 audit also selected the event-related timing
+`offset` from datatype expansion, but later DECOR-core analysis found a required
+compound-datatype dependency: a non-null `EIVL_TS` must contain `event`. The
+source event has no proven correspondence to a target TimingEvent code. Offset
+must therefore be revalidated as part of an event-plus-offset representation or
+downgraded; structural exposure of `offset` alone is not executable mapping
+evidence. See
+[`analyses/2026-09-02-decor-core-validation-follow-up.md`](analyses/2026-09-02-decor-core-validation-follow-up.md).
 
 The remaining medication boundary is narrower but still important. No formal
 source association has been found for lot number, so `chargennummer` remains
@@ -171,6 +176,29 @@ not a warning. `build` also writes `cda-assertions.sch` containing the original
 ART-DECOR tests and variables so a standards Schematron processor can apply the
 authoritative expressions independently. Full CDA XSD and repository-provided
 Schematron validation are still useful additional deployment gates.
+
+## DECOR-core and complete CDA validation — deferred
+
+Decision record: open `DEC-019` in [`decisions.md`](decisions.md).
+
+The project does not yet pin or execute the official DECOR-core XSD,
+cross-artifact Schematron, template Schematron-generation transforms and
+datatype Core Schematrons. It also uses a selected subset of the pinned official
+CDA R2 XSD graph for compilation rather than running an independent output
+validation against the complete schema closure.
+
+This is primarily validation debt, not an identified mapping-coverage
+opportunity. It may expose additional structural candidates, but no new
+semantic source-to-target bridge was found. Core rules can also remove apparent
+mappings; the medication EIVL offset is the first concrete example because the
+corresponding event is required but lacks a proven terminology mapping.
+
+Before implementation, establish the DECOR-core version compatible with the
+selected ART-DECOR release, pin its checksum, use an XPath 2.0-capable
+Schematron processor, validate source and compiled DECOR forms under their
+different completeness rules, and select the exact CDA/SDTC schema baseline.
+The full deferred design and restart checklist are recorded in
+[`analyses/2026-09-02-decor-core-validation-follow-up.md`](analyses/2026-09-02-decor-core-validation-follow-up.md).
 
 ## Exact/static historical template resolution
 
