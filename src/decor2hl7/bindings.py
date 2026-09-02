@@ -331,6 +331,136 @@ def _present(value: Any) -> bool:
     return True
 
 
+def non_null_requirement_satisfied(
+    cda: Mapping[str, Any], required: str, supplied: set[str],
+) -> bool:
+    """Return whether a required compound-datatype part can be populated.
+
+    ``required`` names the compiled target for the required element.  A value
+    assigned to that element or one of its descendants supplies the part.  A
+    part that the template itself requires is also rendered independently of
+    optional sibling assignments.
+    """
+    targets = cda.get("targets", {})
+    required_target = targets.get(required, {})
+    locations = [str(value) for value in required_target.get("locations", [])]
+    if len(locations) != 1:
+        return False
+    if (
+        required_target.get("mandatory")
+        or int(required_target.get("min") or 0) >= 1
+    ):
+        return True
+    required_location = locations[0]
+    return any(
+        any(
+            location == required_location
+            or location.startswith(required_location + ".")
+            for location in map(str, targets.get(name, {}).get("locations", []))
+        )
+        for name in supplied
+    )
+
+
+def _present_occurrences(
+    value: Any, prefix: tuple[int, ...] = (), *, null_flavor_exempt: bool = False,
+) -> list[tuple[int, ...]]:
+    if isinstance(value, list):
+        return [
+            occurrence
+            for index, item in enumerate(value)
+            for occurrence in _present_occurrences(
+                item, prefix + (index,), null_flavor_exempt=null_flavor_exempt
+            )
+        ]
+    if (
+        null_flavor_exempt
+        and isinstance(value, Mapping)
+        and value.get("nullFlavor")
+    ):
+        return []
+    return [prefix] if _present(value) else []
+
+
+def _value_at_occurrence(value: Any, occurrence: tuple[int, ...]) -> Any:
+    current = value
+    for depth, index in enumerate(occurrence):
+        if isinstance(current, list):
+            if index >= len(current):
+                return None
+            current = current[index]
+        else:
+            # This mirrors CDA rendering: a scalar inside a repeating branch
+            # supplies only the first occurrence.
+            return current if all(item == 0 for item in occurrence[depth:]) else None
+    return current
+
+
+def non_null_requirement_problems(
+    cda: Mapping[str, Any], assignments: Mapping[str, Any],
+) -> list[str]:
+    """Validate compound-datatype companion values for each occurrence."""
+    targets = cda.get("targets", {})
+    supplied = set(assignments)
+    problems: list[str] = []
+    for name, value in assignments.items():
+        target = targets.get(name, {})
+        for required in map(str, target.get("non_null_requires", [])):
+            owners = {
+                str(owner) for owner in target.get(
+                    "non_null_requirement_owners", {}
+                ).get(required, [])
+            }
+            dependent_occurrences = _present_occurrences(
+                value, null_flavor_exempt=name in owners
+            )
+            if non_null_requirement_satisfied(cda, required, supplied):
+                required_target = targets.get(required, {})
+                required_locations = list(required_target.get("locations", []))
+                if len(required_locations) != 1:
+                    companion_values: list[Any] = []
+                else:
+                    required_location = str(required_locations[0])
+                    companion_values = [
+                        other_value
+                        for other_name, other_value in assignments.items()
+                        if any(
+                            location == required_location
+                            or location.startswith(required_location + ".")
+                            for location in map(
+                                str, targets.get(other_name, {}).get("locations", [])
+                            )
+                        )
+                    ]
+                # A required template child needs no assignment; it is emitted
+                # for every active parent occurrence.
+                if (
+                    required_target.get("mandatory")
+                    or int(required_target.get("min") or 0) >= 1
+                ):
+                    continue
+                missing = [
+                    occurrence
+                    for occurrence in dependent_occurrences
+                    if not any(
+                        _present(_value_at_occurrence(companion, occurrence))
+                        for companion in companion_values
+                    )
+                ]
+            else:
+                missing = dependent_occurrences
+            for occurrence in missing:
+                where = (
+                    " at occurrence " + ".".join(map(str, occurrence))
+                    if occurrence else ""
+                )
+                problems.append(
+                    f"CDA target {name!r} has a non-null value{where} without "
+                    f"required companion {required!r}"
+                )
+    return problems
+
+
 def for_each_target_positions(
     field: Mapping[str, Any],
     target: Mapping[str, Any],

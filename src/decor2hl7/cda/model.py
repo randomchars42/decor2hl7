@@ -66,6 +66,7 @@ class DatatypeDefinition:
     parts: tuple[DatatypePart, ...] = ()
     value_representation: ValueRepresentation | None = None
     profile: str | None = None
+    non_null_required_parts: tuple[str, ...] = ()
     inherit_attributes: bool = True
     inherit_parts: bool = True
 

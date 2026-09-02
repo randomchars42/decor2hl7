@@ -138,6 +138,13 @@ Use execution-oriented status labels:
 - **Rule** — another executable multi-target or fallback rule;
 - **Review required** — no executable mapping has been approved.
 
+Review-required candidates must distinguish an ordinary unselected leaf from a
+compound-datatype component whose normative companion is absent. For the latter,
+show `required companion missing`, name every required logical CDA target, and
+state that the candidate becomes selectable only when the companion is mapped
+for the same occurrence. Never describe such a component as selected or
+executable merely because its own leaf is writable.
+
 Retain stable source and target keys even when good human names exist. Names make
 the report understandable; keys make the decision traceable and editable.
 

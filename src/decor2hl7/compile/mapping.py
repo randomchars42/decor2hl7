@@ -19,6 +19,7 @@ from ..semantics import (
 )
 from ..transforms import cda_target_name, mapping_rules
 from ..cda.model import ValueRepresentationKind
+from ..bindings import non_null_requirement_satisfied
 from .structural import (
     boolean_example_discriminator_rules as _boolean_example_discriminator_rules,
     coalesce_rule as _coalesce_rule,
@@ -1859,6 +1860,50 @@ def _context(
     )
 
 
+def _selected_physical_targets(value: Any) -> set[str]:
+    return {
+        cda_target_name(rule) for rule in mapping_rules(value)
+        if cda_target_name(rule)
+    }
+
+
+def _block_unsatisfied_non_null_requirements(
+    fields: dict[str, Any],
+    details: dict[str, dict[str, Any]],
+    cda: Mapping[str, Any],
+) -> None:
+    """Keep a compound value non-executable until its companion is selected."""
+    targets = cda.get("targets", {})
+    while True:
+        selected = {
+            name for value in fields.values()
+            for name in _selected_physical_targets(value)
+        }
+        blocked: list[tuple[str, list[str]]] = []
+        for path, value in fields.items():
+            if value is None:
+                continue
+            missing = sorted({
+                str(required)
+                for name in _selected_physical_targets(value)
+                for required in targets.get(name, {}).get(
+                    "non_null_requires", []
+                )
+                if not non_null_requirement_satisfied(cda, str(required), selected)
+            })
+            if missing:
+                blocked.append((path, missing))
+        if not blocked:
+            return
+        for path, missing in blocked:
+            fields[path] = None
+            details[path]["selected"] = None
+            details[path]["runtime_blocked"] = (
+                "REQUIRED_COMPANION(" + ",".join(missing) + ")"
+            )
+            details[path]["required_companions"] = missing
+
+
 def _certainty_mapping(
     path: str,
     field: Mapping[str, Any],
@@ -2345,6 +2390,8 @@ def _cda_mapping_analysis(
         details[path]["context"] = None
         details[path].pop("unresolved_reason", None)
 
+    _block_unsatisfied_non_null_requirements(fields, details, cda)
+
     proposal = {
         "version": 6,
         "model": {
@@ -2405,6 +2452,14 @@ def _cda_mapping_analysis(
         if primary:
             blocked = detail.get("runtime_blocked")
             if blocked:
+                if str(blocked).startswith("REQUIRED_COMPANION("):
+                    companions = detail.get("required_companions", [])
+                    return (
+                        "The best CDA target is supported by mapping evidence, but a "
+                        "non-null compound value also requires the companion target(s) "
+                        + ", ".join(f"`{item}`" for item in companions)
+                        + ". No source mapping currently supplies that companion."
+                    )
                 return (
                     "The best CDA target is supported by mapping evidence, but it is shared "
                     "with another dataset field and therefore needs an explicit rule before execution."
@@ -2472,7 +2527,10 @@ def _cda_mapping_analysis(
         if not primary:
             return "PARTIAL · CONTEXT · NOT EXECUTABLE" if detail.get("context") else "NO · NOT EXECUTABLE"
         qualification = mapping_qualification(detail, primary)
-        if detail.get("runtime_blocked"):
+        blocked = str(detail.get("runtime_blocked") or "")
+        if blocked.startswith("REQUIRED_COMPANION("):
+            execution = "REQUIRES COMPANION"
+        elif blocked:
             execution = "REQUIRES RULE"
         elif (
             isinstance(primary.get("mapping"), Mapping)
@@ -2492,7 +2550,10 @@ def _cda_mapping_analysis(
         primary = detail.get("primary")
         if primary:
             result = "SELECTED"
-            if detail.get("runtime_blocked"):
+            blocked = str(detail.get("runtime_blocked") or "")
+            if blocked.startswith("REQUIRED_COMPANION("):
+                result = "CANDIDATE / REQUIRES COMPANION"
+            elif blocked:
                 result = "SELECTED / REQUIRES RULE"
             elif (
                 isinstance(primary.get("mapping"), Mapping)
@@ -2530,7 +2591,11 @@ def _cda_mapping_analysis(
             selected = detail.get("selected")
             if selected is None:
                 selected = primary.get("mapping") if primary.get("mapping") is not None else primary.get("target")
-            if (
+            if str(detail.get("runtime_blocked") or "").startswith(
+                "REQUIRED_COMPANION("
+            ):
+                out += ["**Candidate:**", "", f"`{primary.get('target')}` `[{target_datatype(str(primary.get('target')))}]`", ""]
+            elif (
                 isinstance(primary.get("mapping"), Mapping)
                 and primary.get("mapping", {}).get("mode") == "presence"
             ):
@@ -2601,7 +2666,14 @@ def _cda_mapping_analysis(
                 suggestions.append("Find the intended CDA representation manually or leave the field explicitly `null`.")
         else:
             if detail.get("runtime_blocked"):
-                suggestions.append("Define an explicit merge/repetition rule before enabling this mapping.")
+                if str(detail.get("runtime_blocked")).startswith(
+                    "REQUIRED_COMPANION("
+                ):
+                    suggestions.append(
+                        "Map the required companion for the same occurrence before enabling this candidate."
+                    )
+                else:
+                    suggestions.append("Define an explicit merge/repetition rule before enabling this mapping.")
             if primary.get("confidence") == "WEAK":
                 suggestions.append("Verify the selected target because the evidence is indirect.")
             if qualification.startswith("MULTIPLE("):
@@ -2782,6 +2854,10 @@ def _cda_mapping_analysis(
                 if detail.get("runtime_blocked") else {}
             ),
             **(
+                {"required_companions": list(detail["required_companions"])}
+                if detail.get("required_companions") else {}
+            ),
+            **(
                 {"structural_rule": detail["structural_rule"]}
                 if detail.get("structural_rule") else {}
             ),
@@ -2812,7 +2888,16 @@ def _cda_mapping_analysis(
             "primary_evidence": dict(bridge),
             "executable_fields": sum(value is not None for value in fields.values()),
             "shared_target_blocks": sum(
-                bool(detail.get("runtime_blocked")) for detail in details.values()
+                str(detail.get("runtime_blocked") or "").startswith((
+                    "SHARED(", "WEAKER_SHARED_TARGET(",
+                ))
+                for detail in details.values()
+            ),
+            "required_companion_blocks": sum(
+                str(detail.get("runtime_blocked") or "").startswith(
+                    "REQUIRED_COMPANION("
+                )
+                for detail in details.values()
             ),
             "structural_rules": Counter(
                 str(rule.get("type") or "unknown") for rule in structures.values()

@@ -13,8 +13,10 @@ from decor2hl7.cda.datatypes import (
     expand_datatype,
 )
 from decor2hl7.cda.compile import compile_cda
-from decor2hl7.build.mapping import cda_mapping_proposal
+from decor2hl7.build.mapping import cda_mapping_audit, cda_mapping_proposal
+from decor2hl7.bindings import non_null_requirement_problems
 from decor2hl7.compile.structural import value_set_members
+from decor2hl7.compile.reports import render_cda_mapping_markdown
 
 
 HL7 = "urn:hl7-org:v3"
@@ -59,6 +61,154 @@ def target_at(compiled: dict[str, object], suffix: str) -> tuple[str, dict[str, 
 
 
 class CdaDatatypeTests(unittest.TestCase):
+    def test_eivl_offset_requires_event_companion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "project.xml"
+            timing_path = (
+                "hl7:ClinicalDocument/hl7:component/hl7:substanceAdministration/"
+                "hl7:effectiveTime[@xsi:type='EIVL_TS']"
+            )
+            source.write_text(f'''<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <concept id="event"><name>Event</name><implementation xpath="{timing_path}/hl7:event">
+    <templateLocation id="doc" effectiveDate="2026" xpath="hl7:ClinicalDocument"/>
+  </implementation></concept>
+  <concept id="offset"><name>Offset</name><implementation xpath="{timing_path}/hl7:offset">
+    <templateLocation id="doc" effectiveDate="2026" xpath="hl7:ClinicalDocument"/>
+  </implementation></concept>
+  <templateAssociation templateId="timing" effectiveDate="2026">
+    <concept ref="event" elementId="event-node"/>
+    <concept ref="offset" elementId="offset-node"/>
+  </templateAssociation>
+  <template id="timing" effectiveDate="2026" name="Timing">
+    <element name="hl7:substanceAdministration" minimumMultiplicity="0" maximumMultiplicity="1">
+      <element name="hl7:effectiveTime[@xsi:type='EIVL_TS']" datatype="EIVL_TS"
+               minimumMultiplicity="0" maximumMultiplicity="1">
+        <element id="event-node" name="hl7:event" datatype="EIVL.event"
+                 minimumMultiplicity="0" maximumMultiplicity="1"/>
+        <element id="offset-node" name="hl7:offset" datatype="PQ"
+                 minimumMultiplicity="0" maximumMultiplicity="1"/>
+      </element>
+    </element>
+  </template>
+  <template id="doc" effectiveDate="2026" name="Document">
+    <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+      <element name="hl7:component" contains="timing" flexibility="2026"
+               minimumMultiplicity="0" maximumMultiplicity="1"/>
+    </element>
+  </template>
+</project>''', encoding="utf-8")
+            offset_field = {
+                "name": "Offset", "concept": "offset", "type": "quantity",
+                "repeat_chain": [], "value_sets": [], "codes": [],
+            }
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {}, "fields": {"timing.offset": offset_field},
+            }
+            compiled = compile_cda([source], model)
+            owner_name, _ = target_at(
+                compiled, "/hl7:effectiveTime[@xsi:type='EIVL_TS']"
+            )
+            event_name, _ = target_at(compiled, "/hl7:effectiveTime[@xsi:type='EIVL_TS']/hl7:event")
+            offset_name, offset = target_at(compiled, "/hl7:effectiveTime[@xsi:type='EIVL_TS']/hl7:offset")
+            self.assertEqual(offset["non_null_requires"], [event_name])
+            self.assertEqual(
+                offset["non_null_requirement_owners"],
+                {event_name: [owner_name]},
+            )
+
+            proposal, audit, _, details = cda_mapping_audit(
+                model, compiled, [source]
+            )
+            self.assertIsNone(proposal["fields"]["timing.offset"])
+            self.assertEqual(
+                audit["fields"]["timing.offset"]["runtime_blocked"],
+                f"REQUIRED_COMPANION({event_name})",
+            )
+            self.assertIn("REQUIRES COMPANION", details)
+            guide = render_cda_mapping_markdown(
+                model, compiled, proposal, audit
+            )
+            self.assertIn("required companion missing", guide)
+            self.assertIn(
+                "Map the required compound-datatype companion", guide
+            )
+            manual = {"fields": {"timing.offset": offset_name}}
+            self.assertIn(
+                f"cda-mapping: target {offset_name} requires a non-null companion at {event_name}",
+                validate.check_config(
+                    model, compiled, {"fields": {"timing.offset": None}}, manual,
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "without required companion"):
+                cda.emit(
+                    {
+                        "key": "P1", "instances": {},
+                        "values": {"timing.offset": {"value": "30", "unit": "min"}},
+                    },
+                    model, compiled, manual, {},
+                )
+
+            paired_model = {
+                **model,
+                "fields": {
+                    "timing.event": {
+                        "name": "Event", "concept": "event", "type": "code",
+                        "repeat_chain": [], "value_sets": [], "codes": [],
+                    },
+                    "timing.offset": offset_field,
+                },
+            }
+            paired, _, _, _ = cda_mapping_audit(
+                paired_model, compiled, [source]
+            )
+            self.assertEqual(paired["fields"]["timing.event"], event_name)
+            self.assertEqual(paired["fields"]["timing.offset"], offset_name)
+            self.assertEqual(
+                validate.check_config(
+                    paired_model, compiled,
+                    {"fields": {"timing.event": None, "timing.offset": None}},
+                    paired,
+                ),
+                [],
+            )
+            payload, problems = cda.emit(
+                {
+                    "key": "P1", "instances": {},
+                    "values": {
+                        "timing.event": {"code": "ACM"},
+                        "timing.offset": {"value": "30", "unit": "min"},
+                    },
+                },
+                paired_model, compiled, paired, {},
+            )
+            self.assertEqual(problems, [])
+            document = ET.fromstring(payload)
+            self.assertEqual(document.find(f".//{{{HL7}}}event").get("code"), "ACM")
+            self.assertEqual(document.find(f".//{{{HL7}}}offset").get("unit"), "min")
+
+            occurrence_problems = non_null_requirement_problems(
+                compiled,
+                {
+                    event_name: [{"code": "ACM"}, None],
+                    offset_name: [
+                        {"value": "30", "unit": "min"},
+                        {"value": "15", "unit": "min"},
+                    ],
+                },
+            )
+            self.assertEqual(len(occurrence_problems), 1)
+            self.assertIn("occurrence 1", occurrence_problems[0])
+            self.assertEqual(
+                non_null_requirement_problems(
+                    compiled, {owner_name: {"nullFlavor": "NI"}}
+                ),
+                [],
+            )
+            self.assertTrue(non_null_requirement_problems(
+                compiled, {offset_name: {"nullFlavor": "NI"}}
+            ))
+
     def test_single_element_vocabulary_code_without_system_is_rendered(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "template.xml"

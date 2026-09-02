@@ -25,10 +25,12 @@ def _definition(
     kind: DatatypeKind = DatatypeKind.PRIMITIVE,
     representation: ValueRepresentation | None = None,
     profile: str | None = None,
+    non_null_required_parts: tuple[str, ...] = (),
 ) -> DatatypeDefinition:
     return DatatypeDefinition(
         name=name, base=base, kind=kind,
         value_representation=representation, profile=profile,
+        non_null_required_parts=non_null_required_parts,
     )
 
 
@@ -53,7 +55,13 @@ _POLICY: dict[str, DatatypeDefinition] = {
     "SXCM_TS": _definition("SXCM_TS", base="TS", kind=DatatypeKind.ALIAS),
     "IVL_TS": _definition("IVL_TS", kind=DatatypeKind.COMPLEX),
     "PIVL_TS": _definition("PIVL_TS", base="SXCM_TS", kind=DatatypeKind.COMPLEX),
-    "EIVL_TS": _definition("EIVL_TS", base="SXCM_TS", kind=DatatypeKind.COMPLEX),
+    # The CDA XSD deliberately permits combinations that the normative V3
+    # datatype rules prohibit.  A non-null event-related interval must carry
+    # its TimingEvent; an offset is only a modifier of that event.
+    "EIVL_TS": _definition(
+        "EIVL_TS", base="SXCM_TS", kind=DatatypeKind.COMPLEX,
+        non_null_required_parts=("hl7:event",),
+    ),
     "EIVL.EVENT": _definition("EIVL.EVENT", base="CE", kind=DatatypeKind.ALIAS),
     "SXPR_TS": _definition("SXPR_TS", base="SXCM_TS", kind=DatatypeKind.COMPLEX),
     "INT": _definition("INT", representation=ValueRepresentation(
@@ -112,7 +120,14 @@ def expand_datatype(name: str, stack: tuple[str, ...] = ()) -> DatatypeDefinitio
     if declared.name in stack:
         raise ValueError("recursive HL7 datatype inheritance: " + " -> ".join(stack + (declared.name,)))
     base = expand_datatype(declared.base, stack + (declared.name,))
-    return replace(declared, value_representation=declared.value_representation or base.value_representation)
+    required_parts = tuple(dict.fromkeys(
+        (*base.non_null_required_parts, *declared.non_null_required_parts)
+    ))
+    return replace(
+        declared,
+        value_representation=declared.value_representation or base.value_representation,
+        non_null_required_parts=required_parts,
+    )
 
 
 def base_datatype(name: str) -> str:

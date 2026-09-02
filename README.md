@@ -487,6 +487,12 @@ projected to an active target when both constraints resolve to one unique common
 CDA/RIM XSD slot inside the mapped context. XSD mixed-content metadata supplies
 element-text writability for complex roots; neither mapping nor rendering uses
 datatype- or medication-specific leaf rules.
+A structurally writable datatype component can still be review-only when a
+normative compound datatype requires a companion value. The compiled target
+records that dependency, `check-cda-mapping` rejects incomplete reviewed
+selections, and rendering verifies it for every repeated occurrence. For
+example, an `EIVL_TS` offset is not executable without its event; the compiler
+does not infer a TimingEvent code from labels.
 A formally coded dataset field can also map directly to an unfixed writable
 CDA `hl7:code` element when both sides share an explicit ValueSet. Fixed or
 differently bound structural codes, such as a section's identifying LOINC code,

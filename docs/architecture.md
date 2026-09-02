@@ -373,6 +373,13 @@ cardinality, terminology, and template evidence:
   `nullFlavor="UNK"` for the required diagnosis onset that this transaction does
   not provide. A real mapped onset wins in its own occurrence.
 
+Compiled datatype targets may also carry `non_null_requires`. Proposal
+generation treats a dependent component as review-only until the required
+element or a descendant is mapped; configuration validation rejects an
+incomplete reviewed selection, and rendering checks companion presence for each
+populated occurrence after runtime completion. This is compiled datatype
+policy, not a medication/template/path special case.
+
 Completion rules do not activate optional branches. They cannot nullify
 attributes, optional targets, complex elements, or mandatory constraints that
 prohibit null flavors. Thus deliberately leaving a dataset-to-CDA field mapping

@@ -14,6 +14,7 @@ from .assertions import evaluate as evaluate_assertion
 from .bindings import (
     for_each_target_positions,
     covered_shared_claims,
+    non_null_requirement_satisfied,
     presence_target_complete,
     structure_rules,
     validate_structures,
@@ -133,6 +134,7 @@ def check_config(
         for rule in structure_rules(cda_mapping)
     }
     claims: dict[str, list[str]] = defaultdict(list)
+    configured_targets: set[str] = set()
     for path, value in cda_mapping.get("fields", {}).items():
         field = model.get("fields", {}).get(path, {})
         for rule in mapping_rules(value):
@@ -168,6 +170,7 @@ def check_config(
                 )
             if mode != "fallback":
                 claims[cda_target_name].append(path)
+            configured_targets.add(cda_target_name)
             valid_presence_target = bool(
                 mode == "presence" and target.get("renderable")
                 and target.get("has_children") and not target.get("prohibited")
@@ -224,6 +227,27 @@ def check_config(
             ):
                 if not identifier_root_for_target(cda_target_name, target, site):
                     errors.append(f"cda-mapping: {path} -> {target_name} is an II without a fixed/configured root")
+    site_targets = {
+        str(name) for name in (
+            site.get("cda", {}).get("values", {})
+            if isinstance(site, Mapping)
+            and isinstance(site.get("cda", {}), Mapping)
+            and isinstance(site.get("cda", {}).get("values", {}), Mapping)
+            else {}
+        )
+    }
+    supplied_targets = configured_targets | site_targets
+    for target_name in sorted(configured_targets):
+        for required in map(
+            str, targets.get(target_name, {}).get("non_null_requires", [])
+        ):
+            if not non_null_requirement_satisfied(
+                cda, required, supplied_targets
+            ):
+                errors.append(
+                    f"cda-mapping: target {target_name} requires a non-null "
+                    f"companion at {required}"
+                )
     for target_name, paths in sorted(claims.items()):
         covered = covered_shared_claims(cda_mapping).get(target_name, set())
         if len(paths) > 1 and covered != set(paths):
