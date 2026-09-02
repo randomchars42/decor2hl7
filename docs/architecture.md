@@ -351,7 +351,14 @@ cardinality, terminology, and template evidence:
   into separate logical CDA datapoints and occurrences only when the target has
   one additional repeat level, a required coded discriminator, an exact bound
   ValueSet revision and a unique terminology-supported source/member match.
-  Schematron uniqueness constraints are retained as additional evidence;
+  Schematron uniqueness constraints are retained as additional evidence. The
+  same runtime rule may be derived for category booleans when an exact neutral
+  example in the effective template uniquely matches the source category,
+  supplies an admitted discriminator member and exposes `@negationInd` as the
+  boolean representation. Such a branch uses inverse negation and never copies
+  the source disorder code into the discriminator. If one direct coded source
+  already supplies an equal discriminator, the occurrences are coalesced by
+  exact code and code system;
 - `coalesce` lets equivalent singleton fields share a target, using
   `equal_or_error` unless a different policy is explicitly configured;
 - `mode: "fallback"` remains available for an explicitly configured

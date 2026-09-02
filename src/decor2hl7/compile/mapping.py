@@ -20,6 +20,7 @@ from ..semantics import (
 from ..transforms import cda_target_name, mapping_rules
 from ..cda.model import ValueRepresentationKind
 from .structural import (
+    boolean_example_discriminator_rules as _boolean_example_discriminator_rules,
     coalesce_rule as _coalesce_rule,
     members_for_target as _members_for_target,
     repeat_by_discriminator_rule as _repeat_by_discriminator_rule,
@@ -2240,6 +2241,84 @@ def _cda_mapping_analysis(
 
     structures.update(_for_each_rules(model, cda, fields, group_results))
 
+    # Neutral examples may specify how category booleans materialize repeated
+    # coded statements even when the source concept's own terminology denotes
+    # a disorder rather than the target discriminator.  Keep this after shared
+    # target resolution: the rule must see the final direct discriminator
+    # mapping so it can declare an exact-occurrence coalesce when appropriate.
+    example_rules = _boolean_example_discriminator_rules(
+        model,
+        cda,
+        xml_paths,
+        {path: details[path].get("context") for path in model_fields},
+        fields,
+        value_set_members,
+    )
+    for rule_name, generated in example_rules.items():
+        rule = generated["rule"]
+        selections = generated["selections"]
+        structures[rule_name] = rule
+        for path, selection in selections.items():
+            mapping = selection["mapping"]
+            member = selection["member"]
+            template = selection["template"]
+            binding = selection["binding"]
+            primary = _candidate(
+                str(mapping["target"]),
+                cda.get("targets", {}).get(str(mapping["cda_target"]), {}),
+                [
+                    *(details[path].get("context", {}).get("chain", [])),
+                    (
+                        "ART_DECOR_EXAMPLE("
+                        f"{template['id']}@{template['effective_date']})"
+                    ),
+                    (
+                        "BOOLEAN_NEGATION("
+                        f"example={str(selection['example_negation']).lower()})"
+                    ),
+                    (
+                        f"VS({binding['id']}@"
+                        f"{binding.get('effective_date') or 'latest'})"
+                    ),
+                    (
+                        "DISCRIMINATOR("
+                        f"{member.get('code')}@{member.get('codeSystem')})"
+                    ),
+                ],
+                "STRONG",
+                98,
+                kind="ART_DECOR_EXAMPLE_BOOLEAN_DISCRIMINATOR",
+                actionable=True,
+                mapping=mapping,
+                warnings=[
+                    "the source boolean is represented as inverse CDA negation; "
+                    "the target discriminator comes from the exact neutral example"
+                ],
+            )
+            old_primary = details[path].get("primary")
+            if old_primary is not None:
+                details[path]["alternatives"] = [old_primary] + list(
+                    details[path].get("alternatives", [])
+                )
+            fields[path] = mapping
+            details[path]["selected"] = mapping
+            details[path]["primary"] = primary
+            details[path]["structural_rule"] = rule_name
+            details[path]["semantic_transform"] = {
+                "kind": "boolean_example_discriminator",
+                "template": dict(template),
+                "example_caption": selection["caption"],
+                "example_negation": selection["example_negation"],
+                "discriminator": {
+                    "target": rule["discriminator"]["target"],
+                    "member": dict(member),
+                    "value_set": dict(binding),
+                },
+                "evidence_level": "STRONG",
+            }
+            details[path]["context"] = None
+            details[path].pop("unresolved_reason", None)
+
     # Some occurrence boundaries can only be derived after the first scalar
     # pass has mapped sibling values (the vital-sign organizer is one example).
     # Revisit still-unmapped direct group fields against those final for_each
@@ -2304,11 +2383,12 @@ def _cda_mapping_analysis(
             return f"MULTIPLE({len(close) + 1})"
         indirect_tokens = {
             "INHERIT^-1", "ORIGINAL^-1", "SPEC^-1", "TA_VERSION", "TA_SPEC",
-            "OPEN_CODED_DOMAIN",
+            "OPEN_CODED_DOMAIN", "ART_DECOR_EXAMPLE",
         }
         if primary.get("confidence") == "STRONG" and not any(
             token in indirect_tokens
             or str(token).startswith("OPEN_CODED_DOMAIN(")
+            or str(token).startswith("ART_DECOR_EXAMPLE(")
             for token in primary.get("chain", [])
         ):
             return "EXACT"

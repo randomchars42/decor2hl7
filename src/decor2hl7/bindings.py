@@ -470,6 +470,103 @@ def _fan_out(
     return payload, constants_by_name
 
 
+def _discriminator_identity(value: Any) -> tuple[str, ...]:
+    if isinstance(value, Mapping):
+        code = str(value.get("code") or "")
+        system = str(value.get("codeSystem") or value.get("code_system") or "")
+        if code and system:
+            return ("code", code, system)
+        flavor = str(value.get("nullFlavor") or value.get("null_flavor") or "")
+        if flavor:
+            return ("nullFlavor", flavor, str(value.get("raw") or ""))
+    return ("value", repr(value))
+
+
+def _present_items(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    return [value] if _present(value) else []
+
+
+def _merge_discriminator_occurrences(
+    existing_discriminator: Any,
+    existing_payload: Any,
+    generated_discriminator: Any,
+    generated_payload: Any,
+    depth: int,
+    label: str,
+) -> tuple[Any, Any]:
+    """Merge generated occurrences with an equal explicit discriminator.
+
+    At ``depth`` zero, generated values contain the one occurrence level added
+    by ``repeat_by_discriminator`` while an explicit discriminator may still be
+    scalar.  Higher source repeat levels are traversed positionally first.
+    """
+    if depth > 0:
+        existing_items = _present_items(existing_discriminator)
+        existing_payload_items = _present_items(existing_payload)
+        generated_items = _present_items(generated_discriminator)
+        generated_payload_items = _present_items(generated_payload)
+        count = max(len(existing_items), len(generated_items))
+        discriminators: list[Any] = []
+        payloads: list[Any] = []
+        for index in range(count):
+            payload, discriminator = _merge_discriminator_occurrences(
+                existing_items[index] if index < len(existing_items) else None,
+                (
+                    existing_payload_items[index]
+                    if index < len(existing_payload_items) else None
+                ),
+                generated_items[index] if index < len(generated_items) else None,
+                (
+                    generated_payload_items[index]
+                    if index < len(generated_payload_items) else None
+                ),
+                depth - 1,
+                f"{label}[{index}]",
+            )
+            payloads.append(payload)
+            discriminators.append(discriminator)
+        return payloads, discriminators
+
+    explicit = _present_items(existing_discriminator)
+    explicit_payload = _present_items(existing_payload)
+    generated = _present_items(generated_discriminator)
+    generated_values = _present_items(generated_payload)
+    discriminators = list(explicit)
+    payloads = [
+        explicit_payload[index] if index < len(explicit_payload) else None
+        for index in range(len(discriminators))
+    ]
+    positions = {
+        _discriminator_identity(value): index
+        for index, value in enumerate(discriminators)
+    }
+    for index, discriminator in enumerate(generated):
+        if not _present(discriminator):
+            continue
+        payload = generated_values[index] if index < len(generated_values) else None
+        identity = _discriminator_identity(discriminator)
+        position = positions.get(identity)
+        if position is None:
+            positions[identity] = len(discriminators)
+            discriminators.append(discriminator)
+            payloads.append(payload)
+            continue
+        if (
+            _present(payloads[position])
+            and _present(payload)
+            and payloads[position] != payload
+        ):
+            raise ValueError(
+                f"repeat_by_discriminator rule {label!r} received conflicting "
+                f"values for discriminator {identity!r}"
+            )
+        if _present(payload):
+            payloads[position] = payload
+    return payloads, discriminators
+
+
 def _coalesce(values: list[Any], policy: str, label: str) -> Any:
     if any(isinstance(value, list) for value in values if value is not None):
         count = max(len(value) if isinstance(value, list) else 1 for value in values if value is not None)
@@ -612,6 +709,31 @@ def build_assignments(
                     f"repeat_by_discriminator rule {rule_id!r} sources have different repeat depths"
                 )
             payload, constants = _fan_out(branch_values, next(iter(depths)))
+            if structure.get("coalesce_existing_discriminator"):
+                discriminator = structure.get("discriminator", {})
+                discriminator_name = str(
+                    discriminator.get("target") or ""
+                ) if isinstance(discriminator, Mapping) else ""
+                if set(constants) != {discriminator_name}:
+                    raise ValueError(
+                        f"repeat_by_discriminator rule {rule_id!r} can coalesce "
+                        "only its one discriminator constant"
+                    )
+                if _present(constants.get(discriminator_name)):
+                    existing_discriminator = assignments.pop(
+                        discriminator_name, None
+                    )
+                    existing_payload = assignments.pop(target_name, None)
+                    payload, constants[discriminator_name] = (
+                        _merge_discriminator_occurrences(
+                            existing_discriminator,
+                            existing_payload,
+                            constants[discriminator_name],
+                            payload,
+                            next(iter(depths)),
+                            rule_id,
+                        )
+                    )
             target = targets.get(target_name, {})
             _assign(assignments, target_name, _prepare_identifier(target_name, target, payload, site))
             for name, value in constants.items():
@@ -764,6 +886,27 @@ def validate_structures(
                 errors.append(
                     f"{prefix} discriminator ValueSet binding does not match the CDA target"
                 )
+            if rule.get("coalesce_existing_discriminator"):
+                existing_sources = [
+                    str(path)
+                    for path in rule.get("existing_discriminator_sources", [])
+                ]
+                if len(existing_sources) != 1:
+                    errors.append(
+                        f"{prefix} must identify exactly one existing discriminator source"
+                    )
+                for path in existing_sources:
+                    selected = {
+                        cda_target_name(selected_rule)
+                        for selected_rule in mapping_rules(
+                            mapping.get("fields", {}).get(path)
+                        )
+                    }
+                    if discriminator_target not in selected:
+                        errors.append(
+                            f"{prefix} existing source {path!r} does not map to "
+                            f"discriminator {discriminator_target!r}"
+                        )
         depths: set[int] = set()
         for branch in branches:
             path = str(branch.get("source") or "")
@@ -777,6 +920,14 @@ def validate_structures(
             if not isinstance(constants, Mapping) or not constants:
                 errors.append(f"{prefix} branch {path!r} has no discriminator constants")
             elif target:
+                if (
+                    rule.get("coalesce_existing_discriminator")
+                    and set(str(name) for name in constants)
+                    != {discriminator_target}
+                ):
+                    errors.append(
+                        f"{prefix} coalescing branches may set only the discriminator"
+                    )
                 for name, constant in constants.items():
                     constant_target = targets.get(str(name))
                     if not constant_target or not constant_target.get("writable"):

@@ -16,6 +16,9 @@ from decor2hl7.build.model import compile_model
 from decor2hl7.build.target import collect_templates, compile_cda, select_template
 from decor2hl7.compile import mapping as mapping_compiler
 from decor2hl7.compile.artifacts import compiler_inputs, write_build_diagnostics
+from decor2hl7.compile.structural import (
+    boolean_example_discriminator_rules, value_set_members,
+)
 from decor2hl7.cda.compile import compile_cda_model
 from decor2hl7.cda.datatypes import value_representation
 from decor2hl7.compile.reports import (
@@ -2831,6 +2834,163 @@ class CoreTests(unittest.TestCase):
                 model, ambiguous, [project]
             )
             self.assertIsNone(ambiguous_proposal["fields"]["allergies.agent"])
+
+    def test_neutral_examples_derive_and_coalesce_boolean_discriminators(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "allergy.xml"
+            source.write_text('''<project>
+              <template id="allergy" effectiveDate="2026" name="Allergy">
+                <example type="neutral" caption="Antibiotic allergy known">
+                  <observation>
+                    <participant><participantRole><playingEntity>
+                      <code code="ANTIBIOTIC" codeSystem="9.8.7"/>
+                    </playingEntity></participantRole></participant>
+                  </observation>
+                </example>
+                <example type="neutral" caption="No contrast allergy known">
+                  <observation negationInd="true">
+                    <participant><participantRole><playingEntity>
+                      <code code="CONTRAST" codeSystem="9.8.7"/>
+                    </playingEntity></participantRole></participant>
+                  </observation>
+                </example>
+              </template>
+              <valueSet id="allergen-vs" effectiveDate="2025"><conceptList>
+                <concept code="ANTIBIOTIC" codeSystem="9.8.7"
+                         displayName="Antibiotic"/>
+                <concept code="CONTRAST" codeSystem="9.8.7"
+                         displayName="Contrast medium"/>
+              </conceptList></valueSet>
+            </project>''', encoding="utf-8")
+            agent = "allergies.agent"
+            antibiotic = "allergies.antibiotic_allergy"
+            contrast = "allergies.contrast_allergy"
+            negation_target = "Allergy.negationInd"
+            discriminator_target = "Allergy.participant.playingEntity.code"
+            model = {"fields": {
+                agent: {
+                    "name": "Agent", "short_name": "agent", "type": "code",
+                    "repeat_chain": [],
+                },
+                antibiotic: {
+                    "name": "Antibiotic allergy",
+                    "short_name": "antibiotic_allergy",
+                    "type": "boolean", "repeat_chain": [],
+                    "codes": [{
+                        "code": "SOURCE-DISORDER-A", "code_system": "1.2.3",
+                    }],
+                },
+                contrast: {
+                    "name": "Contrast allergy",
+                    "short_name": "contrast_allergy",
+                    "type": "boolean", "repeat_chain": [],
+                    "codes": [{
+                        "code": "SOURCE-DISORDER-C", "code_system": "1.2.3",
+                    }],
+                },
+            }, "groups": {}}
+            common = {
+                "template_id": "allergy",
+                "template_effective_date": "2026",
+                "renderable": True,
+                "writable": True,
+                "locations": ["0.1"],
+                "repeat_ancestors": ["0.1"],
+                "repeatable": True,
+                "max": 1,
+            }
+            cda_model = {"targets": {
+                negation_target: {
+                    **common,
+                    "path": "hl7:observation/@negationInd",
+                    "datatype": "BL", "min": 0,
+                    "logical_types": ["boolean"],
+                    "value_representation": {
+                        "kind": "xml_attribute",
+                        "logical_types": ["boolean"],
+                        "attribute": "negationInd",
+                    },
+                },
+                discriminator_target: {
+                    **common,
+                    "locations": ["0.1.0.0.0"],
+                    "path": (
+                        "hl7:observation/hl7:participant/hl7:participantRole/"
+                        "hl7:playingEntity/hl7:code"
+                    ),
+                    "datatype": "CE", "min": 1,
+                    "logical_types": ["code", "ordinal"],
+                    "value_sets": ["allergen-vs"],
+                    "value_set_bindings": [{
+                        "id": "allergen-vs", "effective_date": "2025",
+                    }],
+                    "value_representation": {
+                        "kind": "coded",
+                        "logical_types": ["code", "ordinal"],
+                        "attributes": ["code", "codeSystem", "displayName"],
+                    },
+                },
+            }}
+            context = {
+                "chain": ["CTX[allergies]"],
+                "target": "Allergy.section",
+                "node": {"locations": ["0"]},
+            }
+            existing = {
+                agent: discriminator_target,
+                antibiotic: None,
+                contrast: None,
+            }
+            generated = boolean_example_discriminator_rules(
+                model,
+                cda_model,
+                [source],
+                {antibiotic: context, contrast: context},
+                existing,
+                value_set_members([source]),
+            )
+            self.assertEqual(len(generated), 1)
+            rule_name, result = next(iter(generated.items()))
+            rule = result["rule"]
+            self.assertTrue(rule["coalesce_existing_discriminator"])
+            self.assertEqual(rule["existing_discriminator_sources"], [agent])
+            self.assertEqual(
+                [
+                    branch["constants"][discriminator_target]["code"]
+                    for branch in rule["branches"]
+                ],
+                ["ANTIBIOTIC", "CONTRAST"],
+            )
+
+            selections = result["selections"]
+            cda_mapping = {
+                "fields": {
+                    agent: discriminator_target,
+                    antibiotic: selections[antibiotic]["mapping"],
+                    contrast: selections[contrast]["mapping"],
+                },
+                "structures": {rule_name: rule},
+            }
+            record = {"key": "P1", "values": {
+                agent: {
+                    "code": "ANTIBIOTIC", "codeSystem": "9.8.7",
+                    "displayName": "Antibiotic",
+                },
+                antibiotic: True,
+                contrast: False,
+            }, "instances": {}}
+            assignments, problems = build_assignments(
+                record, model, cda_model, cda_mapping, {}
+            )
+            self.assertEqual(problems, [])
+            self.assertEqual(assignments[negation_target], [False, True])
+            self.assertEqual(
+                [value["code"] for value in assignments[discriminator_target]],
+                ["ANTIBIOTIC", "CONTRAST"],
+            )
+            self.assertEqual(
+                validate.validate_structures(model, cda_model, cda_mapping), []
+            )
 
     def test_dynamic_and_exact_requests_share_one_canonical_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

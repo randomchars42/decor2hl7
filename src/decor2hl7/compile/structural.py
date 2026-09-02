@@ -9,7 +9,7 @@ from typing import Any, Iterable, Mapping
 import xml.etree.ElementTree as ET
 
 from ..retrieval.xml import child_text, local, parse_file
-from ..transforms import selected_cda_targets
+from ..transforms import mapping_rules, selected_cda_targets
 
 
 ValueSetKey = str | tuple[str, str]
@@ -187,6 +187,323 @@ def occurrence_target(target: str, branch: str) -> str:
     head, separator, tail = target.partition(".")
     label = re.sub(r"[^a-z0-9]+", "_", branch.casefold()).strip("_")
     return f"{head}_{label}{separator}{tail}" if separator else f"{target}_{label}"
+
+
+def _normalized_phrase(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+
+def _example_templates(
+    xml_paths: Iterable[Path],
+) -> dict[tuple[str, str], list[ET.Element]]:
+    result: dict[tuple[str, str], list[ET.Element]] = defaultdict(list)
+    for path in sorted(set(xml_paths)):
+        try:
+            root, _ = parse_file(path)
+        except ET.ParseError:
+            continue
+        for template in root.iter():
+            if local(template.tag) != "template":
+                continue
+            template_id = str(template.get("id") or "")
+            effective = str(template.get("effectiveDate") or "")
+            if not template_id or not effective:
+                continue
+            examples = [
+                child for child in list(template)
+                if local(child.tag) == "example"
+                and str(child.get("type") or "neutral") == "neutral"
+            ]
+            if examples:
+                result[(template_id, effective)].extend(examples)
+    return result
+
+
+def _example_root(example: ET.Element, target_path: str) -> ET.Element | None:
+    root_name = target_path.split("/", 1)[0].split(":", 1)[-1]
+    matches = [node for node in list(example) if local(node.tag) == root_name]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _example_element(root: ET.Element, target_path: str) -> ET.Element | None:
+    parts = [part.split(":", 1)[-1] for part in target_path.split("/")]
+    if (
+        not parts
+        or local(root.tag) != parts[0]
+        or any(part.startswith("@") for part in parts)
+    ):
+        return None
+    current = root
+    for part in parts[1:]:
+        matches = [child for child in list(current) if local(child.tag) == part]
+        if len(matches) != 1:
+            return None
+        current = matches[0]
+    return current
+
+
+def _inside_context(
+    target: Mapping[str, Any], context: Mapping[str, Any] | None,
+) -> bool:
+    if not isinstance(context, Mapping):
+        return False
+    context_node = context.get("node", {})
+    if not isinstance(context_node, Mapping):
+        return False
+    target_locations = list(target.get("locations", []))
+    context_locations = list(context_node.get("locations", []))
+    if len(target_locations) != 1 or len(context_locations) != 1:
+        return False
+    target_location = str(target_locations[0])
+    context_location = str(context_locations[0])
+    return target_location == context_location or target_location.startswith(
+        context_location + "."
+    )
+
+
+def _caption_match(field: Mapping[str, Any], caption: str) -> int:
+    caption_key = _normalized_phrase(caption)
+    scores = []
+    for key in ("name", "short_name"):
+        phrase = _normalized_phrase(str(field.get(key) or ""))
+        # Long, category-specific names are required.  A generic word such as
+        # "allergy" must not select every example in the template.
+        if len(phrase) >= 10 and phrase in caption_key:
+            scores.append(len(phrase))
+    return max(scores, default=0)
+
+
+def _directly_maps_to(mapping: Any, target: str) -> bool:
+    rules = mapping_rules(mapping)
+    return (
+        len(rules) == 1
+        and target in selected_cda_targets(mapping)
+        and not rules[0].get("structure")
+    )
+
+
+def boolean_example_discriminator_rules(
+    model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    xml_paths: Iterable[Path],
+    contexts: Mapping[str, Mapping[str, Any] | None],
+    field_mappings: Mapping[str, Any],
+    value_sets: Mapping[ValueSetKey, list[dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    """Derive boolean-negation occurrences from exact neutral examples.
+
+    The rule is deliberately narrow.  A boolean field name must uniquely match
+    a neutral example caption inside its mapped CDA context; that example must
+    contain an exact member of one required, bound coded discriminator.  The
+    source terminology code is not used as the target discriminator.
+    """
+    examples = _example_templates(xml_paths)
+    fields = model.get("fields", {})
+    targets = cda.get("targets", {})
+    candidates: dict[
+        tuple[str, str, str, str], list[dict[str, Any]]
+    ] = defaultdict(list)
+
+    for path, field in fields.items():
+        if (
+            str(field.get("type") or "") != "boolean"
+            or field_mappings.get(path) is not None
+        ):
+            continue
+        context = contexts.get(path)
+        depth = len(field.get("repeat_chain", []))
+        matches: list[dict[str, Any]] = []
+        for negation_name, negation in targets.items():
+            if (
+                not negation.get("writable")
+                or str(negation.get("path") or "").rsplit("/", 1)[-1]
+                != "@negationInd"
+                or len(negation.get("repeat_ancestors", [])) != depth + 1
+                or not _inside_context(negation, context)
+            ):
+                continue
+            template_key = (
+                str(negation.get("template_id") or ""),
+                str(negation.get("template_effective_date") or ""),
+            )
+            template_examples = examples.get(template_key, [])
+            if not template_examples:
+                continue
+            for discriminator_name, discriminator in targets.items():
+                if (
+                    discriminator_name == negation_name
+                    or not discriminator.get("writable")
+                    or discriminator.get("repeat_ancestors", [])
+                    != negation.get("repeat_ancestors", [])
+                    or str(discriminator.get("template_id") or "")
+                    != template_key[0]
+                    or str(discriminator.get("template_effective_date") or "")
+                    != template_key[1]
+                    or int(discriminator.get("min") or 0) < 1
+                    or discriminator.get("max") != 1
+                ):
+                    continue
+                members, binding = members_for_target(discriminator, value_sets)
+                if not members or binding is None:
+                    continue
+                by_code = {
+                    (
+                        str(member.get("code") or ""),
+                        str(member.get("codeSystem") or ""),
+                    ): member
+                    for member in members
+                }
+                for example in template_examples:
+                    caption = str(example.get("caption") or "")
+                    score = _caption_match(field, caption)
+                    if not score:
+                        continue
+                    example_root = _example_root(
+                        example, str(negation.get("path") or "")
+                    )
+                    if example_root is None:
+                        continue
+                    encoded = _example_element(
+                        example_root, str(discriminator.get("path") or "")
+                    )
+                    if encoded is None:
+                        continue
+                    member = by_code.get((
+                        str(encoded.get("code") or ""),
+                        str(encoded.get("codeSystem") or ""),
+                    ))
+                    if member is None:
+                        continue
+                    literal = str(
+                        example_root.get("negationInd") or "false"
+                    ).casefold()
+                    if literal not in {"true", "false"}:
+                        continue
+                    matches.append({
+                        "path": str(path),
+                        "negation_target": str(negation_name),
+                        "discriminator_target": str(discriminator_name),
+                        "template": {
+                            "id": template_key[0],
+                            "effective_date": template_key[1],
+                        },
+                        "binding": binding,
+                        "member": dict(member),
+                        "caption": caption,
+                        "example_negation": literal == "true",
+                        "score": score,
+                    })
+        if not matches:
+            continue
+        best_score = max(int(item["score"]) for item in matches)
+        selected = [item for item in matches if int(item["score"]) == best_score]
+        unique = {
+            (
+                str(item["negation_target"]),
+                str(item["discriminator_target"]),
+                str(item["member"].get("code") or ""),
+                str(item["member"].get("codeSystem") or ""),
+            )
+            for item in selected
+        }
+        if len(unique) != 1:
+            continue
+        item = selected[0]
+        group = (
+            str(item["negation_target"]),
+            str(item["discriminator_target"]),
+            str(item["template"]["id"]),
+            str(item["template"]["effective_date"]),
+        )
+        candidates[group].append(item)
+
+    result: dict[str, dict[str, Any]] = {}
+    for (
+        negation_name, discriminator_name, template_id, effective_date,
+    ), selected in candidates.items():
+        if len(selected) < 2:
+            continue
+        discriminator_codes = {
+            (
+                str(item["member"].get("code") or ""),
+                str(item["member"].get("codeSystem") or ""),
+            )
+            for item in selected
+        }
+        if len(discriminator_codes) != len(selected):
+            continue
+        mapped_discriminator_sources = [
+            str(path) for path, mapping in field_mappings.items()
+            if _directly_maps_to(mapping, discriminator_name)
+        ]
+        if len(mapped_discriminator_sources) > 1:
+            continue
+        rule_name = rule_id("repeat-by-example-discriminator", negation_name)
+        branch_names = {
+            str(item["path"]): re.sub(
+                r"[^a-z0-9]+",
+                "-",
+                str(
+                    fields.get(str(item["path"]), {}).get("short_name")
+                    or str(item["path"]).rsplit(".", 1)[-1]
+                ).casefold(),
+            ).strip("-")
+            for item in selected
+        }
+        if len(set(branch_names.values())) != len(selected):
+            continue
+        branches = []
+        selections: dict[str, dict[str, Any]] = {}
+        for item in selected:
+            path = str(item["path"])
+            branch = branch_names[path]
+            logical_target = occurrence_target(negation_name, branch)
+            branches.append({
+                "source": path,
+                "target": logical_target,
+                "cda_target": negation_name,
+                "branch": branch,
+                "transform": {"type": "not"},
+                "constants": {discriminator_name: item["member"]},
+            })
+            selections[path] = {
+                "mapping": {
+                    "target": logical_target,
+                    "cda_target": negation_name,
+                    "structure": rule_name,
+                    "branch": branch,
+                    "transform": {"type": "not"},
+                },
+                **item,
+            }
+        result[rule_name] = {
+            "rule": {
+                "type": "repeat_by_discriminator",
+                "discriminator": {
+                    "target": discriminator_name,
+                    "value_set": dict(selected[0]["binding"]),
+                    "members": [item["member"] for item in selected],
+                    "evidence_level": "STRONG",
+                },
+                "coalesce_existing_discriminator": bool(
+                    mapped_discriminator_sources
+                ),
+                "existing_discriminator_sources": mapped_discriminator_sources,
+                "evidence": [
+                    f"neutral ART-DECOR examples in {template_id}@{effective_date}",
+                    "unique category-specific example caption matches",
+                    "inverse boolean-to-negationInd semantics",
+                    f"exact bound discriminator {discriminator_name}",
+                    *(
+                        ["coalesce an equal explicit discriminator occurrence"]
+                        if mapped_discriminator_sources else []
+                    ),
+                ],
+                "branches": branches,
+            },
+            "selections": selections,
+        }
+    return result
 
 
 def _schematron_unique_codes(

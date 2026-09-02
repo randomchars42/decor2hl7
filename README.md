@@ -508,8 +508,13 @@ use it to create repeated entries below one shared medication section; V/A/Z/G
 certainty controls the formal qualifier and exclusion negation; left/right pupil
 fields use a specification-derived `repeat_by_discriminator` rule with the
 bound AKTIN L/R eye ValueSet; equivalent encounter start fields use conservative
-`equal_or_error` coalescing. A `for_each` names the exact CDA
-repeat node driven by its source group, so additional repeat-capable target
+`equal_or_error` coalescing. Exact neutral examples in the active allergy
+observation also derive antibiotic and contrast-agent branches: each source
+boolean is inverted into `negationInd`, while the target example supplies the
+bound `A07AA` or `V08` discriminator. An explicit `Agens` with the same code and
+code system is merged into that occurrence rather than duplicated; the source
+disorder codes are never written as allergen codes. A `for_each` names the exact
+CDA repeat node driven by its source group, so additional repeat-capable target
 ancestors are not populated positionally. The transform vocabulary is
 intentionally small (`identity`, `enum`, `ordinal`, `not`, `code_system`,
 `coded_fallback`) and remains data
