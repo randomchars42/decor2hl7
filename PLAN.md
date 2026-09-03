@@ -306,6 +306,11 @@ Coverage 92 → 95/120, `check-cda-mapping` passing. Recorded in
 
 ### B3. Datatype / RIM expansion completeness audit
 
+Three of the four questions below are now answered from the pinned CDA core XSD
+and the compiled reference workspace, including one confirmed expansion defect
+(`SXCM_TS` compiled as an alias, so no interval branch exists) that also unblocks
+D1. Detailed steps and evidence in [Implementation instructions § B3](#b3-impl).
+
 `DEC-013`/`DEC-014` expansion is broad but the "no target" partition includes
 fields where a leaf *should* exist:
 
@@ -328,6 +333,10 @@ fields where a leaf *should* exist:
 ## Workstream C — widen the semantic gate
 
 ### C1. Mine the generated transaction Schematron for discriminator and cardinality evidence
+
+The generated artifact has since been measured — 226 template-derived pattern
+files, 5 530 rule contexts, ~14 000 assertions with a classified shape
+distribution. Detailed steps in [Implementation instructions § C1](#c1-impl).
 
 `build` already emits `cda-assertions.sch` and the DEC-019 transaction
 Schematron. `repeat_by_discriminator` (`compile/structural.py`) currently uses
@@ -447,6 +456,10 @@ bridge exists" for `dosismenge_und_einheit` and `kontinuierliche_gabe_rate`.
   quantity; no new clinical decision.
 
 ### C6. Terminology-association coverage audit
+
+The coverage gap has since been measured: 1 312 of 4 188 `terminologyAssociation`
+elements in the fetched specification sit under a parent the compiler never
+inspects. Detailed steps in [Implementation instructions § C6](#c6-impl).
 
 `_semantic_concept_index` / `_graph_and_associations` build the concept→code
 index that feeds `TERM` evidence. Audit against `terminology/` in the transaction
@@ -571,7 +584,7 @@ are normalized. Detailed steps in [Implementation instructions § F3](#f3-impl).
 | 3 | A6 (`DEC-013` amend) | **done**; 65 → 3 validator messages | 0 this round (blocked enums need the phase-4 residue) |
 | 4 | A5 for the 5 `build_degraded` items; S1/B1; E2; A7 finish | **done** — `build_degraded` 5 → 3, validator `complete: true`; B1 opened no medication slots | 0 (quality) |
 | 5 (next) | F1–F3 | specified — see [Phase 5](#phase-5--gate-labelled-reporting-and-regression-guards-next); A7 already shipped part of the F2/F3 assertions | 0 (infra) |
-| 6 | C1, C6, B3 | not started | opportunistic +n |
+| 6 | C1, C6, B3 | specified — see [Phase 6](#phase-6--semantic-evidence-and-expansion-completeness-specified-not-started); offline research done, B3 and C1's parser can start during phase 5 | opportunistic +n |
 | 7 | C5, D1 | not started | up to +4 medication datapoints |
 | 8 | C3 (`DEC-025`), C4 (`DEC-026`), C2 | not started | +1 (insurance), +1 (X-ray) subject to review |
 
@@ -1214,6 +1227,295 @@ Suggested split, in order: **(a)** F1 step 0 plus the regenerated workspace —
 smallest diff, largest correctness effect, and F1's labels depend on it;
 **(b)** the rest of F1; **(c)** F2 and F3 together, since both touch the fixture
 and the new workflow.
+
+### Phase 6 — semantic evidence and expansion completeness (specified, not started)
+
+Scope: C1, C6, B3. Coverage effect: opportunistic. The offline research below is
+**already done** and is recorded here as evidence; what remains is the reviewed
+rule for each item and its code.
+
+**What can start before phase 5 finishes.**
+
+- **B3 is fully independent.** It touches `cda/compile.py` and
+  `cda/datatypes.py` only, and its findings are already in hand. It can run in
+  parallel with F1/F2/F3, and it is the natural first item because sub-item 1
+  below also unblocks D1 in phase 7.
+- **C1's parser is independent.** It reads `@context` and `@test` from the
+  generated `include/*.sch`; it does not read `@see`, which is the only thing
+  [§ F3](#f3-impl) rewrites in those files. Do not sequence C1 behind F3 — but
+  do write the parser so it ignores `@see` entirely, so the two stay decoupled.
+  C1's *integration* into `_candidates` benefits from F1's gap labels, because
+  `semantic:no_association` is exactly C1's candidate list.
+- **C6 must follow [F1 step 0](#f1-impl).** C6 audits the concept→code index and
+  the value-set membership that feed `TERM` evidence, and F1 step 0 changes
+  `formal_terminology` for seven fields. Running C6 first would audit a surface
+  that is about to move.
+
+<a id="b3-impl"></a>
+#### B3. Datatype / RIM expansion completeness audit
+
+Files: `cda/datatypes.py`, `cda/compile.py`, `cda/model.py`,
+`tests/test_cda_datatypes.py`, `docs/decisions.md` (`DEC-013`/`DEC-014` amend),
+`docs/known-issues.md`, a dated analysis under `docs/analyses/`.
+
+##### Finding 1 — `SXCM_TS` is compiled as an alias, so no interval branch exists (defect)
+
+`cda/datatypes.py:56` declares `"SXCM_TS": _definition("SXCM_TS", base="TS",
+kind=DatatypeKind.ALIAS)`. An element declared `SXCM_TS` therefore compiles to a
+bare timestamp with no children. Verified in the reference workspace:
+`UVSubordinateadministration.substanceAdministration.effectiveTime_xsi_type_SXPR_TS.comp`
+is `SXCM_TS`, `writable: true`, `has_children: false`, `min: 2`.
+
+But `SXCM_TS` is not a leaf in the pinned CDA core XSD — it is the abstract root
+of the interval family. Verified against
+`spec/2026.1.2/cda-core/datatypes-base.xsd` and `datatypes.xsd`:
+
+| Type | XSD base | XSD element children |
+|---|---|---|
+| `SXCM_TS` | `TS` | — |
+| `IVL_TS` | `SXCM_TS` | `low`, `width`, `high`, `center` |
+| `PIVL_TS` | `SXCM_TS` | `phase`, `period` |
+| `EIVL_TS` | `SXCM_TS` | `event`, `offset` |
+| `SXPR_TS` | `SXCM_TS` | `comp` |
+
+A concrete branch is reachable only through `xsi:type`, and the compiler already
+has exactly one mechanism for that: `_materialize_polymorphic_targets`
+(`cda/compile.py:1986`), which emits `<name>_as_<TYPE>` targets carrying
+`value_representation.xsi_type`. Today it fires only for
+`datatype == "ANY"` against a hard-coded `scalar_types` tuple
+(`cda/compile.py:1998`).
+
+Change: derive the substitutable set from the pinned XSD instead of hard-coding
+it. In `cda/core.py`, build a reverse index of `xs:extension/@base → [subtype]`
+while `index_definitions` already walks the schema, and expose it on the
+`DefinitionIndex`. In `_materialize_polymorphic_targets`, fire for any element
+whose declared datatype has XSD extensions and no value-bearing children of its
+own, materializing one typed target per concrete subtype and recursing into that
+subtype's declared parts. Keep the existing `ANY` behaviour as the scalar case
+of the same rule; keep the duplicate-name guard at `cda/compile.py:2011`.
+
+Expected effect: `…SXPR_TS.comp_as_IVL_TS.low` / `.high` and
+`…comp_as_PIVL_TS.period` become writable leaves. That is the physical
+precondition for [D1](#d1-medication-timing-interval--frequency-structural-rule) — the three medication timestamps currently collide
+on one atomic `TS` because the template's `effectiveTime` `<choice>` offers
+`TS` / `PIVL_TS` / `EIVL_TS` / `SXPR_TS` and **no `IVL_TS` branch at all**
+(verified in
+`spec/2026.1.2/templates/2.16.840.1.113883.10.21.4.6_2023-01-30T09_36_00.source.xml`,
+lines 36-83). B3 supplies the leaves; D1 supplies the rule that selects the
+`SXPR_TS` branch when more than one timing source is present. Do not attempt
+D1's rule here.
+
+Guards this must not break: `EIVL_TS` keeps its
+`non_null_required_parts=("hl7:event",)` (`DEC-020`), the `<choice>` remains
+`max 1` so only one branch may be written, and `comp` keeps `min: 2`.
+
+##### Finding 2 — writable `@value` on an `IVL_TS` element is correct, not a defect (closed)
+
+`Problemobservationcedis.effectiveTime` is `IVL_TS` and compiles
+`value_representation: {kind: "timestamp", attribute: "value"}`, which looks
+wrong because `cda/datatypes.py:57` gives `IVL_TS` no representation. It is
+correct: `representation_type` (`cda/compile.py:1264`) walks the **XSD** base
+chain when the policy has none, so `IVL_TS → SXCM_TS → TS` yields the `TS`
+timestamp policy, and `<effectiveTime value="…"/>` is the legal V3 point-in-time
+shorthand for an interval. Record this in the analysis so it is not
+re-investigated. The one question left for review: should a template that
+declares a required `hl7:width` still offer the `@value` shorthand on the same
+element? That is a `DEC-013` question, not an expansion bug.
+
+##### Finding 3 — `Ereigniseintritt`: confirm the declared-children drop rule, then close
+
+Active `1.2.276.0.76.10.4040` declares
+`<element name="hl7:effectiveTime" datatype="IVL_TS" conformance="R">` with a
+single declared child `<element name="hl7:width" datatype="PQ"
+minimumMultiplicity="1" conformance="R">` and **no** `low`/`high`. The compiled
+targets match: `Problemobservationcedis.observation.effectiveTime.width.*`
+exists and `…effectiveTime.low` / `.high` do not — while the *unconstrained*
+sibling `CDAObservation.observation.effectiveTime` on the same revision does get
+`.low`, `.high`, `.center` from datatype expansion.
+
+So the compiler stops CDA/RIM datatype expansion for an element whose ART-DECOR
+constraint set names explicit children, and expands fully when it names none.
+Decide and record whether that is the intended `DEC-014` rule. Arguments both
+ways: naming `width` refines the interval, but ART-DECOR does not thereby
+*prohibit* `low`/`high` unless the element is closed or they carry
+`isProhibited`. If the rule is intended, `Ereigniseintritt` is **blocked
+upstream** — record the exact missing particle (`hl7:effectiveTime/hl7:low` on
+`1.2.276.0.76.10.4040@2015-09-18`) and close it; C4 in phase 8 offers no route
+here either. If it is not intended, this is the expansion defect B3 was written
+to find, and fixing it may open the onset leaf.
+
+##### Finding 4 — MRI region: confirmed blocked upstream (close with evidence)
+
+`1.2.276.0.76.10.4058` compiles to 14 targets with exactly **one** writable
+leaf, `Magneticresonanceimaging.value` (`CE`), already carrying the
+"performed" indicator. There is no `targetSiteCode`, no `approachSiteCode` and
+no region-bearing particle of any kind. `PLAN.md`'s B3 claim is confirmed;
+record the missing particle and close the item as blocked upstream. The X-ray
+region stays a C3 ConceptMap candidate in phase 8 and is unaffected.
+
+##### Deliverable
+
+A dated analysis under `docs/analyses/` recording findings 1-4, plus the code
+for finding 1 and a decision note on finding 3. `_unresolved_reason`
+(`compile/mapping.py:950`) already distinguishes `structural_only` /
+`ambiguous_value_target` / `datatype_component_available`; once [F1](#f1-impl)
+persists those, use them to drive the remaining sweep rather than re-reading the
+audit by hand.
+
+<a id="c1-impl"></a>
+#### C1. Schematron-derived constraint evidence
+
+Files: new `compile/schematron.py`, `compile/mapping.py` (`_candidates`,
+line 1241), `compile/structural.py` (`repeat_by_discriminator_rule`, line 539),
+`tests/test_conformance.py` / `tests/test_core.py`, `docs/decisions.md`
+(`DEC-017` amend or new `DEC-024`).
+
+##### What the generated artifact actually contains (measured)
+
+`build` already emits, under
+`model/<release>/<transaction>/conformance-validation/include/`, **226
+template-derived pattern files** (excluding the `DTr1_*` datatype patterns and
+the `voc-*` value-set snapshots) carrying **5 530 rule contexts**. Classifying
+every `<assert>/@test` in them:
+
+| Assertion shape | Count | Evidence it yields |
+|---|---:|---|
+| `xsi:type` constraint | 3 825 | permitted choice branches (`DEC-017`; cross-checks [B3 finding 1](#b3-impl)) |
+| `count(…) <= n` | 2 988 | repetition upper bound |
+| `string(@a) = ('V')` fixed value | 2 463 | discriminator fixed codes |
+| other | 2 265 | co-occurrence, string form, unclassified |
+| `count(…) >= n` | 1 180 | confirmed **required** status |
+| `doc('include/voc-<OID>-…xml')` | 1 134 | discriminator value sets |
+| bare `@attr` required | 188 | mandatory attribute |
+
+This is spec-derived and already computed — C1 re-uses an artifact `build`
+produces, it does not add clinical knowledge.
+
+##### Steps
+
+1. **`compile/schematron.py` (new).** Parse each `include/*.sch` pattern file
+   into `{context_xpath: [constraint]}` where a constraint is
+   `{"kind": "required"|"max_occurs"|"fixed_value"|"value_set"|"xsi_type"|"attribute_required",
+   "path": …, "value": …, "value_set": …}`. Read only `@context` and `@test`;
+   **ignore `@see`**, so [F3](#f3-impl)'s URI rewrite cannot affect this parser.
+   Skip `DTr1_*` (datatype patterns) and `voc-*` (value-set snapshots).
+2. **Cross-reference with compiled targets.** Rule contexts are predicated
+   XPaths such as
+   `*[hl7:substanceAdministration[hl7:templateId[@root='…']]]/hl7:substanceAdministration[…]`;
+   compiled targets carry `path` plus `template_id`/`template_effective_date`.
+   Match on the template-id predicate plus the trailing step, not on string
+   equality — the contexts carry ancestor predicates the compiled `path` does
+   not. Record the match rate in the analysis; an unmatched context is evidence
+   of a compiler gap, not a reason to guess.
+3. **New evidence kind `SCHEMATRON_CONSTRAINT`** in `compile/mapping.py`,
+   produced by a new contributor called from `_candidates` (line 1241) next to
+   `_vocabulary_candidates`. It never creates a candidate on its own: it
+   **strengthens** an existing WEAK/MEDIUM candidate to actionable when a
+   `required` or `value_set` constraint confirms the leaf, exactly as
+   `boolean_example_discriminator_rules` treats neutral examples as supporting
+   evidence.
+4. **Feed `repeat_by_discriminator`.** `compile/structural.py:518
+   _schematron_unique_codes` already consumes uniqueness assertions; extend it
+   with the 1 134 value-set and 2 463 fixed-value constraints so a repetition
+   rule can name its discriminator domain, and with the `count(…) <= n` bounds
+   so a rule cannot propose more occurrences than the template allows.
+5. **Decision record.** Amend `DEC-017` with the Schematron constraint source
+   and its supporting-evidence-only status, or open `DEC-024` if the reviewer
+   prefers a separate id. State explicitly that a Schematron constraint may
+   never be the *sole* bridge for a mapping.
+
+<a id="c6-impl"></a>
+#### C6. Terminology-association coverage audit
+
+Files: `compile/transaction.py` (lines 438 and 507), `compile/mapping.py`
+(`_semantic_concept_index`, line 167), `compile/terminology.py`,
+`tests/test_core.py`, a dated analysis. **Run after [F1 step 0](#f1-impl).**
+
+##### Measured gap
+
+Both `terminologyAssociation` parse loops in `compile/transaction.py` require
+the element to be a direct child of a `<concept>`. Counting every
+`terminologyAssociation` in the fetched `spec/2026.1.2/` tree by its parent:
+
+| Parent path | Count | Read today |
+|---|---:|---|
+| `concept/concept` | 2 729 | yes |
+| `concept/valueSet` | 669 | **no** |
+| `decor/terminology` | 643 | **no** |
+| `representingTemplate/concept` | 95 | yes |
+| `dataset/concept` | 52 | yes |
+
+**1 312 of 4 188 associations (31 %) sit under a parent the compiler never
+inspects.** In `project-evidence.xml` alone, 643 of 783 associations live in the
+project-level `<decor>/<terminology>` block and carry their subject on
+`@conceptId` rather than by nesting. The compiled model currently retains 300
+associations across 64 of 120 fields.
+
+This does not by itself promise new mappings — a project-level association may
+duplicate a nested one — but the index demonstrably cannot see them, so the
+audit is the only way to know.
+
+##### Steps
+
+1. **Audit first, code second.** Parse the project-level `<terminology>` blocks,
+   resolve each `@conceptId` against the selected concepts, and report how many
+   associations are *new* (subject in the selected model, pair not already
+   indexed) versus duplicates. Publish that count in the analysis before
+   changing the compiler.
+2. **If the new set is non-empty**, extend both loops in
+   `compile/transaction.py` to accept an association addressed by `@conceptId`
+   from a `<terminology>` container, reusing the existing association dict shape
+   and `_association_scope` so provenance and scope stay identical. Keep
+   nesting-derived associations preferred on conflict, and record the container
+   in `form` (`"analysis"` / `"source"` / new `"project-terminology"`).
+3. **Inherited concepts.** Confirm whether an association on a concept reached
+   only through `<inherit>` is indexed; `_semantic_concept_index`
+   (`compile/mapping.py:167`) follows `inherit`/`relationship`/`contains` for
+   *labels* but the association loops do not walk lineage. Quantify, then decide
+   — projecting an association along identity lineage is the same question C2
+   raises in phase 8 and must not be decided here by accident.
+4. **`conceptList` hierarchy for `ordinal`.** The fetched spec carries
+   `@level` on concept-list members (1 094 at level 0, 1 422 at level 1, 14 at
+   level 2). Report whether any *selected* coded field's list is hierarchical
+   and ordered enough to support an `ordinal` transform; if none is, say so and
+   add no transform (`known-issues.md`, "Transform vocabulary").
+5. **Deliverable:** a gap list plus targeted fixes, and no new decision record
+   unless step 3 concludes that lineage projection is needed — in which case it
+   belongs to C2/`DEC-026`, not here.
+
+<a id="phase6-research"></a>
+#### Phase 6 research
+
+**Offline, already done** (recorded above, re-verifiable from the local
+archives): the `SXCM_TS` subtype graph in the pinned core XSD; the absent
+`IVL_TS` branch in the UV Subordinate administration `<choice>`; the
+`representation_type` XSD-base-chain explanation for writable `IVL_TS`; the
+`.10.4040` `width`-only declaration and its compiled consequence; the
+`.10.4058` single-writable-leaf inventory; the Schematron assertion census; the
+`terminologyAssociation` parent census.
+
+**Offline, still to do.**
+
+1. **Schematron context match rate.** Before writing the evidence contributor,
+   measure what fraction of the 5 530 rule contexts resolve to a compiled target
+   by the template-id-plus-trailing-step rule. A low rate means step 2 needs a
+   better matcher, not that the evidence is unusable.
+2. **New-association count for C6.** Step 1 of C6 above; it decides whether C6
+   is a compiler change or a one-paragraph "no gap" analysis.
+3. **`xsi:type` cross-check.** Compare the 3 825 Schematron `xsi:type`
+   assertions against the XSD-derived substitutable sets from B3 finding 1. Two
+   independent sources agreeing is strong evidence for the polymorphic
+   materialization; a disagreement localizes a compiler or publication defect.
+4. **Blast radius of B3 finding 1.** Count how many compiled elements declare a
+   datatype that has XSD extensions and no value-bearing children, so the size
+   of the new target surface is known before the change lands (it affects the
+   `no source` count in the F2 coverage headline).
+
+**Online.** Only one question, and it is not blocking: whether HL7 publishes an
+erratum or clarification on writing `@value` on an `IVL_TS` element that
+declares a required `width` (B3 finding 2). Everything else in phase 6 is
+answerable from the pinned CDA core XSD and the fetched specification; no
+ART-DECOR server access is required.
 
 ### Cross-cutting, specifiable now
 

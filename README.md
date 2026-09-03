@@ -718,3 +718,12 @@ choices, [`docs/architecture.md`](docs/architecture.md) for current package
 boundaries, and [`docs/known-issues.md`](docs/known-issues.md) for intentionally
 remaining work. Dated source analyses are retained separately under
 [`docs/analyses/`](docs/analyses/README.md).
+
+## Release verification
+
+After regenerating the companion `test-workplace` for the selected release and
+transaction, run `make baseline` to refresh both the accepted-field set and the
+persisted coverage-headline counts in
+`tests/fixtures/reference-mapping-audit.json`. Review that fixture change, then
+run `make check`. These are local release checks; this repository does not
+install a CI workflow.

@@ -371,7 +371,16 @@ def cmd_build(args: argparse.Namespace) -> int:
         f"{cda['stats']['targets']} physical named targets, "
         f"{cda['stats'].get('datapoints', 0)} logical mapped datapoints"
     )
-    _say(f"CDA mapped proposal: {sum(value is not None for value in cda_mapping['fields'].values())}/{len(model['fields'])}")
+    audit_path = model_dir / "mapping-audit.json"
+    if audit_path.is_file():
+        accepted_path = _cda_mapping_path(root, release, transaction)
+        _report_coverage(
+            model,
+            cda,
+            load_json(audit_path),
+            cda_mapping,
+            load_json(accepted_path) if accepted_path.is_file() else None,
+        )
     if diagnostics["status"] == "degraded":
         summary = diagnostics["summary"]
         _say(
@@ -659,6 +668,32 @@ def _mapping_lock(
     }
 
 
+def _report_coverage(
+    model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    audit: Mapping[str, Any],
+    current: Mapping[str, Any],
+    baseline: Mapping[str, Any] | None = None,
+) -> None:
+    from .compile.reports import coverage_headline_counts, format_coverage_headline
+
+    if baseline is not None:
+        _say(
+            "coverage  baseline: "
+            + format_coverage_headline(
+                coverage_headline_counts(model, cda, baseline, audit),
+                markdown=False,
+            )
+        )
+    _say(
+        "coverage  current:  "
+        + format_coverage_headline(
+            coverage_headline_counts(model, cda, current, audit),
+            markdown=False,
+        )
+    )
+
+
 def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
     root = _root(args)
     release = selected_release(root)
@@ -696,11 +731,8 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         _say("kept    " + str(destination) + suffix)
         from .compile.mapping import mapping_field_delta
         delta = mapping_field_delta(load_json(destination), load_json(source))
-        _say(
-            "proposal coverage: "
-            f"{len(delta['preserved'])}/{delta['baseline']} accepted mappings retained, "
-            f"{len(delta['gained'])} gained, {len(delta['lost'])} proposal regression(s); "
-            "the accepted mapping remains authoritative"
+        _report_coverage(
+            model, cda, audit, load_json(source), load_json(destination)
         )
         for path in delta["lost"]:
             _say("review  " + str(path))

@@ -1,6 +1,15 @@
 {
   "version": 1,
   "note": "2026.1.2/notaufnahmeregister--60 mapped-field regression baseline",
+  "coverage_headline": {
+    "datapoints": 120,
+    "mapped_datapoints": 95,
+    "mapped_leaves": 97,
+    "suggested_datapoints": 5,
+    "suggested_leaves": 5,
+    "no_target_datapoints": 20,
+    "no_source_leaves": 368
+  },
   "fields": {
     "patient.anschrift.postleitzahl": {
       "selected": true

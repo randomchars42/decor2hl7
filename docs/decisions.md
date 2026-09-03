@@ -254,6 +254,15 @@ The inverse view excludes generic datatype-expansion plumbing and fixed,
 conditional-fixed or system-supplied values rather than reporting the raw
 writable-target inventory as meaningful mapping surface.
 
+`mapping-audit.json` also records one machine-readable `gap` for every
+unselected datapoint/group and for a selected datapoint whose formal terminology
+is unresolved. The gap identifies the first failing gate (`physical`,
+`semantic`, `terminology`, or `blocked_upstream`), a stable kind, and the
+smallest compiled request, target, component, or competing source set that would
+reopen the decision. Generated details render the same evidence on one line;
+the audit summary rolls the keys up and persists the coverage-headline counts so
+release comparisons do not parse Markdown.
+
 A dataset code may map directly to an unfixed writable CDA `hl7:code` element
 when both sides use coded datatypes and share an explicit ValueSet. This permits
 formally associated payloads such as the referral source while preventing a
@@ -387,6 +396,14 @@ the formal domain unresolved; it does not promote dataset labels, a returned
 prefix, or another revision into normative members. Exact value-set revisions
 embedded in another selected build artifact are also supplied to validator
 assembly, matching the model compiler's existing closure view.
+
+The transaction compiler applies that frozen-dynamic policy to its compiled
+terminology index as well. A literal `dynamic` request resolves to the newest
+available frozen revision. If analysis exposes both a dated embedded view and a
+dynamic association for the same OID, the dynamic association is the governing
+binding and the revisions are not unioned. A binding that contains only an
+explicit effective date remains exact and never falls back, preserving
+`DEC-004` identity semantics.
 
 Evidence: `src/decor2hl7/cda/`, `src/decor2hl7/semantics.py`,
 `tests/test_cda_datatypes.py`, `tests/test_core.py`.
@@ -642,6 +659,15 @@ malformed XPath remains untouched and the executable probe still fails closed.
 The same before/after record is written to
 `validator-compilation-errors.txt` for the publication-transform diagnostic
 trail; a logged reviewed repair is not itself a compilation failure.
+
+The same narrow post-generation pass normalizes DECOR-core `@see` values that
+embed the generator machine's absolute `file:///` path and timestamped HTML
+directory. Only that recognized generated URI shape is rewritten to a stable
+workspace-relative documentation URI, and every occurrence is included in the
+same repair manifest/log. External documentation links are preserved. With
+this normalization, `assembled_sha256`, `schematron_sha256`, and
+`validator_sha256` are reproducible and may be pinned by the reference closure
+tests.
 
 `validator-manifest.json` reports `complete` as a claim about the *selected
 transaction document*: every rule that can apply to it was generated. The

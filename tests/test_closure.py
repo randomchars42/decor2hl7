@@ -19,6 +19,12 @@ ALLOWED_BUILD_DEGRADED = {
     "template:2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00",
 }
 MAX_GENERATION_MESSAGES = 3
+MAX_CRAWL_DEGRADED = 56
+MAX_UNAVAILABLE_ARTIFACTS = 20
+EXPECTED_UNRESOLVED_TEMPLATES = 1
+ASSEMBLED_SHA256 = "dcc0192b2a886ba6787b1b6425f0dd94ef62140dcecd618e5d10e1779bec184c"
+SCHEMATRON_SHA256 = "05165794709a99ee12ba697b251499e3c3811ebee315344f6b3166039fa4fd99"
+VALIDATOR_SHA256 = "e85facc96502027591b3b9c6240513f38e286ea4926a043a446985c85ebb9ad5"
 
 
 class ReferenceClosureTests(unittest.TestCase):
@@ -59,6 +65,7 @@ class ReferenceClosureTests(unittest.TestCase):
             return json.load(handle)
 
     def test_build_degradation_stays_inside_reviewed_boundary(self) -> None:
+        """The allowed set may shrink only through a deliberate fixture edit."""
         diagnostics = self._load(self.model_dir / "build-diagnostics.json")
         actual = {
             str(item.get("request_key") or "")
@@ -69,6 +76,23 @@ class ReferenceClosureTests(unittest.TestCase):
             diagnostics.get("summary", {}).get("build_degraded", 0),
             diagnostics.get("summary", {}).get("crawl_degraded", 0),
         )
+
+    def test_closure_counts_and_assembled_input_do_not_regress(self) -> None:
+        diagnostics = self._load(self.model_dir / "build-diagnostics.json")
+        summary = diagnostics.get("summary", {})
+        self.assertLessEqual(summary.get("crawl_degraded", 0), MAX_CRAWL_DEGRADED)
+        self.assertLessEqual(
+            summary.get("unavailable_artifacts", 0), MAX_UNAVAILABLE_ARTIFACTS
+        )
+        self.assertEqual(
+            summary.get("unresolved_templates"), EXPECTED_UNRESOLVED_TEMPLATES
+        )
+        manifest = self._load(
+            self.model_dir / "conformance-validation" / "validator-manifest.json"
+        )
+        self.assertEqual(manifest.get("assembled_sha256"), ASSEMBLED_SHA256)
+        self.assertEqual(manifest.get("schematron_sha256"), SCHEMATRON_SHA256)
+        self.assertEqual(manifest.get("validator_sha256"), VALIDATOR_SHA256)
 
     def test_validator_generation_message_ceiling(self) -> None:
         manifest = self._load(
@@ -111,6 +135,40 @@ class ReferenceClosureTests(unittest.TestCase):
         current = self._load(self.model_dir / "mapping-audit.json")
         delta = mapping_field_delta(baseline, current)
         self.assertEqual(delta["lost"], [])
+        baseline_counts = baseline["coverage_headline"]
+        current_counts = current["summary"]["coverage_headline"]
+        self.assertGreaterEqual(
+            current_counts["mapped_datapoints"],
+            baseline_counts["mapped_datapoints"],
+        )
+        self.assertLessEqual(
+            current_counts["no_target_datapoints"],
+            baseline_counts["no_target_datapoints"],
+        )
+
+    def test_mapping_gaps_are_persisted_and_rendered(self) -> None:
+        audit = self._load(self.model_dir / "mapping-audit.json")
+        for section in ("fields", "groups"):
+            for path, detail in audit[section].items():
+                formal = detail.get("formal_terminology", {})
+                needs_gap = detail.get("selected") is None or (
+                    isinstance(formal, dict)
+                    and formal.get("status") == "unresolved"
+                )
+                if needs_gap:
+                    self.assertIn("gap", detail, f"missing gap for {section}:{path}")
+        terminology_gap = audit["fields"][
+            "administrative_verlegungsentlassungsinformationen.typ_verlegung"
+        ]["gap"]
+        self.assertEqual(
+            (terminology_gap["gate"], terminology_gap["kind"]),
+            ("terminology", "closure"),
+        )
+        details = (self.model_dir / "cda-mapping-details.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("**Gap:** `semantic:shared_target` — reopens with:", details)
+        self.assertIn("**Gap:** `terminology:closure` — reopens with:", details)
 
 
 if __name__ == "__main__":

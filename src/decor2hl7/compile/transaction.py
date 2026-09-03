@@ -736,23 +736,62 @@ def _repeat_for(path: str, nodes: Mapping[str, Mapping[str, Any]]) -> str | None
 
 
 def _resolve_value_set(oid: str, effective: str, value_sets: Mapping[str, Mapping[str, Any]]) -> Mapping[str, Any]:
-    exact = value_sets.get(_value_set_key(oid, effective)) if effective else None
+    # ``dynamic`` is a request policy, not an effective-date identity.  The
+    # compiled terminology index contains only frozen revisions, so resolve a
+    # dynamic request exactly like an undated request and retain the newest
+    # available frozen revision.
+    frozen = "" if effective.strip().casefold() == "dynamic" else effective
+    exact = value_sets.get(_value_set_key(oid, frozen)) if frozen else None
     if exact is not None:
         return exact
     rows = [value for value in value_sets.values() if str(value.get("id") or "") == oid]
-    if not rows or effective:
+    if not rows or frozen:
         return {}
     rows.sort(key=lambda value: str(value.get("effective_date") or ""))
     return rows[-1]
+
+
+def _formal_value_set_refs(
+    field: Mapping[str, Any], value_sets: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    """Return the effective bindings used by formal members and status.
+
+    ART-DECOR analysis can expose both an embedded dated definition and a
+    dynamic terminology association for the same OID.  Those are two views of
+    one binding, not permission to union revisions.  The dynamic association
+    therefore wins for that OID and is frozen to the newest compiled revision;
+    explicit-only bindings remain exact and never fall back.
+    """
+    raw = list(field.get("value_set_refs", [])) or [
+        {"id": oid, "effective_date": ""} for oid in field.get("value_sets", [])
+    ]
+    dynamic_oids = {
+        str(ref.get("id") or "")
+        for ref in raw
+        if str(ref.get("effective_date") or "").strip().casefold() == "dynamic"
+    }
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for ref in raw:
+        oid = str(ref.get("id") or "")
+        effective = str(ref.get("effective_date") or "")
+        if oid in dynamic_oids and effective.strip().casefold() != "dynamic":
+            continue
+        value_set = _resolve_value_set(oid, effective, value_sets)
+        frozen = str(value_set.get("effective_date") or effective)
+        key = (oid, frozen)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append({"id": oid, "effective_date": frozen})
+    return result
 
 
 def _formal_values(
     field: Mapping[str, Any], value_sets: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     values: dict[str, dict[str, Any]] = {}
-    refs = list(field.get("value_set_refs", [])) or [
-        {"id": oid, "effective_date": ""} for oid in field.get("value_sets", [])
-    ]
+    refs = _formal_value_set_refs(field, value_sets)
     for ref in refs:
         oid = str(ref.get("id") or ""); effective = str(ref.get("effective_date") or "")
         value_set = _resolve_value_set(oid, effective, value_sets)
@@ -770,9 +809,7 @@ def _formal_values(
 def _formal_domain_status(
     field: Mapping[str, Any], value_sets: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    refs = list(field.get("value_set_refs", [])) or [
-        {"id": oid, "effective_date": ""} for oid in field.get("value_sets", [])
-    ]
+    refs = _formal_value_set_refs(field, value_sets)
     missing: list[dict[str, str]] = []
     unresolved: list[dict[str, str]] = []
     for ref in refs:
@@ -958,7 +995,7 @@ def compile_model(
             "source": "dataset-analysis",
         }
         field["formal_terminology"] = {
-            "value_sets": list(node.get("value_set_refs", [])),
+            "value_sets": _formal_value_set_refs(node, value_sets),
             "members": formal_values,
             "source": "transaction-binding",
             "status": formal_status["status"],

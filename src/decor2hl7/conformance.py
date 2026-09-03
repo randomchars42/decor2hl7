@@ -732,6 +732,34 @@ def _complete_schematron_namespaces(assembled: Path, schematron: Path) -> None:
 
 
 _SUPPLY_MATCH_DEFECT = "[[hl7:supply]"
+_GENERATED_SEE_URI = re.compile(
+    r'\bsee="(?P<uri>https?://[^"/]+/file:///'
+    r'[^\"]*/generated/[^/\"]+-html-\d{8}T\d{6}/'
+    r'(?P<name>tmp-[^/\"]+\.html))"'
+)
+
+
+def _normalize_generated_see_uris(directory: Path) -> list[dict[str, Any]]:
+    """Remove machine paths and run timestamps from generated ``@see`` URIs."""
+    repairs: list[dict[str, Any]] = []
+    for source in sorted(directory.rglob("*.sch")):
+        text = source.read_text(encoding="utf-8")
+
+        def replace(match: re.Match[str]) -> str:
+            before = match.group("uri")
+            after = f"generated/documentation/{match.group('name')}"
+            repairs.append({
+                "kind": "decor-core-see-uri",
+                "file": source.relative_to(directory).as_posix(),
+                "before": before,
+                "after": after,
+            })
+            return f'see="{after}"'
+
+        updated = _GENERATED_SEE_URI.sub(replace, text)
+        if updated != text:
+            source.write_text(updated, encoding="utf-8")
+    return repairs
 
 
 def _repair_generated_stylesheet(stylesheet: Path) -> list[dict[str, Any]]:
@@ -839,6 +867,7 @@ def generate_transaction_schematron(
             f"{transaction.get('id')}, found {len(candidates)}"
         )
     _complete_schematron_namespaces(assembled, candidates[0])
+    source_repairs = _normalize_generated_see_uris(generated)
     schema = output_dir / "cda-template.sch"
     shutil.copy2(candidates[0], schema)
     # Relative includes are part of the generated schema contract.
@@ -848,7 +877,10 @@ def generate_transaction_schematron(
     shutil.copytree(include, target_include)
     validator = output_dir / "cda-template.xsl"
     compiled = compile_schematron(release_dir, schema, validator)
-    compiled["stylesheet_repairs"] = _repair_generated_stylesheet(validator)
+    compiled["stylesheet_repairs"] = [
+        *source_repairs,
+        *_repair_generated_stylesheet(validator),
+    ]
     compiled["generation_messages"] = [line for line in log.splitlines() if line]
     compiled["generation_message_scopes"] = [
         _generation_message_scope(line, selected_templates)
@@ -881,7 +913,9 @@ def generate_transaction_schematron(
     )
     compilation_error_path = output_dir / "validator-compilation-errors.txt"
     repair_log = "\n".join(
-        "REPAIR {kind}\nbefore: {before}\nafter:  {after}".format(**repair)
+        f"REPAIR {repair['kind']}"
+        + (f" [{repair['file']}]" if repair.get("file") else "")
+        + f"\nbefore: {repair['before']}\nafter:  {repair['after']}"
         for repair in compiled["stylesheet_repairs"]
     )
     diagnostics_log = "\n\n".join(

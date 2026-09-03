@@ -328,6 +328,11 @@ references resolve to a frozen manifest identity.
 
 Editable JSON stores only selections. `mapping-audit.json` stores the structured
 decision record, and both Markdown views are produced from the same analysis.
+Its summary persists the same coverage-headline counts printed by `build` and
+`init-cda-mapping`. Each unselected field/group, plus any selected field with
+unresolved formal terminology, stores one first-failing `gap` gate and the
+smallest concrete evidence that would reopen it. This keeps regression checks
+and human details on one compiled evidence source.
 Short `configuration_notes` are the exception to selection-only minimality:
 they record configured attachments or resolution rules actually used by an
 executable selection and are not themselves semantic evidence.

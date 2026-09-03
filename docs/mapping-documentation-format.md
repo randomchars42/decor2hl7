@@ -452,6 +452,29 @@ parts are legal targets, not instructions to emit empty XML elements.
 
 ## Rules and reasoning
 
+Each datapoint or group that is not executable carries one compact line after
+its prose reason. A selected datapoint also carries the line when its formal
+terminology is unresolved:
+
+```markdown
+**Gap:** `physical:no_writable_leaf` — reopens with: `Medikation.substanceAdministration`
+```
+
+The gate vocabulary is deliberately small:
+
+- `physical`: closure, containment, writable-leaf, ambiguity, or datatype-part
+  evidence is missing;
+- `semantic`: an association, lossless domain, companion, or exclusive shared
+  target decision is missing;
+- `terminology`: a formal ValueSet or CodeSystem request has not closed;
+- `blocked_upstream`: neither a context nor candidate exists yet.
+
+Kinds are stable machine keys: `closure`, `containment`, `no_writable_leaf`,
+`ambiguous_target`, `datatype_component`, `lossy_domain`, `no_association`,
+`shared_target`, `missing_companion`, and `no_candidate`. `reopens_with` contains
+only the smallest concrete request keys, targets/components, or competing field
+paths needed to reconsider the result.
+
 Describe rules through observable behavior:
 
 - which source datapoint or repeat group drives the rule;

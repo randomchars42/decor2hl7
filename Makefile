@@ -1,4 +1,10 @@
-.PHONY: mypy-report
+.PHONY: baseline check mypy-report
+
+check:
+	python3 -m unittest discover -s tests
+
+baseline:
+	python3 scripts/update_reference_baseline.py
 
 mypy-report:
 	@{ \

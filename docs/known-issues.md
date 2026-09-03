@@ -155,6 +155,16 @@ diagnosis. See
 
 ## Remaining active-profile mapping boundaries
 
+The generated `mapping-audit.json` is authoritative for the current boundary:
+each unselected field carries a gate key and minimal reopening evidence rather
+than relying on this hand-maintained prose. The current field partition is
+`semantic:shared_target` (four), `semantic:missing_companion` (one),
+`physical:datatype_component` (nineteen), and
+`physical:no_writable_leaf` (one). One selected field additionally remains
+`terminology:closure` because ValueSet `1.2.276.0.76.11.53` is genuinely
+unresolved. The dated analyses below explain the clinical history; their
+counts may drift without superseding the audit.
+
 Seven non-medication datapoints remain without a suitable target after the
 fresh-snapshot audit. The insurance-relationship identifier has a unique
 writable `associatedEntity/id` in the active open participant after CDA/RIM
@@ -258,6 +268,15 @@ rewrite in `validator-manifest.json` and `validator-compilation-errors.txt`.
 Other malformed XPath still reaches the Saxon probe unchanged; a validator
 that remains invalid or has unresolved generation errors is never executed by
 `validate-cda`.
+
+DECOR-core also emits generated Schematron `@see` links containing the local
+machine path and a timestamped publication directory. The build now rewrites
+only that recognized generated URI shape to a workspace-relative link before
+copying includes or compiling the validator, while preserving external links
+and recording every rewrite. The assembled input, normalized Schematron, and
+compiled validator hashes are therefore reproducible and pinned by the local
+reference closure tests. Raw output from invoking DECOR-core outside this build
+pipeline remains non-reproducible for this reason.
 
 The fetched API forms also do not publish one native complete compiled DECOR
 project. Source-project validation and exact-closure generation are therefore

@@ -592,6 +592,13 @@ The exact module split may evolve. The important invariant is the direction of d
 
 ## Development priorities
 
+Before a release, regenerate the companion reference workspace for its selected
+release/transaction, run `make baseline`, review both the accepted mapping-field
+set and coverage-headline counts in the fixture, and run `make check`. The
+closure tests also pin the reviewed degradation ceilings and normalized
+validator hashes. These checks are intentionally local unless a CI host and
+access policy are chosen separately.
+
 1. Continue the remaining allergy payload work after the generic open-domain
    mapping made `Agens` executable at the bound allergen `playingEntity/code`:
    decide description/narrative placement and represent the derived diagnosis

@@ -413,6 +413,67 @@ def _counted(count: int, singular: str) -> str:
     return f"{count} {singular if count == 1 else plural}"
 
 
+def coverage_headline_counts(
+    model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    mapping: Mapping[str, Any],
+    audit: Mapping[str, Any],
+) -> dict[str, int]:
+    """Return the stable mapping-coverage headline as comparable counts."""
+    coverage = _coverage_index(model, cda, mapping, audit)
+    covered_targets = {
+        str(target)
+        for category in ("selected", "suggested")
+        for targets in coverage[category].values()
+        for target in targets
+    }
+    no_source = sum(
+        _reportable_cda_target(target)
+        and str(name) not in covered_targets
+        and _location(target.get("locations", [""])[0]) is not None
+        for name, target in cda.get("targets", {}).items()
+    )
+    return {
+        "datapoints": len(model.get("fields", {})),
+        "mapped_datapoints": len(coverage["selected"]),
+        "mapped_leaves": sum(
+            len(targets) for targets in coverage["selected"].values()
+        ),
+        "suggested_datapoints": len(coverage["suggested"]),
+        "suggested_leaves": sum(
+            len(targets) for targets in coverage["suggested"].values()
+        ),
+        "no_target_datapoints": len(coverage["missing"]),
+        "no_source_leaves": no_source,
+    }
+
+
+def format_coverage_headline(
+    counts: Mapping[str, int], *, markdown: bool = True,
+) -> str:
+    """Format persisted coverage counts for Markdown or build logs."""
+    marker = "**" if markdown else ""
+
+    def emphasized(value: str) -> str:
+        return f"{marker}{value}{marker}"
+
+    mapped = (
+        f"{counts['mapped_datapoints']} dp → "
+        f"{_counted(counts['mapped_leaves'], 'leaf')}"
+    )
+    suggested = (
+        f"{counts['suggested_datapoints']} dp → "
+        f"{_counted(counts['suggested_leaves'], 'leaf')}"
+    )
+    return (
+        f"Model: {emphasized(_counted(counts['datapoints'], 'datapoint'))} · "
+        f"✓ mapped {emphasized(mapped)} · "
+        f"! suggested {emphasized(suggested)} · "
+        f"× no target {emphasized(str(counts['no_target_datapoints']) + ' dp')} · "
+        f"○ no source {emphasized(_counted(counts['no_source_leaves'], 'leaf'))}"
+    )
+
+
 def _mapping_status(row: Mapping[str, Any]) -> str:
     rule = row.get("rule", {})
     if isinstance(rule, Mapping) and rule.get("structure"):
@@ -880,22 +941,18 @@ def render_cda_mapping_markdown(
     rows_by_section = view["rows"]
     sections = view["sections"]
     template = view["template"]
-    mapped_datapoints = len(coverage["selected"])
-    mapped_leaves = sum(len(targets) for targets in coverage["selected"].values())
-    suggested_datapoints = len(coverage["suggested"])
-    suggested_leaves = sum(len(targets) for targets in coverage["suggested"].values())
-    no_target_datapoints = len(coverage["missing"])
+    headline_counts = coverage_headline_counts(model, cda, mapping, audit)
+    # The tree supplies the acceptance check for the independently reusable
+    # count helper; both must describe the same reportable inverse surface.
+    if headline_counts["no_source_leaves"] != no_source_count:
+        raise ValueError("coverage headline and CDA coverage tree disagree")
     lines = [
         "# Dataset-to-CDA mapping",
         "",
         f"Template: **{template.get('display_name') or template.get('name') or 'ClinicalDocument'}** "
         f"(`{template.get('id')}` @ `{template.get('effective_date')}`)",
         "",
-        f"Model: **{_counted(len(model.get('fields', {})), 'datapoint')}** · "
-        f"✓ mapped **{mapped_datapoints} dp → {_counted(mapped_leaves, 'leaf')}** · "
-        f"! suggested **{suggested_datapoints} dp → {_counted(suggested_leaves, 'leaf')}** · "
-        f"× no target **{no_target_datapoints} dp** · "
-        f"○ no source **{_counted(no_source_count, 'leaf')}**",
+        format_coverage_headline(headline_counts),
         "",
         "- ✓ **Mapped** — selected executable mapping.",
         "- ! **Suggested** — a suitable writable CDA leaf exists, but no executable mapping is selected.",

@@ -1738,6 +1738,11 @@ def _annotate_targets(
                     prohibited = str(node.get("conformance") or "").upper() == "NP"
                     target["prohibited"] = prohibited
                     target["conformance"] = node.get("conformance")
+                    # Preserve the effective DEC-021 openness predicate on the
+                    # flattened target used by mapping analysis.  This is the
+                    # same inherited value that governs CDA/RIM expansion and
+                    # reviewed extension attachment validation.
+                    target["is_closed"] = bool(node.get("is_closed"))
                     target["locations"].append(".".join(map(str, here)))
                     # For an element target, repetition of the target element
                     # itself is its cardinality, not an additional enclosing

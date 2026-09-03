@@ -5,6 +5,7 @@ import unittest
 import xml.etree.ElementTree as ET
 import json
 from pathlib import Path
+from typing import Any, Mapping
 from urllib.parse import urlsplit
 from unittest.mock import patch
 
@@ -25,7 +26,8 @@ from decor2hl7.cda.compile import compile_cda_model
 from decor2hl7.cda.datatypes import value_representation
 from decor2hl7.cda.extensions import load_extensions
 from decor2hl7.compile.reports import (
-    _outline_datapoint_lines, render_cda_mapping_markdown,
+    _outline_datapoint_lines, coverage_headline_counts,
+    format_coverage_headline, render_cda_mapping_markdown,
 )
 from decor2hl7.compile.terminology import domain_difference
 from decor2hl7.retrieval.artifacts import artifact_problems, artifact_record, closure_records
@@ -822,6 +824,22 @@ class CoreTests(unittest.TestCase):
             }]}},
         }
         report = render_cda_mapping_markdown(model, cda_model, mapping_cfg, audit)
+        counts = coverage_headline_counts(model, cda_model, mapping_cfg, audit)
+        self.assertEqual(counts, {
+            "datapoints": 3,
+            "mapped_datapoints": 2,
+            "mapped_leaves": 2,
+            "suggested_datapoints": 1,
+            "suggested_leaves": 1,
+            "no_target_datapoints": 0,
+            "no_source_leaves": 1,
+        })
+        self.assertEqual(
+            format_coverage_headline(counts, markdown=False),
+            "Model: 3 datapoints · ✓ mapped 2 dp → 2 leaves · "
+            "! suggested 1 dp → 1 leaf · × no target 0 dp · "
+            "○ no source 1 leaf",
+        )
         self.assertIn(
             "Model: **3 datapoints** · ✓ mapped **2 dp → 2 leaves** · "
             "! suggested **1 dp → 1 leaf** · × no target **0 dp** · "
@@ -1572,6 +1590,154 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(audit_delta["preserved"], ["a"])
             self.assertEqual(audit_delta["lost"], ["b"])
             self.assertEqual(audit_delta["gained"], ["c"])
+
+    def test_gap_classifier_labels_each_reopening_gate(self) -> None:
+        classify = mapping_compiler._gap_classification
+        context = {
+            "target": "Section.entry",
+            "node": {
+                "template_id": "section-template",
+                "template_effective_date": "2026",
+                "is_closed": False,
+                "locations": ["0.1"],
+            },
+        }
+        candidate = {
+            "target": "Observation.value",
+            "node": {"logical_types": ["code"], "locations": ["0.1.0"]},
+        }
+        cases: list[tuple[
+            str,
+            Mapping[str, Any],
+            Mapping[str, Any],
+            list[Mapping[str, Any]],
+            Mapping[str, Any] | None,
+        ]] = [
+            (
+                "semantic:shared_target",
+                {
+                    "selected": None, "primary": candidate,
+                    "runtime_blocked": "SHARED(2)",
+                    "shared_target_fields": ["case.a", "case.b"],
+                },
+                {}, [], None,
+            ),
+            (
+                "semantic:missing_companion",
+                {
+                    "selected": None, "primary": candidate,
+                    "runtime_blocked": "REQUIRED_COMPANION(Observation.event)",
+                    "required_companions": ["Observation.event"],
+                },
+                {}, [], None,
+            ),
+            (
+                "terminology:closure",
+                {"selected": "Observation.value"},
+                {"formal_terminology": {
+                    "status": "unresolved",
+                    "missing_value_sets": [{"id": "vs", "effective_date": "2026"}],
+                    "unresolved_includes": [],
+                }},
+                [], None,
+            ),
+            (
+                "physical:closure",
+                {"selected": None, "context": context},
+                {},
+                [{"template": "section-template", "flexibility": "2026"}],
+                None,
+            ),
+            (
+                "physical:containment",
+                {
+                    "selected": None, "context": context,
+                    "unresolved_reason": "structural_only",
+                    "alternatives": [{
+                        "target": "Detached.entry",
+                        "node": {
+                            "template_id": "detached-template",
+                            "template_effective_date": "2026",
+                            "locations": [],
+                        },
+                    }],
+                },
+                {}, [], None,
+            ),
+            (
+                "physical:no_writable_leaf",
+                {
+                    "selected": None, "context": context,
+                    "unresolved_reason": "structural_only",
+                },
+                {}, [], None,
+            ),
+            (
+                "physical:ambiguous_target",
+                {
+                    "selected": None,
+                    "unresolved_reason": "ambiguous_value_target",
+                    "alternatives": [candidate, {"target": "Observation.text", "node": {}}],
+                },
+                {}, [], None,
+            ),
+            (
+                "physical:datatype_component",
+                {
+                    "selected": None, "context": context,
+                    "unresolved_reason": "datatype_component_available",
+                },
+                {}, [], {"targets": {
+                    "Section.code": {
+                        "writable": True, "locations": ["0.1.0"],
+                    },
+                    "Section.deep": {
+                        "writable": True, "locations": ["0.1.0.0"],
+                    },
+                }},
+            ),
+            (
+                "semantic:lossy_domain",
+                {
+                    "selected": None,
+                    "unresolved_reason": "incompatible_value_type",
+                    "alternatives": [candidate],
+                },
+                {"type": "datetime"}, [], None,
+            ),
+            (
+                "semantic:no_association",
+                {
+                    "selected": None, "context": context,
+                    "unresolved_reason": "no_semantic_evidence",
+                },
+                {}, [], None,
+            ),
+            (
+                "blocked_upstream:no_candidate",
+                {"selected": None, "unresolved_reason": "no_semantic_evidence"},
+                {}, [], None,
+            ),
+        ]
+        for expected, detail, field, unresolved, cda_model in cases:
+            with self.subTest(expected=expected):
+                gap = classify("case.a", detail, field, unresolved, cda_model)
+                self.assertIsNotNone(gap)
+                assert gap is not None
+                self.assertEqual(f"{gap['gate']}:{gap['kind']}", expected)
+                self.assertIsInstance(gap["reopens_with"], list)
+                if expected == "physical:datatype_component":
+                    self.assertEqual(
+                        gap["reopens_with"],
+                        ["Section.entry", "Section.code"],
+                    )
+
+        self.assertIsNone(classify(
+            "case.complete",
+            {"selected": "Observation.value"},
+            {"formal_terminology": {"status": "bound", "complete": True}},
+            [],
+        ))
 
     def test_semantic_negation_transform_beats_unrelated_named_code_slot(self) -> None:
         model = {"groups": {}, "fields": {"measures.isolation": {
@@ -3193,6 +3359,44 @@ class CoreTests(unittest.TestCase):
                 field["formal_terminology"]["missing_value_sets"][0]["id"],
                 "missing-vs",
             )
+
+    def test_dynamic_value_set_binding_freezes_without_unioning_revisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            transaction = directory / "transaction.xml"
+            terminology = directory / "terminology.xml"
+            transaction.write_text('''<dataset>
+              <concept id="dynamic" shortName="dynamic" type="item">
+                <name>Dynamic</name>
+                <valueDomain type="code"/>
+                <valueSet id="vs" effectiveDate="2020"><concept code="old" codeSystem="cs" displayName="Old"/></valueSet>
+                <terminologyAssociation valueSet="vs" flexibility="dynamic"/>
+              </concept>
+              <concept id="exact" shortName="exact" type="item">
+                <name>Exact</name>
+                <valueDomain type="code"/>
+                <valueSet id="vs" effectiveDate="2019"/>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            terminology.write_text('''<decor>
+              <valueSet id="vs" effectiveDate="2021">
+                <concept code="new" codeSystem="cs" displayName="New"/>
+              </valueSet>
+            </decor>''', encoding="utf-8")
+
+            model = compile_model(transaction, [terminology])
+            dynamic = model["fields"]["dynamic"]
+            self.assertEqual(dynamic["formal_terminology"]["status"], "bound")
+            self.assertEqual(
+                dynamic["formal_terminology"]["value_sets"],
+                [{"id": "vs", "effective_date": "2021"}],
+            )
+            self.assertEqual(set(dynamic["accepted_values"]), {"New"})
+            self.assertNotIn("Old", dynamic["accepted_values"])
+
+            exact = model["fields"]["exact"]
+            self.assertEqual(exact["formal_terminology"]["status"], "unresolved")
+            self.assertEqual(exact.get("accepted_values", {}), {})
 
     def test_empty_owned_concept_list_is_explicitly_unconstrained(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

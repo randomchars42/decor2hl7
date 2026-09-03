@@ -974,6 +974,215 @@ def _unresolved_reason(
     return "no_semantic_evidence"
 
 
+def _request_key(kind: str, identity: Mapping[str, Any]) -> str:
+    oid = str(
+        identity.get("id")
+        or identity.get("ref")
+        or identity.get("code_system")
+        or identity.get("template_id")
+        or ""
+    )
+    effective = str(
+        identity.get("effective_date")
+        or identity.get("flexibility")
+        or identity.get("template_effective_date")
+        or ""
+    )
+    if effective.strip().casefold() == "dynamic":
+        effective = ""
+    return f"{kind}:{oid}" + (f"@{effective}" if effective else "")
+
+
+def _gap_classification(
+    path: str,
+    detail: Mapping[str, Any],
+    field: Mapping[str, Any],
+    unresolved_templates: list[Mapping[str, Any]],
+    cda: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Describe the first gate that prevents a complete field decision.
+
+    A selected field is complete unless its formal terminology is explicitly
+    unresolved.  ``unbound`` and logical-only domains are not terminology
+    failures for scalar fields that do not claim a formal binding.
+    """
+    formal = field.get("formal_terminology", {})
+    if isinstance(formal, Mapping) and formal.get("status") == "unresolved":
+        reopening = [
+            _request_key("valueset", item)
+            for item in formal.get("missing_value_sets", [])
+            if isinstance(item, Mapping)
+        ] + [
+            _request_key(
+                "valueset" if item.get("ref") else "codesystem", item
+            )
+            for item in formal.get("unresolved_includes", [])
+            if isinstance(item, Mapping)
+        ]
+        return {
+            "gate": "terminology",
+            "kind": "closure",
+            "reopens_with": list(dict.fromkeys(key for key in reopening if key)),
+        }
+
+    if detail.get("selected") is not None:
+        return None
+
+    blocked = str(detail.get("runtime_blocked") or "")
+    primary = detail.get("primary", {})
+    primary_target = (
+        str(primary.get("target") or "")
+        if isinstance(primary, Mapping) else ""
+    )
+    if blocked.startswith(("SHARED(", "WEAKER_SHARED_TARGET(")):
+        fields = [
+            str(item) for item in detail.get("shared_target_fields", []) if item
+        ]
+        weaker = re.fullmatch(r"WEAKER_SHARED_TARGET\((.+)\)", blocked)
+        if weaker:
+            fields.extend([path, weaker.group(1)])
+        reopening = sorted(set(fields))
+        if primary_target:
+            reopening.append(primary_target)
+        return {
+            "gate": "semantic", "kind": "shared_target",
+            "reopens_with": reopening,
+        }
+    if blocked.startswith("REQUIRED_COMPANION("):
+        return {
+            "gate": "semantic", "kind": "missing_companion",
+            "reopens_with": [
+                str(item) for item in detail.get("required_companions", [])
+            ],
+        }
+
+    context = detail.get("context", {})
+    context_node = (
+        context.get("node", {}) if isinstance(context, Mapping) else {}
+    )
+    context_template = (
+        str(context_node.get("template_id") or "")
+        if isinstance(context_node, Mapping) else ""
+    )
+    unresolved = [
+        item for item in unresolved_templates
+        if str(item.get("template") or "") == context_template
+    ]
+    if unresolved:
+        return {
+            "gate": "physical", "kind": "closure",
+            "reopens_with": [
+                _request_key("template", {
+                    "id": item.get("template"),
+                    "effective_date": item.get("flexibility"),
+                })
+                for item in unresolved
+            ],
+        }
+
+    reason = str(detail.get("unresolved_reason") or "")
+    candidates = [
+        item for item in [detail.get("primary"), *detail.get("alternatives", [])]
+        if isinstance(item, Mapping)
+    ]
+    candidate_targets = list(dict.fromkeys(
+        str(item.get("target") or "") for item in candidates
+        if item.get("target")
+    ))
+    context_target = (
+        str(context.get("target") or "") if isinstance(context, Mapping) else ""
+    )
+
+    if reason == "structural_only":
+        # DEC-021 requires an exact stranded template as well as an open
+        # context.  Openness alone never implies that an attachment exists.
+        unlocated_templates = list(dict.fromkeys(
+            _request_key("template", node)
+            for item in candidates
+            for node in [item.get("node", {})]
+            if isinstance(node, Mapping)
+            and node.get("template_id")
+            and not node.get("locations")
+        ))
+        if (
+            isinstance(context_node, Mapping)
+            and context_node.get("is_closed") is False
+            and unlocated_templates
+        ):
+            return {
+                "gate": "physical", "kind": "containment",
+                "reopens_with": unlocated_templates,
+            }
+        return {
+            "gate": "physical", "kind": "no_writable_leaf",
+            "reopens_with": [context_target] if context_target else [],
+        }
+    if reason == "ambiguous_value_target":
+        return {
+            "gate": "physical", "kind": "ambiguous_target",
+            "reopens_with": candidate_targets,
+        }
+    if reason == "datatype_component_available":
+        components: list[str] = []
+        if cda is not None and isinstance(context_node, Mapping):
+            context_locations = [
+                str(value) for value in context_node.get("locations", [])
+            ]
+            if len(context_locations) == 1:
+                root = context_locations[0]
+                components = [
+                    str(name) for name, target in cda.get("targets", {}).items()
+                    for locations in [[str(value) for value in target.get("locations", [])]]
+                    if target.get("writable")
+                    and len(locations) == 1
+                    and locations[0].startswith(root + ".")
+                    and len(locations[0].split(".")) == len(root.split(".")) + 1
+                ]
+            else:
+                root_path = str(context_node.get("path") or "").rstrip("/")
+                components = [
+                    str(name) for name, target in cda.get("targets", {}).items()
+                    if target.get("writable")
+                    and str(target.get("path") or "").startswith(root_path + "/")
+                    and str(target.get("path") or "").count("/")
+                    == root_path.count("/") + 1
+                ]
+        return {
+            "gate": "physical", "kind": "datatype_component",
+            "reopens_with": list(dict.fromkeys(
+                ([context_target] if context_target else []) + components
+            )),
+        }
+    if reason == "incompatible_value_type":
+        target_types = sorted({
+            str(value)
+            for item in candidates
+            for value in item.get("node", {}).get("logical_types", [])
+            if isinstance(item.get("node"), Mapping) and value
+        })
+        return {
+            "gate": "semantic", "kind": "lossy_domain",
+            "reopens_with": [
+                f"source_type:{field.get('type') or 'unknown'}",
+                *(f"target_type:{value}" for value in target_types),
+            ],
+        }
+    if reason == "no_semantic_evidence" and context_target:
+        return {
+            "gate": "semantic", "kind": "no_association",
+            "reopens_with": [context_target],
+        }
+    if not context_target and not candidate_targets:
+        return {
+            "gate": "blocked_upstream", "kind": "no_candidate",
+            "reopens_with": [],
+        }
+    return {
+        "gate": "semantic", "kind": "no_association",
+        "reopens_with": [context_target] if context_target else candidate_targets,
+    }
+
+
 
 def _words(value: str) -> set[str]:
     parts = re.findall(r"[A-Za-zÄÖÜäöüß]+", value or "")
@@ -2297,12 +2506,14 @@ def _cda_mapping_analysis(
                 fields[path] = None
                 details[path]["selected"] = None
                 details[path]["runtime_blocked"] = f"WEAKER_SHARED_TARGET({winner})"
+                details[path]["shared_target_fields"] = list(paths)
             details[winner]["shared_target_winner"] = True
             continue
         for path in paths:
             fields[path] = None
             details[path]["selected"] = None
             details[path]["runtime_blocked"] = f"SHARED({len(paths)})"
+            details[path]["shared_target_fields"] = list(paths)
 
     structures.update(_for_each_rules(model, cda, fields, group_results))
 
@@ -2411,6 +2622,22 @@ def _cda_mapping_analysis(
         details[path].pop("unresolved_reason", None)
 
     _block_unsatisfied_non_null_requirements(fields, details, cda)
+
+    # Classify the final decision state only after shared-target, occurrence,
+    # and compound-datatype passes have had a chance to change executability.
+    unresolved_templates = list(cda.get("unresolved_templates", []))
+    for path, detail in all_details.items():
+        if detail.get("selected") is None and not detail.get("unresolved_reason"):
+            detail["unresolved_reason"] = _unresolved_reason(
+                detail.get("alternatives", []), detail.get("context")
+            )
+        gap = _gap_classification(
+            path, detail, all_nodes.get(path, {}), unresolved_templates, cda
+        )
+        if gap is not None:
+            detail["gap"] = gap
+        else:
+            detail.pop("gap", None)
 
     proposal = {
         "version": 6,
@@ -2632,6 +2859,16 @@ def _cda_mapping_analysis(
             out += ["**Selected:** none", ""]
 
         out += ["**Reason:**", "", reason_for(path, detail), ""]
+        gap = detail.get("gap")
+        if isinstance(gap, Mapping):
+            reopening = ", ".join(
+                f"`{item}`" for item in gap.get("reopens_with", [])
+            ) or "none currently recorded"
+            out += [
+                f"**Gap:** `{gap.get('gate')}:{gap.get('kind')}` — "
+                f"reopens with: {reopening}",
+                "",
+            ]
 
         rows = candidate_rows(path, detail, 8 if detailed else 5)
         if rows:
@@ -2878,6 +3115,14 @@ def _cda_mapping_analysis(
                 if detail.get("required_companions") else {}
             ),
             **(
+                {"unresolved_reason": detail["unresolved_reason"]}
+                if detail.get("unresolved_reason") else {}
+            ),
+            **(
+                {"gap": dict(detail["gap"])}
+                if detail.get("gap") else {}
+            ),
+            **(
                 {"structural_rule": detail["structural_rule"]}
                 if detail.get("structural_rule") else {}
             ),
@@ -2919,11 +3164,21 @@ def _cda_mapping_analysis(
                 )
                 for detail in details.values()
             ),
+            "gaps": dict(Counter(
+                f"{gap['gate']}:{gap['kind']}"
+                for detail in all_details.values()
+                for gap in [detail.get("gap")]
+                if isinstance(gap, Mapping)
+            )),
             "structural_rules": Counter(
                 str(rule.get("type") or "unknown") for rule in structures.values()
             ),
         },
     }
+    from .reports import coverage_headline_counts
+    audit["summary"]["coverage_headline"] = coverage_headline_counts(
+        model, cda, proposal, audit
+    )
     return (
         proposal,
         audit,

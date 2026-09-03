@@ -15,6 +15,7 @@ from decor2hl7.cda.core import CORE_FILES, CORE_REVISION, core_paths
 from decor2hl7.conformance import (
     _complete_schematron_namespaces,
     _generation_message_scope,
+    _normalize_generated_see_uris,
     _repair_generated_stylesheet,
     _safe_member,
     _extract_cda,
@@ -30,6 +31,39 @@ from decor2hl7.retrieval.fetch import _fetch_direct
 
 
 class ConformanceTests(unittest.TestCase):
+    def test_generated_see_uris_are_workspace_relative_and_reproducible(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            left = root / "left"
+            right = root / "right"
+            left.mkdir()
+            right.mkdir()
+            filename = "tmp-1.2.3-2026-01-01T000000.html"
+            for directory, machine, stamp in (
+                (left, "machine-a/work", "20260903T201617"),
+                (right, "machine-b/elsewhere", "20261004T091011"),
+            ):
+                (directory / "rule.sch").write_text(
+                    '<assert see="http://aktin.art-decor.pub/file:///'
+                    f'{machine}/generated/aktin-html-{stamp}/{filename}" '
+                    'test="true()"/>'
+                    '<assert see="https://docs.art-decor.org/stable" '
+                    'test="true()"/>',
+                    encoding="utf-8",
+                )
+
+            left_repairs = _normalize_generated_see_uris(left)
+            right_repairs = _normalize_generated_see_uris(right)
+            self.assertEqual(len(left_repairs), 1)
+            self.assertEqual(len(right_repairs), 1)
+            self.assertEqual(
+                (left / "rule.sch").read_bytes(),
+                (right / "rule.sch").read_bytes(),
+            )
+            normalized = (left / "rule.sch").read_text(encoding="utf-8")
+            self.assertIn(f'see="generated/documentation/{filename}"', normalized)
+            self.assertIn('see="https://docs.art-decor.org/stable"', normalized)
+
     def test_generation_message_scope_follows_the_selected_document(self) -> None:
         """A skipped rule only counts when its context template is instantiated."""
         message = "ERROR  : +++ value set skipped for use in schematron because the value set contents are not defined - value set 2.16.840.1.113762.1.4.1021.30: dynamic in rule MedicationActivity: 2013-01-31T00:00:00 (context=*[cda:substanceAdministration[cda:templateId[@root = '2.16.840.1.113883.10.20.22.4.16']]]/cda:substanceAdministration/cda:administrationUnitCode)"
