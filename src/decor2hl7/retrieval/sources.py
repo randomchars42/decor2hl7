@@ -10,6 +10,16 @@ from typing import Any, Mapping
 
 
 SOURCE_MODES = {"alias", "builtin", "waiver"}
+# Only a reviewed supplement that claims `complete` may satisfy a required
+# dependency; every other completeness keeps the artifact visibly degraded
+# (`DEC-012`).  `fetch.py::_materialize_external` enforces the consequence.
+SOURCE_COMPLETENESS = {
+    "complete", "partial", "fragment", "spec-only", "unavailable",
+}
+SATISFYING_COMPLETENESS = "complete"
+# A reviewed external catalog entry is only auditable when it says where the
+# claim comes from and under which terms it may be carried (`DEC-012`).
+EXTERNAL_PROVENANCE_FIELDS = ("source_url", "source_version", "license")
 SOURCE_KINDS = {"dataset", "concept", "template", "valueset", "codesystem"}
 RESOLUTION_FIELDS = ("effective_date", "project", "api_base", "publication_url")
 EXTERNAL_FIELDS = (
@@ -121,6 +131,23 @@ def load_source_hints(override: Path | None = None) -> SourceHints:
                         )
             if mode == "waiver" and not normalized.get("reason"):
                 raise ValueError(f"waiver source hint {key!r} requires 'reason'")
+            if mode in {"builtin", "waiver"}:
+                missing = [
+                    name for name in EXTERNAL_PROVENANCE_FIELDS
+                    if not normalized.get(name)
+                ]
+                if missing:
+                    raise ValueError(
+                        f"{mode} source hint {key!r} requires provenance fields "
+                        f"{missing}"
+                    )
+            completeness = normalized.get("completeness", "")
+            if completeness and completeness not in SOURCE_COMPLETENESS:
+                raise ValueError(
+                    f"source hint {key!r} has unsupported completeness "
+                    f"{completeness!r}; supported values are "
+                    f"{sorted(SOURCE_COMPLETENESS)}"
+                )
             result[key] = normalized
             if configured_source:
                 configured_artifacts.add(key)

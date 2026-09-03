@@ -300,7 +300,9 @@ def _compiler_inputs(root: Path) -> dict[str, Any]:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    from .compile.artifacts import configured_source_rules, write_build_diagnostics
+    from .compile.artifacts import (
+        configured_source_rules, selected_closure_templates, write_build_diagnostics,
+    )
     from .compile.mapping import write_code_mapping
     from .cda.compile import write_cda_model
     from .cda.core import core_paths
@@ -350,7 +352,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     )
     from .conformance import build_conformance_artifacts
     conformance = build_conformance_artifacts(
-        release_spec_dir(root, release), model_dir, inputs, release, transaction
+        release_spec_dir(root, release), model_dir, inputs, release, transaction,
+        selected_closure_templates(cda),
     )
     diagnostics = write_build_diagnostics(model_dir, inputs, cda, model)
     model["meta"]["artifact_closure"].update({
@@ -385,6 +388,13 @@ def cmd_build(args: argparse.Namespace) -> int:
         f"{validation_summary.get('warning', 0)} warnings; "
         f"see {model_dir / 'conformance-validation' / 'build-conformance.md'}"
     )
+    if getattr(args, "fail_on_degraded", False) and diagnostics.get("build_degraded"):
+        _say(
+            "error: --fail-on-degraded rejected the degraded build: "
+            f"{diagnostics['summary']['build_degraded']} degraded artifacts "
+            "affect this build"
+        )
+        return 2
     return 0
 
 
@@ -1256,12 +1266,23 @@ def parser() -> argparse.ArgumentParser:
     q.add_argument("--max-requests", type=int, default=1500)
     q.add_argument(
         "--fail-on-degraded", action="store_true",
-        help="return nonzero when required retrieval dependencies are degraded",
+        help=(
+            "return nonzero when the retrieval closure is degraded; the crawl "
+            "cannot yet tell which gaps a build consumes, so use "
+            "`build --fail-on-degraded` to gate on that"
+        ),
     )
     _add_network_override(q)
     q.set_defaults(func=cmd_fetch)
 
     q = sub.add_parser("build", help="compile ART-DECOR models and CDA mapping proposal")
+    q.add_argument(
+        "--fail-on-degraded", action="store_true",
+        help=(
+            "return nonzero when a degraded artifact is consulted by this build "
+            "(build-diagnostics.json `build_degraded`)"
+        ),
+    )
     q.set_defaults(func=cmd_build)
 
     q = sub.add_parser("propose-input", help="inspect CSV input and propose CSV/code mappings")

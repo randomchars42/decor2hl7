@@ -205,6 +205,16 @@ template compiler affects the headline build status. A CodeSystem reference
 under a non-code value domain or beside complete inline members is display
 evidence unless another standalone ValueSet genuinely requires it.
 
+A generated validator ValueSet counts only when the rule that needs it can
+apply to the selected document. The publication transform emits rules for every
+template the assembled specification reaches, including branches of referenced
+projects the selected document never instantiates. A template belongs to the
+selected closure when at least one of its compiled targets holds a document
+location; a generation message whose rule context names only templates outside
+that set reports an upstream gap this build does not consume. A message with no
+recognisable template context stays inside the closure, so an unparsed message
+can never silently narrow the reported degradation.
+
 Evidence: `src/decor2hl7/compile/artifacts.py`, `docs/architecture.md`,
 `docs/known-issues.md`.
 
@@ -246,8 +256,8 @@ Evidence: `src/decor2hl7/compile/mapping.py`,
 
 ## DEC-012 — External artifact supplements and waivers
 
-**Decision:** open — review required
-**Implementation:** partial — provisional phase 1
+**Decision:** accepted
+**Implementation:** verified
 
 ART-DECOR references may identify specifications or terminologies whose content
 is maintained only by an external publisher. A provisional phase-1 mechanism
@@ -268,11 +278,44 @@ bytes are not trusted when an existing manifest checksum, a builtin catalog
 checksum, requested identity or static revision contradicts them.
 
 The implementation does not establish a generic scraper or publisher API
-framework. It also does not decide that every current catalog entry is
-authoritative. The initial completeness claim for CodeSystem
-`1.2.276.0.76.5.401`, the provisional split-dose waiver, redistribution terms,
-and the rules by which an external artifact may satisfy a required dependency
-must be reviewed before this decision can be accepted.
+framework. A `download`, `fhir`, `mediawiki` or licensed local-file mode is
+added only for a concrete required artifact from a specific reviewed source.
+
+**When an external artifact may satisfy a required dependency.** Only a
+`builtin` can, and only when all of the following hold: its catalog entry
+declares `completeness: "complete"`; its bytes match the recorded `sha256`; the
+payload parses and contains the requested artifact kind and id; and its
+`effectiveDate` equals the requested revision exactly. Any other completeness is
+recorded as `partial`, which stays an unavailable compiler input. A `waiver`
+never satisfies a required dependency in any circumstance: it settles an absence
+with cited reasoning and keeps the artifact visibly degraded.
+
+**Every `builtin` and `waiver` entry carries its own provenance.** The catalog
+rejects an entry without `source_url`, `source_version` and `license`; a
+`waiver` also requires `reason` and a `builtin` also requires `artifact`,
+`sha256` and `completeness`. `completeness` is restricted to `complete`,
+`partial`, `fragment`, `spec-only` or `unavailable`, so the value that decides
+whether a supplement may satisfy a dependency cannot be free text.
+
+The reviewed catalog currently holds one builtin and three waivers:
+
+- CodeSystem `1.2.276.0.76.5.401` — a ten-code builtin derived from the public
+  HL7 Germany metastasis table, marked complete.
+- Template `1.3.6.1.4.1.19376.1.5.3.1.4.9` — spec-only waiver; IHE presents the
+  OID as a split-dose discriminator under Medication Entry and publishes no
+  independent template body.
+- CodeSystem `1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00` — waiver. The
+  cross-project lookup answers 404 and the dated extract answers 404 in every
+  candidate project, so the AKTIN ValueSet `1.2.276.0.76.11.53` that includes it
+  intensionally expands to no members and its bound field keeps a
+  non-executable enumeration. No exact revision is published by DIVI or HL7
+  Germany, so a builtin would have to invent an identity.
+- Template `2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00` — waiver. The
+  Continuity of Care Document project `ccd1-` is the only publisher of the OID
+  and holds exactly one revision, `2007-04-01T00:00:00`, which is already cached
+  from `pmp-` under its own identity and must not substitute the requested one
+  (`DEC-004`). The omission is scoped to the SPEC refinement: both children
+  still compile from their own constraints plus the pinned CDA/RIM expansion.
 
 The IHE Medicine Entry
 `1.3.6.1.4.1.19376.1.9.1.3.1@2019-08-27T16:13:43` is not a candidate for a
@@ -285,7 +328,8 @@ used to alter that template relationship.
 
 Evidence: `docs/analyses/2026-08-30-external-artifact-phase-1.md`,
 `docs/analyses/2026-08-30-medication-mapping-plan.md`,
-`src/decor2hl7/retrieval/sources.py`,
+`docs/analyses/2026-09-03-closure-phase-4.md`,
+`src/decor2hl7/retrieval/sources.py`, `src/decor2hl7/retrieval/sources.json`,
 `src/decor2hl7/retrieval/fetch.py`, `tests/test_external_sources.py`.
 
 ## DEC-013 — Compiled HL7 V3 datatype/value model
@@ -589,11 +633,24 @@ The same before/after record is written to
 `validator-compilation-errors.txt` for the publication-transform diagnostic
 trail; a logged reviewed repair is not itself a compilation failure.
 
+`validator-manifest.json` reports `complete` as a claim about the *selected
+transaction document*: every rule that can apply to it was generated. The
+publication transform runs over the whole assembled closure, so it also reports
+skipped rules for referenced templates the selected document never instantiates.
+Each generation message is therefore classified in `generation_message_scopes`
+by the value sets it names, the template OIDs in its rule context, and whether
+any of those templates holds a document location in the compiled CDA model. Only
+an in-closure error denies `complete`. The raw `generation_messages` list stays
+intact and `generation_messages_outside_selected_closure` counts the remainder,
+so the omission is visible rather than dropped; a message whose context cannot
+be parsed is treated as in-closure.
+
 `validate-cda` is a separate enforced gate: it validates documents against the
 complete SDTC schema entry point and the generated transaction/datatype
 Schematron. It fails closed if package or validator checksums differ, generation
-reported unresolved terminology, or either validator emits errors. Setup and
-validation may use Java; transformation remains standard-library-only.
+reported unresolved terminology inside the selected closure, or either validator
+emits errors. Setup and validation may use Java; transformation remains
+standard-library-only.
 
 Conformance and mapping coverage remain independent. Core rules can disqualify
 a representation, as DEC-020 did for the medication event offset, but neither

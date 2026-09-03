@@ -15,7 +15,9 @@ from decor2hl7.build.mapping import cda_mapping_proposal
 from decor2hl7.build.model import compile_model
 from decor2hl7.build.target import collect_templates, compile_cda, select_template
 from decor2hl7.compile import mapping as mapping_compiler
-from decor2hl7.compile.artifacts import compiler_inputs, write_build_diagnostics
+from decor2hl7.compile.artifacts import (
+    compiler_inputs, selected_closure_templates, write_build_diagnostics,
+)
 from decor2hl7.compile.structural import (
     boolean_example_discriminator_rules, value_set_members,
 )
@@ -884,6 +886,59 @@ class CoreTests(unittest.TestCase):
             walk(compiled["document"])
             self.assertIn("new-section", contains)
             self.assertNotIn("old-section", contains)
+
+    def test_missing_spec_parent_revision_degrades_only_the_refinement(self) -> None:
+        """A missing SPEC parent revision must not erase or replace its child.
+
+        `template:2.16.840.1.113883.10.20.1.53@2005-09-07` is requested by the
+        medication branch, but only `@2007-04-01` is published anywhere. The
+        child must still compile from its own constraints plus the pinned
+        CDA/RIM expansion, stay located in the selected document, and leave the
+        unresolved relation visible (`DEC-004`, `DEC-010`).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.xml"
+            project.write_text('''
+<project>
+  <template id="product" effectiveDate="2007-04-01" name="Product"><element name="hl7:manufacturedProduct" id="mp"><element name="hl7:manufacturedMaterial" id="mm"/></element></template>
+  <template id="material" effectiveDate="2017-06-04" name="Material"><relationship type="SPEC" template="product" flexibility="2005-09-07"/><element name="hl7:manufacturedProduct" id="mp"><element name="hl7:manufacturedMaterial" id="mm"><element name="hl7:code" id="code" datatype="CE"/></element></element></template>
+  <template id="doc" effectiveDate="2026-01-01" name="Document"><element name="hl7:ClinicalDocument" id="doc"><element name="hl7:component" contains="material" id="component"/></element></template>
+</project>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc",
+                    "template_effective_date": "2026-01-01",
+                },
+                "groups": {},
+                "fields": {},
+            }
+            # The strict compiler still refuses an incomplete closure; the
+            # tolerant build path omits and reports it (`DEC-010`).
+            with self.assertRaisesRegex(ValueError, "closure is incomplete"):
+                compile_cda([project], model)
+            compiled = compile_cda_model([project], model)
+            self.assertIn(
+                ("SPEC", "product", "2005-09-07"),
+                {
+                    (row["relation"], row["template"], row["flexibility"])
+                    for row in compiled["unresolved_templates"]
+                },
+            )
+            child = {
+                name: target
+                for name, target in compiled["targets"].items()
+                if target.get("template_id") == "material"
+            }
+            self.assertTrue(child, "the child template must still compile")
+            self.assertTrue(
+                any(target.get("locations") for target in child.values()),
+                "the child must stay located in the selected document",
+            )
+            # The refinement is omitted, not satisfied by the other revision.
+            self.assertEqual(
+                {target.get("template_effective_date") for target in child.values()},
+                {"2017-06-04"},
+            )
 
 
     def test_fetch_uses_release_cache_and_transaction_closure(self) -> None:
@@ -2956,6 +3011,55 @@ class CoreTests(unittest.TestCase):
                 [item["request_key"] for item in result["build_degraded"]],
                 ["codesystem:active-cs"],
             )
+
+    def test_validator_value_sets_follow_the_selected_document_closure(self) -> None:
+        """A rule skipped on a branch this document never uses is not degrading.
+
+        The publication transform emits rules for every template the assembled
+        specification reaches. Only a rule whose context template is actually
+        instantiated in the selected document can affect this build
+        (`DEC-010`, `DEC-019`).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp)
+            conformance = model_dir / "conformance-validation"
+            conformance.mkdir()
+            (conformance / "validator-manifest.json").write_text(
+                '{"version": 2, "generation_messages": ["in", "out"], "generation_message_scopes": [{"message": "in", "severity": "error", "value_sets": ["selected-vs"], "context_templates": ["located-template"], "in_selected_closure": true}, {"message": "out", "severity": "error", "value_sets": ["inactive-vs"], "context_templates": ["unlocated-template"], "in_selected_closure": false}]}', encoding="utf-8"
+            )
+            inputs = {
+                "terminology_resources": [],
+                "build_artifacts": [],
+                "unavailable_artifacts": [
+                    {
+                        "request_key": "valueset:selected-vs",
+                        "type": "valueset", "id": "selected-vs",
+                        "status": "missing", "roles": ["formal-terminology"],
+                        "reasons": [],
+                    },
+                    {
+                        "request_key": "valueset:inactive-vs",
+                        "type": "valueset", "id": "inactive-vs",
+                        "status": "missing", "roles": ["formal-terminology"],
+                        "reasons": [],
+                    },
+                ],
+            }
+            result = write_build_diagnostics(
+                model_dir, inputs, {"unresolved_templates": []}, {"fields": {}}
+            )
+            self.assertEqual(result["summary"]["crawl_degraded"], 2)
+            self.assertEqual(
+                [item["request_key"] for item in result["build_degraded"]],
+                ["valueset:selected-vs"],
+            )
+
+    def test_selected_closure_templates_require_a_document_location(self) -> None:
+        cda_model = {"targets": {
+            "Located.value": {"template_id": "located", "locations": ["0.1"]},
+            "Reachable.value": {"template_id": "unlocated", "locations": []},
+        }}
+        self.assertEqual(selected_closure_templates(cda_model), {"located"})
 
     def test_partial_expansion_degrades_only_an_active_value_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

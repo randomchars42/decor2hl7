@@ -34,7 +34,9 @@ from .api import (
 )
 from .client import DEFAULT_API_BASE, FINAL_STATUS, get
 from .artifacts import REQUIRED_ROLES
-from .sources import apply_source_hint, builtin_payload, resolve_alias
+from .sources import (
+    SATISFYING_COMPLETENESS, apply_source_hint, builtin_payload, resolve_alias,
+)
 from .expansion import expansion_status
 from .xml import local, parse_text
 from .references import (
@@ -562,6 +564,15 @@ def _materialize_external(
     }
     metadata = _external_manifest_fields(want)
     if mode == "waiver":
+        # A waiver settles an absence that a previous crawl may already have
+        # traced.  Retain that evidence so the reason stays checkable against
+        # the attempts that produced it (architecture rule 18).
+        previous = resources.get(key, {})
+        trace = {
+            name: list(previous[name])
+            for name in ("projects_considered", "resolution_attempts")
+            if isinstance(previous, Mapping) and isinstance(previous.get(name), list)
+        }
         resources[key] = {
             "status": "waived",
             "settled": True,
@@ -569,6 +580,7 @@ def _materialize_external(
             "requested_effective_date": requested_date or "dynamic",
             "resolved_effective_date": "",
             "identity": identity,
+            **trace,
             **metadata,
         }
         if save_manifest is not None:
@@ -670,7 +682,9 @@ def _materialize_external(
     if previous != payload:
         target.write_bytes(payload)
     completeness = want.get("completeness") or "fragment"
-    status = "ok" if completeness == "complete" else "partial"
+    # Only a complete reviewed supplement satisfies a required dependency
+    # (`DEC-012`); anything else stays an unavailable compiler input.
+    status = "ok" if completeness == SATISFYING_COMPLETENESS else "partial"
     representation = {
         "status": status,
         "file": relative,

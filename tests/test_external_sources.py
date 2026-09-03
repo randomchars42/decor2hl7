@@ -9,7 +9,9 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 from decor2hl7.retrieval.api import REQUIRED_PATHS
-from decor2hl7.retrieval.fetch import _fetch_want, fetch_spec
+from decor2hl7.retrieval.fetch import (
+    _fetch_want, _materialize_external, fetch_spec,
+)
 from decor2hl7.retrieval.artifacts import (
     artifact_integrity_problems, closure_records,
 )
@@ -58,6 +60,98 @@ class ExternalSourceTests(unittest.TestCase):
                     ValueError, "requires|'alias_of'|same artifact kind"
                 ):
                     load_source_hints(source)
+
+    def test_waiver_retains_the_recorded_resolution_trace(self) -> None:
+        """Settling an absence must not erase the attempts that proved it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            key = "codesystem:1.2.3@2019-12-30T00:00:00"
+            manifest: dict[str, object] = {"resources": {key: {
+                "status": "missing",
+                "settled": True,
+                "projects_considered": ["aktin-", "hl7de-"],
+                "resolution_attempts": [
+                    {"project": "aktin-", "form": "source", "http_status": 404},
+                    {"project": "hl7de-", "form": "source", "http_status": 404},
+                ],
+            }}}
+            want = {
+                "kind": "codesystem", "id": "1.2.3",
+                "effective_date": "2019-12-30T00:00:00",
+                "mode": "waiver", "reason": "Reviewed settled absence",
+                "source_url": "https://example.invalid/publication",
+                "source_version": "Publication 1.0",
+                "license": "Public publication",
+            }
+            handled, path = _materialize_external(
+                release_dir, manifest, want, key=key,
+                relative="codesystems/1.2.3.xml",
+            )
+            self.assertTrue(handled)
+            self.assertIsNone(path)
+            entry = manifest["resources"][key]
+            self.assertEqual(entry["status"], "waived")
+            self.assertEqual(entry["projects_considered"], ["aktin-", "hl7de-"])
+            self.assertEqual(len(entry["resolution_attempts"]), 2)
+            self.assertEqual(entry["reason"], "Reviewed settled absence")
+
+    def test_external_catalog_entries_require_reviewable_provenance(self) -> None:
+        """A builtin or waiver is only auditable with its source and terms.
+
+        `DEC-012` accepts an external supplement or a settled absence only when
+        the entry itself records where the claim comes from, which revision it
+        describes and under which terms it may be carried.
+        """
+        complete = {
+            "mode": "waiver",
+            "source_url": "https://example.invalid/publication",
+            "source_version": "Publication 1.0, 2026-01-01",
+            "license": "Public publication; carried as evidence only",
+            "reason": "Reviewed settled absence",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "sources.json"
+            source.write_text(
+                json.dumps({"artifacts": {"template:absent": complete}}),
+                encoding="utf-8",
+            )
+            self.assertIn("template:absent", load_source_hints(source))
+            for missing in ("source_url", "source_version", "license", "reason"):
+                entry = {
+                    name: value for name, value in complete.items()
+                    if name != missing
+                }
+                source.write_text(
+                    json.dumps({"artifacts": {"template:absent": entry}}),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "requires"):
+                    load_source_hints(source)
+            source.write_text(
+                json.dumps({"artifacts": {"template:absent": {
+                    **complete, "completeness": "mostly",
+                }}}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "unsupported completeness"):
+                load_source_hints(source)
+
+    def test_bundled_catalog_settles_the_reviewed_phase_four_absences(self) -> None:
+        """The two settled closure absences stay reviewed, cited and exact."""
+        hints = load_source_hints()
+        for key in (
+            "codesystem:1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00",
+            "template:2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00",
+        ):
+            with self.subTest(key=key):
+                entry = hints[key]
+                self.assertEqual(entry["mode"], "waiver")
+                # A waiver never claims content, so it can never satisfy a
+                # required dependency (`DEC-012`).
+                self.assertNotEqual(entry.get("completeness"), "complete")
+                self.assertTrue(entry["source_url"].startswith("https://"))
+                self.assertTrue(entry["license"])
+                self.assertIn("2026-09-03", entry["reason"])
 
     def test_reviewed_alias_fetches_corrected_identity_and_keeps_both_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

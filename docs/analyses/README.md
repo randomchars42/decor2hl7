@@ -15,6 +15,15 @@ Current focused implementation plans:
   resulting 92→95 mapping gain, the corrected mandatory `value` targets and
   hour-unit normalization, the no-change DEC-015 re-review, and DEC-020's
   compound event/offset enforcement boundary.
+- [`2026-09-03-closure-phase-4.md`](2026-09-03-closure-phase-4.md)
+  records the retrieval evidence settling the last five build-degrading
+  artifacts: the two VSAC medication value sets expand to genuinely empty
+  results and are only reached by rules on a C-CDA template the selected
+  document never instantiates; the AKTIN referral-actions value set cannot
+  expand because its DIVI intension code system is published nowhere; and the
+  CCD Product SPEC parent exists in no revision but `2007-04-01`. Records the
+  resulting 5→3 `build_degraded` and `complete: true` metrics. Closes phase 4
+  of the root [`PLAN.md`](../../PLAN.md).
 - [`2026-09-03-closure-gap-analysis.md`](2026-09-03-closure-gap-analysis.md)
   records why the reference `spec/2026.1.2` closure is `degraded`: of 62 missing
   artifacts only 21 are build-degrading, a plain `fetch` never re-probes settled

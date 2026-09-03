@@ -142,10 +142,13 @@ Important rules retained from the prototype:
 14. In `--offline` mode, perform closure discovery from cached files without any
     HTTP attempt and record uncached references as retryable unavailable
     dependencies.
-15. Provisionally, consult exact catalog entries for package-local `builtin`
-    supplements and cited `waiver` decisions. Builtins verify their package
-    checksum and can be materialized offline; waivers are settled but remain
-    non-successful and degraded. This phase is open for review under `DEC-012`.
+15. Consult exact catalog entries for package-local `builtin` supplements and
+    cited `waiver` decisions. Every such entry declares `source_url`,
+    `source_version` and `license`, and a `completeness` from a closed
+    vocabulary. Builtins verify their package checksum, artifact identity and
+    exact revision and can be materialized offline; only a `complete` builtin
+    satisfies a required dependency. Waivers are settled but remain
+    non-successful and degraded, and never satisfy one (`DEC-012`).
 16. Add a target named by `config/cda-extensions.json` as an exact structural
     dependency only after the record is scoped to the selected transaction;
     snapshot the normalized record in `closure.json` for reproducible build
@@ -167,7 +170,12 @@ selected transaction pair (`build_ready`) and records unavailable recursive
 dependencies as degraded resources.
 Build diagnostics retain that complete `crawl_degraded` list but derive their
 headline from `build_degraded`, the subset consulted by selected formal
-terminology, validator ValueSets or CDA template compilation.
+terminology, validator ValueSets or CDA template compilation. A validator
+ValueSet counts only when the rule that needs it can apply to the selected
+document: a template belongs to the selected closure when at least one compiled
+target holds a document location, and a generation message whose rule context
+names only templates outside that set is scoped out of both `build_degraded` and
+the validator completeness claim (`DEC-010`, `DEC-019`).
 
 `manifest.json` is reconstructible metadata rather than the sole index of
 deterministically named cache files. If it is deleted, `fetch` validates and
@@ -435,6 +443,15 @@ stylesheet before it can be used. The assembled closure is not
 called a native compiled ART-DECOR project; that unavailable form remains an
 explicit `not-run` stage. Upstream generation errors make the validator
 degraded and are preserved rather than hidden.
+
+The transform runs over the whole assembled closure, so it also reports rules
+skipped for templates the selected document never instantiates.
+`validator-manifest.json` therefore classifies each generation message in
+`generation_message_scopes` — its value sets, the template OIDs in its rule
+context, and whether any of them holds a document location — and reports
+`complete` as a claim about the selected document only. The raw message list is
+kept and `generation_messages_outside_selected_closure` counts the rest, so
+nothing is dropped; an unparseable context is treated as in-closure.
 
 `validate-cda` is the independent, fail-closed output gate. It validates CDA
 against the complete SDTC schema entry point and then executes the generated

@@ -14,6 +14,7 @@ from unittest.mock import patch
 from decor2hl7.cda.core import CORE_FILES, CORE_REVISION, core_paths
 from decor2hl7.conformance import (
     _complete_schematron_namespaces,
+    _generation_message_scope,
     _repair_generated_stylesheet,
     _safe_member,
     _extract_cda,
@@ -29,6 +30,31 @@ from decor2hl7.retrieval.fetch import _fetch_direct
 
 
 class ConformanceTests(unittest.TestCase):
+    def test_generation_message_scope_follows_the_selected_document(self) -> None:
+        """A skipped rule only counts when its context template is instantiated."""
+        message = "ERROR  : +++ value set skipped for use in schematron because the value set contents are not defined - value set 2.16.840.1.113762.1.4.1021.30: dynamic in rule MedicationActivity: 2013-01-31T00:00:00 (context=*[cda:substanceAdministration[cda:templateId[@root = '2.16.840.1.113883.10.20.22.4.16']]]/cda:substanceAdministration/cda:administrationUnitCode)"
+        outside = _generation_message_scope(message, {"1.2.276.0.76.3.1.195.10.93"})
+        self.assertEqual(outside["severity"], "error")
+        self.assertEqual(outside["value_sets"], ["2.16.840.1.113762.1.4.1021.30"])
+        self.assertEqual(
+            outside["context_templates"], ["2.16.840.1.113883.10.20.22.4.16"]
+        )
+        self.assertFalse(outside["in_selected_closure"])
+        inside = _generation_message_scope(
+            message, {"2.16.840.1.113883.10.20.22.4.16"}
+        )
+        self.assertTrue(inside["in_selected_closure"])
+
+    def test_generation_message_without_context_stays_inside_the_closure(self) -> None:
+        """An unparsed message must never silently weaken the claim."""
+        scope = _generation_message_scope("ERROR  : +++ unparsed", {"anything"})
+        self.assertEqual(scope["context_templates"], [])
+        self.assertTrue(scope["in_selected_closure"])
+        # Without a compiled document the classifier cannot scope anything.
+        self.assertTrue(
+            _generation_message_scope("ERROR  : x", None)["in_selected_closure"]
+        )
+
     def test_generated_supply_match_repair_is_exact_and_logged(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             stylesheet = Path(temporary) / "validator.xsl"

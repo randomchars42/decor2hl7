@@ -9,10 +9,12 @@ from decor2hl7.compile.mapping import mapping_field_delta
 
 REFERENCE_RELEASE = "2026.1.2"
 REFERENCE_TRANSACTION = "notaufnahmeregister--60"
+# The reviewed phase-4 residue.  The AKTIN referral-actions value set cannot be
+# expanded while its intension code system stays waived, and the CCD Product
+# SPEC parent is published in no revision but `2007-04-01`, which must not
+# substitute it (`DEC-004`, `DEC-012`).
 ALLOWED_BUILD_DEGRADED = {
     "valueset:1.2.276.0.76.11.53",
-    "valueset:2.16.840.1.113762.1.4.1021.30",
-    "valueset:2.16.840.1.113762.1.4.1099.12",
     "codesystem:1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00",
     "template:2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00",
 }
@@ -77,6 +79,30 @@ class ReferenceClosureTests(unittest.TestCase):
             MAX_GENERATION_MESSAGES,
         )
         self.assertTrue(manifest.get("executable"))
+
+    def test_validator_is_complete_for_the_selected_document(self) -> None:
+        """Every rule that can apply to the selected document was generated.
+
+        The residual upstream messages describe C-CDA medication templates the
+        AKTIN document never instantiates; they stay listed as evidence but do
+        not deny the claim (`DEC-019`).
+        """
+        manifest = self._load(
+            self.model_dir / "conformance-validation" / "validator-manifest.json"
+        )
+        scopes = manifest.get("generation_message_scopes", [])
+        self.assertEqual(
+            len(scopes), len(manifest.get("generation_messages", []))
+        )
+        self.assertEqual(
+            [
+                scope for scope in scopes
+                if scope.get("severity") == "error"
+                and scope.get("in_selected_closure")
+            ],
+            [],
+        )
+        self.assertTrue(manifest.get("complete"))
 
     def test_mapped_fields_do_not_regress_from_committed_baseline(self) -> None:
         baseline = self._load(

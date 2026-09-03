@@ -23,7 +23,7 @@ import zipfile
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Collection, Iterable, Mapping, Sequence
 
 from .cda.core import CORE_REVISION
 from .workspace import write_json
@@ -762,11 +762,42 @@ def _repair_generated_stylesheet(stylesheet: Path) -> list[dict[str, Any]]:
     return repairs
 
 
+_GENERATION_VALUE_SET = re.compile(r"\bvalue set ([0-9][0-9.]*):")
+_GENERATION_CONTEXT_TEMPLATE = re.compile(r"@root\s*=\s*'([0-9][0-9.]*)'")
+
+
+def _generation_message_scope(
+    message: str, selected_templates: Collection[str] | None
+) -> dict[str, Any]:
+    """Classify one upstream generation message against the selected closure.
+
+    The publication transform generates rules for every template the assembled
+    specification carries, including referenced branches the selected document
+    never instantiates.  A message whose rule context names only templates
+    outside the selected closure reports an upstream gap this build does not
+    consume.  A message with no recognisable template context stays inside the
+    closure so an unparsed message can never silently weaken the claim.
+    """
+    contexts = sorted(set(_GENERATION_CONTEXT_TEMPLATE.findall(message)))
+    if selected_templates is None or not contexts:
+        inside = True
+    else:
+        inside = any(context in selected_templates for context in contexts)
+    return {
+        "message": message,
+        "severity": "error" if message.lstrip().startswith("ERROR") else "info",
+        "value_sets": sorted(set(_GENERATION_VALUE_SET.findall(message))),
+        "context_templates": contexts,
+        "in_selected_closure": inside,
+    }
+
+
 def generate_transaction_schematron(
     release_dir: Path,
     assembled: Path,
     transaction: Mapping[str, Any],
     output_dir: Path,
+    selected_templates: Collection[str] | None = None,
 ) -> dict[str, Any]:
     generated = output_dir / "generated"
     if generated.exists():
@@ -819,6 +850,10 @@ def generate_transaction_schematron(
     compiled = compile_schematron(release_dir, schema, validator)
     compiled["stylesheet_repairs"] = _repair_generated_stylesheet(validator)
     compiled["generation_messages"] = [line for line in log.splitlines() if line]
+    compiled["generation_message_scopes"] = [
+        _generation_message_scope(line, selected_templates)
+        for line in compiled["generation_messages"]
+    ]
     probe_error = ""
     with tempfile.TemporaryDirectory(prefix="decor2hl7-validator-probe-") as temporary:
         probe = Path(temporary) / "probe.xml"
@@ -832,9 +867,14 @@ def generate_transaction_schematron(
         except ValueError as error:
             probe_error = str(error)
     compiled["executable"] = not probe_error
+    # Completeness is a claim about the selected transaction document: every
+    # rule that can apply to it was generated.  A rule skipped for a template
+    # the selected document never instantiates stays visible in
+    # `generation_messages` and in the scope table, but does not deny the claim
+    # (`DEC-019`).
     compiled["complete"] = compiled["executable"] and not any(
-        line.lstrip().startswith("ERROR")
-        for line in compiled["generation_messages"]
+        scope["severity"] == "error" and scope["in_selected_closure"]
+        for scope in compiled["generation_message_scopes"]
     )
     (output_dir / "generation-messages.txt").write_text(
         log + ("\n" if log else ""), encoding="utf-8"
@@ -853,8 +893,12 @@ def generate_transaction_schematron(
         )
     elif compilation_error_path.exists():
         compilation_error_path.unlink()
+    outside = [
+        scope for scope in compiled["generation_message_scopes"]
+        if scope["severity"] == "error" and not scope["in_selected_closure"]
+    ]
     write_json(output_dir / "validator-manifest.json", {
-        "version": 1,
+        "version": 2,
         "transaction": {
             "id": transaction.get("id"),
             "effective_date": transaction.get("effective_date"),
@@ -873,6 +917,9 @@ def generate_transaction_schematron(
             if compiled["stylesheet_repairs"] else None
         ),
         "generation_messages": compiled["generation_messages"],
+        "generation_message_scopes": compiled["generation_message_scopes"],
+        "generation_messages_outside_selected_closure": len(outside),
+        "selected_closure_templates": len(selected_templates or ()),
         "stylesheet_repairs": compiled["stylesheet_repairs"],
     })
     return compiled
@@ -977,6 +1024,7 @@ def build_conformance_artifacts(
     inputs: Mapping[str, Any],
     release: Mapping[str, Any],
     transaction: Mapping[str, Any],
+    selected_templates: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Run report-only source checks and compile the exact transaction validator."""
     destination = model_dir / "conformance-validation"
@@ -1032,14 +1080,19 @@ def build_conformance_artifacts(
         release_dir, inputs, release, transaction, destination / "decor-assembled.xml"
     )
     generation = generate_transaction_schematron(
-        release_dir, assembled, transaction, destination
+        release_dir, assembled, transaction, destination, selected_templates
+    )
+    outside = sum(
+        1 for scope in generation.get("generation_message_scopes", [])
+        if scope.get("severity") == "error" and not scope.get("in_selected_closure")
     )
     stages.append({
         "phase": "template-schematron-generation",
         "status": "passed" if generation["complete"] else "degraded",
         "detail": (
             f"validator {Path(str(generation['validator'])).name}; "
-            f"{len(generation.get('generation_messages', []))} upstream generation message(s); "
+            f"{len(generation.get('generation_messages', []))} upstream generation message(s), "
+            f"{outside} outside the selected document closure; "
             f"executable probe {'passed' if generation['executable'] else 'failed'}; "
             "see generation-messages.txt and validator-manifest.json"
         ),

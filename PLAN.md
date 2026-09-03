@@ -1,6 +1,6 @@
 # Implementation plan: closing the closure and recovering more CDA targets
 
-Status: phases 1–3 largely landed on `main`. Date opened: 2026-09-03.
+Status: phases 1–4 landed. Date opened: 2026-09-03.
 Baseline commit: `6d3ea59`. Reference workspace: `decor2hl7-test-workspace`
 `spec/2026.1.2`, transaction `notaufnahmeregister--60`.
 
@@ -8,7 +8,7 @@ Baseline commit: `6d3ea59`. Reference workspace: `decor2hl7-test-workspace`
 
 Commits since baseline: `11b33f6`/`ac7eec5` (EDIS map+merge),
 `f9874a0` "Implement closure resolution and expansion phases", `15a52db` "added docs".
-**193 unit tests pass** (`python3 -m unittest discover -s tests`).
+**202 unit tests pass** (`python3 -m unittest discover -s tests`).
 
 | Item | State | Where |
 |---|---|---|
@@ -23,32 +23,39 @@ Commits since baseline: `11b33f6`/`ac7eec5` (EDIS map+merge),
 | A6 — freeze `$expand` for dynamic/intensional/incomplete ValueSets | **done**, `DEC-013` amended | new `retrieval/expansion.py`, `retrieval/fetch.py`, `compile/terminology.py`, `conformance.py` |
 | E1 — repair `[[hl7:supply]` generated XPath | **done**, `DEC-019` amended; validator now `executable: true`, 0 compile errors | `conformance.py` |
 | `configuration_notes` in `cda-mapping.json` | **done**, `DEC-011` amended | `compile/mapping.py::_merge_mapping_configuration_notes` |
-| A7 — `--fail-on-degraded` flag + `tests/test_closure.py` | **partial** (flag keys off `degraded_resources`, not `build_degraded`; coverage-delta guard fixture `tests/fixtures/reference-mapping-audit.json` added) | `cli.py`, `tests/` |
+| A7 — `--fail-on-degraded` flag + `tests/test_closure.py` | **done** — `fetch --fail-on-degraded` keeps the crawl gate, new `build --fail-on-degraded` gates on `build_degraded`; `tests/test_closure.py` pins the 3-item residue, the message ceiling and `complete: true`; coverage-delta guard wired | `cli.py`, `tests/test_closure.py`, `tests/test_cli.py` |
+| Phase 4 — validator scope, A5 waivers, B1, E2 | **done** — `build_degraded` 5 → 3, validator `complete: true`; `DEC-012` accepted, `DEC-010`/`DEC-019` amended | `compile/artifacts.py`, `conformance.py`, `retrieval/sources.py`, `retrieval/sources.json`, `docs/analyses/2026-09-03-closure-phase-4.md` |
 
-### Current reference-workspace metrics (regenerated, **not yet committed**)
+### Current reference-workspace metrics (after phase 4)
 
 | Measure | Value |
 |---|---:|
-| Mapped datapoints | 95/120 → 97 leaves (unchanged by A6 this round) |
+| Mapped datapoints | 95/120 → 97 leaves (unchanged by phase 4) |
 | Suggested / no-target | 5 / 20 |
-| Validator | `executable: true`, `complete: false`, 0 compile errors, **3** generation messages (was 65) |
-| Build diagnostics | `status: degraded`; `crawl_degraded: 56`, **`build_degraded: 5`** |
+| Validator | `executable: true`, **`complete: true`**, 0 compile errors, 3 generation messages (was 65), all outside the selected closure |
+| Build diagnostics | `status: degraded`; `crawl_degraded: 56`, **`build_degraded: 3`** |
 
-The 5 `build_degraded` items (from `build-diagnostics.json`):
+The 5 phase-3 `build_degraded` items and their phase-4 disposition
+(evidence in
+[`docs/analyses/2026-09-03-closure-phase-4.md`](docs/analyses/2026-09-03-closure-phase-4.md)):
 
-1. `valueset:1.2.276.0.76.11.53@2015-11-17` — AKTIN; `$expand` unavailable; consulted by a selected field / validator ValueSet.
-2. `valueset:2.16.840.1.113762.1.4.1021.30@2013-01-31` — VSAC medication; `$expand` **complete but zero members**; 2 of the 3 validator messages.
-3. `valueset:2.16.840.1.113762.1.4.1099.12@2018-07-02` — VSAC medication; `$expand` complete zero members; 1 validator message.
-4. `codesystem:1.2.276.0.76.3.1.195.5.53@2019-12-30` — AKTIN/DIVI; **missing**; consulted as the intension of ValueSet #1 (linked to #1). Long-standing gap, already in `known-issues.md`.
-5. `template:2.16.840.1.113883.10.20.1.53@2005-09-07` — `SPEC` parent (medication `Material` / IHE Medications branch); **missing** exact revision (`@2007-04-01` from `pmp-` is cached); consulted by the CDA template compiler.
-
-## Not yet persisted — needs saving before `/clear`
-
-| Artifact | State | Action |
-|---|---|---|
-| `decor2hl7/PLAN.md` (this file) | **untracked** in the code repo | `git add PLAN.md` + commit on `main` (or move under `docs/` if the repo prefers) |
-| `decor2hl7-test-workspace/` | **89 uncommitted files**: regenerated `spec/*.expansion.xml`, `model/`, `mapping/`, `conformance-validation/`, EDIS templates `.10.85`–`.10.87`, `config/` | commit the coherent regenerated snapshot to the workspace repo |
-| Post-implementation metrics snapshot | not written | optional dated `docs/analyses/2026-09-03-closure-implementation.md` recording the `build_degraded: 5` / 3-validator-message / 95-120 state (dated analyses are snapshots, per `docs/analyses/README.md`) |
+1. `valueset:1.2.276.0.76.11.53@2015-11-17` — AKTIN; **still degraded**. Bound on
+   a selected field; expansion blocked by item 4. Enumeration stays
+   non-executable.
+2. `valueset:2.16.840.1.113762.1.4.1021.30@2013-01-31` — **scoped out**. Genuinely
+   empty upstream (VSAC codes only as an HTML table in `<desc>`), and reached
+   only by rules on `template:2.16.840.1.113883.10.20.22.4.16`, which holds no
+   document location in the selected AKTIN document.
+3. `valueset:2.16.840.1.113762.1.4.1099.12@2018-07-02` — **scoped out**, same
+   reason; the ART-DECOR record carries no members at all.
+4. `codesystem:1.2.276.0.76.3.1.195.5.53@2019-12-30` — **waived**. Published
+   nowhere on the server (cross-project lookup 404; 404 in all eight candidate
+   projects) and in no located DIVI/HL7 Germany publication, so no builtin is
+   possible. Stays degraded.
+5. `template:2.16.840.1.113883.10.20.1.53@2005-09-07` — **waived**. `ccd1-` is the
+   only publisher and holds only `@2007-04-01`, which must not substitute it.
+   Verified that the SPEC omission is scoped: both children still compile and
+   stay located.
 
 The near-term ordering and remaining code changes are in
 [**Implementation instructions**](#implementation-instructions) at the end.
@@ -195,7 +202,7 @@ refinements (detailed in [Implementation instructions § A4](#a4-impl)):
 - Decision-record impact: amend `DEC-010` with the display-vs-expansion and
   crawl-vs-build refinements (add `DEC-023` if the reviewer prefers a new ID).
 
-### A5. Extend the DEC-012 builtin/waiver catalog
+### A5. Extend the DEC-012 builtin/waiver catalog — DONE (`DEC-012` accepted)
 
 For the G2/G3/S1/S3 residue that survives A2–A4 and A6, where content genuinely
 cannot be crawled.
@@ -251,7 +258,7 @@ Acceptance:
 - an unavailable expansion is still explicitly incomplete, never silently
   downgraded to logical labels (`DEC-003`, `DEC-016`).
 
-### A7. Closure regression guard
+### A7. Closure regression guard — DONE
 
 - Add a test (extend `tests/test_conformance.py` / a new
   `tests/test_closure.py`) that pins the expected degraded-resource set for the
@@ -263,7 +270,7 @@ Acceptance:
 
 ## Workstream B — widen the physical gate
 
-### B1. Resolve the unresolved `SPEC` target
+### B1. Resolve the unresolved `SPEC` target — DONE (waived; omission verified scoped)
 
 `template:2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00` is an unresolved
 `SPEC` parent (`build-diagnostics.md`, "Unresolved CDA template references"). Per
@@ -496,7 +503,7 @@ recorded, reviewed normalization — analogous to A3 but for the publication
 transform output. If the malformation originates in the ART-DECOR template
 source, the repair is on **our generated stylesheet**, not upstream.
 
-### E2. Terminology completeness gate — remaining
+### E2. Terminology completeness gate — DONE (`DEC-019` amended)
 
 E1 landed; validator is `executable: true` with 0 compile errors. `complete` is
 still `false` because of **3** generation messages, all for two VSAC medication
@@ -548,18 +555,20 @@ As A7: pin degraded-resource and validator-error counts; fail on growth.
 | 1 | A3, A4 | **done** (`DEC-022`, `DEC-010` amend) | 0 (closure honesty) |
 | 2 | A2a, A2b-mechanism, A2c | **done**; A2b cluster entries deferred (no owner found) | 0 |
 | 3 | A6 (`DEC-013` amend) | **done**; 65 → 3 validator messages | 0 this round (blocked enums need the phase-4 residue) |
-| **4 (next)** | A5 for the 5 `build_degraded` items; S1/B1; E2 | not started | 0 (quality); possible +n if B1 opens medication slots |
-| 5 | A7 finish (key off `build_degraded`), F1–F3 | A7 partial | 0 (infra) |
+| 4 | A5 for the 5 `build_degraded` items; S1/B1; E2; A7 finish | **done** — `build_degraded` 5 → 3, validator `complete: true`; B1 opened no medication slots | 0 (quality) |
+| 5 (next) | F1–F3 | not started | 0 (infra) |
 | 6 | C1, C6, B3 | not started | opportunistic +n |
 | 7 | C5, D1 | not started | up to +4 medication datapoints |
 | 8 | C3 (`DEC-025`), C4 (`DEC-026`), C2 | not started | +1 (insurance), +1 (X-ray) subject to review |
 
-## Immediate next steps (phase 4)
+## Phase 4 — LANDED
 
-Before starting: `git add decor2hl7/PLAN.md` + commit; commit the regenerated
-`decor2hl7-test-workspace` snapshot.
+Recorded here as executed; the evidence snapshot is
+[`docs/analyses/2026-09-03-closure-phase-4.md`](docs/analyses/2026-09-03-closure-phase-4.md).
+The reference workspace now ignores generated `model/`, `mapping/` and `site/`
+output, so only `spec/`, `config/` and `test/` are committed evidence there.
 
-Then, per `build_degraded` item:
+Per `build_degraded` item, as planned:
 
 1. **#2 / #3 — VSAC `1021.30` / `1099.12` (zero-member `$expand`).**
    Check `mapping-audit.json` / the generated Schematron: are these consulted by
@@ -595,8 +604,8 @@ Then, per `build_degraded` item:
    `build_degraded ⊆ {known 5}` and the validator-message count; wire the
    `tests/fixtures/reference-mapping-audit.json` coverage-delta guard.
 
-Phases 6–8 each need their own reviewed decision and analysis; do not start them
-in the phase-4 PR.
+Phases 5–8 each need their own reviewed decision and analysis; they were not
+started in the phase-4 PR.
 
 Blocked-upstream after all of the above (record, do not force): MRI region
 (no region-bearing leaf in the active statement); general event onset (no active
@@ -608,8 +617,9 @@ does not exist.
 
 | New / changed | Subject |
 |---|---|
-| `DEC-010` amend or `DEC-023` | display-evidence vs expansion-support; crawl-degraded vs build-degraded |
-| `DEC-012` → accepted | catalog rules + concrete builtin/waiver entries from A5 |
+| `DEC-010` amended | display-evidence vs expansion-support; crawl-degraded vs build-degraded; validator rules scoped to the selected document closure |
+| `DEC-012` accepted | catalog rules, provenance requirement, the "may satisfy a required dependency" rule and the four concrete entries |
+| `DEC-019` amended | validator completeness is a claim about the selected document closure |
 | `DEC-013` amend | frozen `$expand` for dynamic bindings (A6); structured quantity (C5) |
 | `DEC-022` | reviewed correction of malformed upstream artifact identities |
 | `DEC-017` amend or `DEC-024` | Schematron-constraint evidence source |

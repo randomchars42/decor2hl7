@@ -223,6 +223,26 @@ def _cell(value: Any) -> str:
 _VALUE_SET_MESSAGE = re.compile(r"\bvalue set ([0-9][0-9.]*):")
 
 
+def selected_closure_templates(cda: Mapping[str, Any]) -> set[str]:
+    """Return the templates instantiated at a location of the selected document.
+
+    A compiled CDA model carries every template the assembled specification
+    makes reachable, including branches of referenced projects that the selected
+    document never instantiates.  Only a template with at least one located
+    target contributes constraints to the selected document, so only that set
+    defines the closure a generated validator rule can affect.
+    """
+    result: set[str] = set()
+    targets = cda.get("targets", {})
+    for target in targets.values() if isinstance(targets, Mapping) else ():
+        if not isinstance(target, Mapping) or not target.get("locations"):
+            continue
+        identifier = str(target.get("template_id") or "")
+        if identifier:
+            result.add(identifier)
+    return result
+
+
 def _selected_value_sets(model: Mapping[str, Any]) -> set[str]:
     result: set[str] = set()
     fields = model.get("fields", {})
@@ -244,12 +264,29 @@ def _selected_value_sets(model: Mapping[str, Any]) -> set[str]:
 
 
 def _validator_value_sets(model_dir: Path) -> set[str]:
+    """Return value sets a generated rule inside the selected closure needs.
+
+    The validator assembler classifies every generation message against the
+    selected document closure (`DEC-019`).  A message emitted for a template the
+    selected document never instantiates reports an upstream gap in a branch
+    this build does not use, and must not degrade the build status.
+    """
     path = model_dir / "conformance-validation" / "validator-manifest.json"
     if not path.is_file():
         return set()
     manifest = load_json(path)
-    messages = manifest.get("generation_messages", [])
+    scopes = manifest.get("generation_message_scopes")
     result: set[str] = set()
+    if isinstance(scopes, list):
+        for scope in scopes:
+            if not isinstance(scope, Mapping) or not scope.get("in_selected_closure"):
+                continue
+            value_sets = scope.get("value_sets", [])
+            for identifier in value_sets if isinstance(value_sets, list) else ():
+                if identifier:
+                    result.add(str(identifier))
+        return result
+    messages = manifest.get("generation_messages", [])
     for message in messages if isinstance(messages, list) else ():
         result.update(_VALUE_SET_MESSAGE.findall(str(message)))
     return result

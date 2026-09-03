@@ -335,14 +335,20 @@ artifact is available to both model and validator compilation.
 `--max-requests` limits actual recursive HTTP attempts rather than merely logical
 resource count. `fetch --fail-on-degraded` is a conservative acquisition gate
 that returns nonzero when any required retrieval dependency remains degraded.
+The crawl cannot yet tell which gaps a build actually consumes, so CI that
+should only fail on consulted gaps uses `build --fail-on-degraded`, which
+returns nonzero when `build-diagnostics.json` reports a non-empty
+`build_degraded`.
 
 `closure.json` separates crawler settlement from compiler readiness. A settled
 crawl can contain unavailable recursive dependencies. `build` uses the exact
 artifacts that are present and writes `build-diagnostics.json` plus a concise
 `build-diagnostics.md` describing the full `crawl_degraded` set separately from
 `build_degraded`, the subset actually consulted by selected formal terminology,
-validator ValueSets or CDA template compilation. It never substitutes another
-revision. The selected transaction source/analysis pair, the representing CDA
+validator ValueSets or CDA template compilation. A validator ValueSet counts
+only when the rule needing it can apply to the selected document, so a rule
+skipped for a template this document never instantiates is reported but does not
+degrade the build. It never substitutes another revision. The selected transaction source/analysis pair, the representing CDA
 document template, identity mismatches, and corrupt successful downloads remain
 fatal. Other unavailable evidence remains visible without falsely changing the
 headline build status.

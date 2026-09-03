@@ -227,13 +227,28 @@ After these changes, the 2026.1.2 reference generator reports 3 messages (down
 from 65 in the published baseline and 140 during the unsafe intermediate merge).
 All three are honest undefined-content findings for two external medication
 ValueSets: `2.16.840.1.113762.1.4.1021.30` occurs twice and
-`2.16.840.1.113762.1.4.1099.12` once; their live `$expand` responses report a
-complete zero-member result. The generated stylesheet is executable and has no
-compilation errors, but `complete` remains false while these messages remain.
+`2.16.840.1.113762.1.4.1099.12` once. Their live `$expand` responses are
+complete and carry no coded members at all: the ART-DECOR record for `1021.30`
+holds the VSAC codes only as an HTML table inside `<desc>`, and `1099.12` holds
+nothing. The content lives at VSAC under licensing this project does not carry,
+so neither can be filled.
+
+All three messages belong to rules on the C-CDA Medication Activity templates
+`2.16.840.1.113883.10.20.22.4.16` (`MedicationActivity` and
+`MedicationActivityV2`). Those templates are reachable in the assembled closure
+but hold no document location in the selected AKTIN document, whose effective
+medication branch is `UV Medication Information (simple)`. They are therefore
+classified as outside the selected closure: they stay listed in
+`generation_messages` and counted in
+`generation_messages_outside_selected_closure`, and they neither degrade the
+build nor deny `complete` (`DEC-010`, `DEC-019`). The generated stylesheet is
+executable, has no compilation errors and now reports `complete: true`.
+
 The reference mapping stays at 95/120 with no lost or gained mapped fields. The
-build diagnostics report 56 crawl-degraded artifacts, of which 5 affect the
-selected build; three of those five are expansion gaps and two are missing
-external artifacts.
+build diagnostics report 56 crawl-degraded artifacts, of which 3 affect the
+selected build: the AKTIN ValueSet `1.2.276.0.76.11.53`, its waived intension
+CodeSystem `1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00`, and the waived SPEC
+parent `template:2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00`.
 
 The assembler restores the QName-string namespace declarations omitted by the
 publication transform, including the two distinct pharmaceutical namespaces.
@@ -267,22 +282,48 @@ The representing document template itself is still mandatory. Dynamic
 references remain explicitly dynamic and resolve to a frozen identity recorded
 in the manifest.
 
-## Provisional external artifact catalog
+`template:2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00` is the concrete
+case. It is the SPEC parent of the medication branch children
+`1.3.6.1.4.1.19376.1.5.3.1.4.7.2` (IHE Medications) and
+`1.2.276.0.76.10.4025` (German Material). The Continuity of Care Document
+project `ccd1-` is the only publisher of the OID and holds exactly one revision,
+`2007-04-01T00:00:00` — confirmed by its template list and by the cross-project
+lookup `/template/2.16.840.1.113883.10.20.1.53`. That revision is already cached
+from `pmp-` and contributes its own targets under its own identity; it is never
+used to satisfy the `2005-09-07` request. The refinement is simply omitted:
+`select_template` returns nothing for an unpublished static revision, the
+relation stays in `unresolved_templates`, and both children still compile from
+their own constraints plus the pinned CDA/RIM expansion. Recovering the parent
+would not open the medication product-form or ingredient slots, which remain in
+the no-target partition for the separate reasons recorded above.
 
-Decision record: open `DEC-012` in [`decisions.md`](decisions.md).
+Reopening evidence: an ART-DECOR project publishing
+`2.16.840.1.113883.10.20.1.53` at exactly `2005-09-07T00:00:00`.
 
-Phase 1 supports package-local `builtin` supplements, evidence-backed `waiver`
-entries and exact reviewed malformed-identity `alias` entries. The builtin and
-waiver mechanism and its first two concrete uses require review:
+## External artifact catalog
+
+Decision record: accepted `DEC-012` in [`decisions.md`](decisions.md).
+
+The catalog supports package-local `builtin` supplements, evidence-backed
+`waiver` entries and exact reviewed malformed-identity `alias` entries. Only a
+`builtin` that declares `completeness: "complete"` and verifies its checksum,
+artifact identity and exact revision may satisfy a required dependency; a
+`waiver` never can. Every builtin and waiver entry must record `source_url`,
+`source_version` and `license`, and `completeness` is a closed vocabulary.
 
 - CodeSystem `1.2.276.0.76.5.401` is packaged as a ten-code builtin derived
-  from the public HL7 Germany metastasis table and provisionally marked
-  complete. Its completeness and redistribution basis must be confirmed.
-- IHE split-dose template `1.3.6.1.4.1.19376.1.5.3.1.4.9` has a provisional
-  spec-only waiver because the IHE text presents it as a discriminator under
-  Medication Entry and no independent template body was located. The waiver is
-  intentionally not an `ok` artifact, so the crawl remains degraded; it affects
-  the build headline only when the selected compiler inputs consult it.
+  from the public HL7 Germany metastasis table and marked complete. Its
+  redistribution basis rests on the public HL7 Germany wiki table.
+- IHE split-dose template `1.3.6.1.4.1.19376.1.5.3.1.4.9` has a spec-only
+  waiver because the IHE text presents it as a discriminator under Medication
+  Entry and no independent template body was located.
+- CodeSystem `1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00` has a waiver; see
+  the paragraph below.
+- Template `2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00` has a spec-only
+  waiver; see "Exact/static historical template resolution".
+
+A waiver is intentionally not an `ok` artifact, so the crawl remains degraded;
+it affects the build headline only when the selected compiler inputs consult it.
 
 The accepted alias policy is recorded separately in `DEC-022`. Its initial
 entries correct the malformed SNOMED CT CodeSystem OID
@@ -311,10 +352,26 @@ none has a CDA location or is renderable. The effective medication branch uses
 onto that branch would invent a template relationship.
 
 The exact AKTIN/DIVI CodeSystem
-`1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00` remains unresolved. A fragment
-must not be promoted to a complete formal terminology dependency. Future
-`download`, `fhir`, `mediawiki`, or licensed local-file modes must be added only
-for a concrete required artifact and reviewed separately.
+`1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00` remains unresolved and now
+carries a reviewed waiver. It is published nowhere on the specification server:
+the cross-project lookup `/codesystem/1.2.276.0.76.3.1.195.5.53` answers 404 and
+the dated extract answers 404 in all eight candidate projects recorded in
+`resolution_attempts`. AKTIN ValueSet `1.2.276.0.76.11.53@2015-11-17`
+("Referral actions") includes it intensionally and therefore expands to no
+members: the dateless `$expand` returns the include unresolved with
+`valueSetExpansionAssociation count="0"`, and the dated `$expand` answers 500.
+The field bound to that value set keeps a non-executable enumeration; it is not
+filled from logical labels (`DEC-003`, `DEC-016`). Neither the DIVI
+Notfalldokumentation publication nor the HL7 Germany Notaufnahmeregister
+implementation guide publishes the code list for this OID, so a builtin would
+have to invent the identity. A fragment must not be promoted to a complete
+formal terminology dependency. Future `download`, `fhir`, `mediawiki`, or
+licensed local-file modes must be added only for a concrete required artifact
+and reviewed separately.
+
+Reopening evidence: a DIVI or HL7 Germany publication of
+`1.2.276.0.76.3.1.195.5.53` at exactly `2019-12-30T00:00:00`, or the code system
+appearing in an ART-DECOR project.
 
 ## Repetition identifiers
 

@@ -47,6 +47,73 @@ class CliTests(unittest.TestCase):
                     "--root", str(root), "fetch", "--fail-on-degraded",
                 ]), 2)
 
+    def test_build_fail_on_degraded_gates_on_the_consulted_closure(self) -> None:
+        """CI gates on what this build consumes, not on the whole crawl.
+
+        `fetch --fail-on-degraded` can only judge the retrieval closure. Whether
+        a gap is actually consulted is known after compilation, so the build
+        gate reads `build_degraded` (`DEC-010`).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            set_release(root, RELEASES[0])
+            set_transaction(root, TRANSACTIONS[0])
+            model = {"meta": {}, "fields": {}, "groups": {}}
+            diagnostics = {
+                "status": "complete", "build_degraded": [],
+                "summary": {
+                    "build_degraded": 0, "crawl_degraded": 4,
+                    "unresolved_templates": 0,
+                },
+            }
+            cda_model = {"stats": {
+                "reachable_templates": 0, "targets": 0, "datapoints": 0,
+            }}
+            with (
+                patch("decor2hl7.cli._compiler_inputs", return_value={
+                    "transaction_source": root, "transaction_analysis": root,
+                    "model_resources": [], "terminology_resources": [],
+                    "templates": [], "mapping_evidence": [], "cda_extensions": [],
+                    "unavailable_artifacts": [], "build_artifacts": [],
+                    "evidence_artifacts": [],
+                }),
+                patch(
+                    "decor2hl7.compile.transaction.write_transaction_model",
+                    return_value=model,
+                ),
+                patch(
+                    "decor2hl7.compile.mapping.write_code_mapping",
+                    return_value={"fields": {}},
+                ),
+                patch(
+                    "decor2hl7.cda.compile.write_cda_model", return_value=cda_model
+                ),
+                patch(
+                    "decor2hl7.compile.mapping.write_mapping_model",
+                    return_value={"fields": {}},
+                ),
+                patch(
+                    "decor2hl7.conformance.build_conformance_artifacts",
+                    return_value={"status": "passed", "summary": {}},
+                ),
+                patch(
+                    "decor2hl7.compile.artifacts.write_build_diagnostics",
+                    return_value=diagnostics,
+                ) as write_diagnostics,
+            ):
+                self.assertEqual(main([
+                    "--root", str(root), "build", "--fail-on-degraded",
+                ]), 0)
+                diagnostics["status"] = "degraded"
+                diagnostics["build_degraded"] = [{"request_key": "valueset:1.2.3"}]
+                diagnostics["summary"]["build_degraded"] = 1
+                write_diagnostics.return_value = diagnostics
+                self.assertEqual(main(["--root", str(root), "build"]), 0)
+                self.assertEqual(main([
+                    "--root", str(root), "build", "--fail-on-degraded",
+                ]), 2)
+
     def test_generated_mapping_notes_refresh_without_replacing_user_notes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
