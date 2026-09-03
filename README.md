@@ -127,7 +127,8 @@ model/
         └── *.md
 
 config/
-└── sources.json                    # optional repository-hint overrides
+├── sources.json                    # optional repository-hint overrides
+└── cda-extensions.json             # optional reviewed open-template attachments
 
 mapping/                            # shareable/reviewable specification product
 └── 2026.1.2/
@@ -234,6 +235,45 @@ an optional `config/sources.json` override with the same shape, can supply an AP
 base, project, and exact effective date that an XML reference omits. Once the
 source is resolved, recursive template analysis is identical for local and
 external artifacts; no template-specific special case exists in the compiler.
+
+An open ART-DECOR template permits additional CDA-valid content, but neither
+`context="**"` nor project membership identifies which standalone template
+belongs in that slot. A reviewed acquisition-wide attachment may be recorded in
+`config/cda-extensions.json`. `fetch` adds its exact target template to the
+structural closure and stores the normalized record in `closure.json`; `build`
+then requires an exact selected document, an explicitly reachable open parent,
+a parent element declared by that template, and a wrapper/root placement
+admitted by the pinned CDA core XSD.
+
+```json
+{
+  "format": 1,
+  "attachments": [
+    {
+      "transaction_id": "2.16.840.1.113883.2.6.60.3.4.60",
+      "transaction_effective_date": "2026-03-25T00:00:00",
+      "document_template_id": "1.2.276.0.76.3.1.195.10.93",
+      "document_template_effective_date": "2026-03-25T11:04:07",
+      "parent_template_id": "1.2.276.0.76.3.1.195.10.73",
+      "parent_template_effective_date": "2024-08-15T11:08:15",
+      "parent_element_id": "2.16.840.1.113883.2.6.60.3.9.196",
+      "element_name": "hl7:entry",
+      "template_id": "1.2.276.0.76.3.1.195.10.85",
+      "template_effective_date": "2024-05-24T00:00:00",
+      "minimum_multiplicity": 0,
+      "maximum_multiplicity": 1,
+      "conformance": "R",
+      "reason": "Reviewed placement in the open Addendum section"
+    }
+  ]
+}
+```
+
+Repeat the attachment with a different exact target template when several
+reviewed entries occupy the same repeat-capable CDA particle. Attachments are
+rejected below closed elements, for parents outside the explicit selected
+closure, when the exact target is unavailable, for CDA-illegal particles, and
+when upstream containment already selects the same target.
 
 The source catalog also has a provisional external-artifact phase (`DEC-012`).
 An exact entry may use `mode: "builtin"` to materialize a small reviewed XML

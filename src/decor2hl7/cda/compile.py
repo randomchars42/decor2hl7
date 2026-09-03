@@ -31,6 +31,7 @@ from .datatypes import (
     expand_datatype,
     value_representation,
 )
+from .extensions import CdaExtension, normalize_extensions
 from .core import element_definition, index_definitions, resolve_definition
 from .model import (
     CdaValueTarget,
@@ -41,6 +42,10 @@ from .model import (
 
 TemplateKey = tuple[str, str]
 TEMPLATE_RELATIONS = {"SPEC", "VERSION", "COPY"}
+
+
+def _xml_true(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"true", "1"}
 
 
 def _typed_value_target(
@@ -254,7 +259,12 @@ def reachable_templates(
             if local(node.tag) == "include" and node.get("ref"):
                 relation, reference = "INCLUDE", node.get("ref") or ""
             elif local(node.tag) == "element" and node.get("contains"):
-                relation, reference = "CONTAINS", node.get("contains") or ""
+                relation = (
+                    "REVIEWED_EXTENSION"
+                    if node.get("_decor2hl7_source") == "reviewed-extension"
+                    else "CONTAINS"
+                )
+                reference = node.get("contains") or ""
             elif (
                 local(node.tag) == "relationship"
                 and node.get("template")
@@ -669,10 +679,17 @@ def _parse_attribute(attribute: ET.Element, template: ET.Element, path: str) -> 
     }
 
 
-def _parse_element(element: ET.Element, template: ET.Element, path: tuple[str, ...]) -> dict[str, Any]:
+def _parse_element(
+    element: ET.Element,
+    template: ET.Element,
+    path: tuple[str, ...],
+    inherited_closed: bool = False,
+) -> dict[str, Any]:
     name = element.get("name") or "hl7:element"
     current = path + (name,)
     current_path = "/".join(current)
+    is_closed = inherited_closed or _xml_true(element.get("isClosed"))
+    source_kind = element.get("_decor2hl7_source") or "template"
     value_sets, value_set_bindings, codes, fixed, unit = _constraints(element)
     children: list[dict[str, Any]] = []
     attributes: list[dict[str, Any]] = []
@@ -683,7 +700,7 @@ def _parse_element(element: ET.Element, template: ET.Element, path: tuple[str, .
         if kind == "attribute" and child.get("name"):
             attributes.append(_parse_attribute(child, template, current_path + "/@" + (child.get("name") or "attribute")))
         elif kind == "element":
-            children.append(_parse_element(child, template, current))
+            children.append(_parse_element(child, template, current, is_closed))
         elif kind == "choice":
             # ART-DECOR choices constrain alternative instances of the same
             # CDA particle.  They are transparent in XML, so retain each
@@ -691,9 +708,9 @@ def _parse_element(element: ET.Element, template: ET.Element, path: tuple[str, .
             # design name.
             for branch in list(child):
                 if local(branch.tag) == "element":
-                    children.append(_parse_element(branch, template, current))
+                    children.append(_parse_element(branch, template, current, is_closed))
         elif kind == "include" and child.get("ref"):
-            children.append(_parse_include(child))
+            children.append(_parse_include(child, is_closed))
         elif kind == "let" and child.get("name") and child.get("value"):
             lets[child.get("name") or ""] = child.get("value") or ""
         elif kind == "assert" and child.get("test"):
@@ -723,6 +740,8 @@ def _parse_element(element: ET.Element, template: ET.Element, path: tuple[str, .
         "max": _maximum(element.get("maximumMultiplicity")),
         "mandatory": True if element.get("isMandatory") == "true" else None,
         "conformance": element.get("conformance"),
+        "is_closed": is_closed,
+        "reviewed_extension": source_kind == "reviewed-extension",
         "fixed": fixed,
         "fixed_text": _fixed_text(element),
         "value_sets": value_sets,
@@ -736,8 +755,12 @@ def _parse_element(element: ET.Element, template: ET.Element, path: tuple[str, .
         "origin": _source(template, current_path, element.get("id")),
         "sources": [_source(template, current_path, element.get("id"))],
         "provenance": [{
-            "source": "template",
+            "source": source_kind,
             **_source(template, current_path, element.get("id")),
+            **(
+                {"reason": element.get("_decor2hl7_reason") or ""}
+                if source_kind == "reviewed-extension" else {}
+            ),
         }],
         "targets": [],
         "asserts": assertions,
@@ -745,7 +768,7 @@ def _parse_element(element: ET.Element, template: ET.Element, path: tuple[str, .
     }
 
 
-def _parse_include(include: ET.Element) -> dict[str, Any]:
+def _parse_include(include: ET.Element, inherited_closed: bool = False) -> dict[str, Any]:
     return {
         "kind": "include",
         "ref": include.get("ref") or "",
@@ -754,22 +777,24 @@ def _parse_include(include: ET.Element) -> dict[str, Any]:
         "max": _maximum(include.get("maximumMultiplicity")),
         "mandatory": True if include.get("isMandatory") == "true" else None,
         "conformance": include.get("conformance"),
+        "is_closed": inherited_closed or _xml_true(include.get("isClosed")),
         "children": [],
     }
 
 
 def _direct_template(template: ET.Element) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
+    template_closed = _xml_true(template.get("isClosed"))
     for child in list(template):
         kind = local(child.tag)
         if kind == "element":
-            result.append(_parse_element(child, template, ()))
+            result.append(_parse_element(child, template, (), template_closed))
         elif kind == "choice":
             for branch in list(child):
                 if local(branch.tag) == "element":
-                    result.append(_parse_element(branch, template, ()))
+                    result.append(_parse_element(branch, template, (), template_closed))
         elif kind == "include" and child.get("ref"):
-            result.append(_parse_include(child))
+            result.append(_parse_include(child, template_closed))
     return result
 
 
@@ -827,9 +852,15 @@ def _merge_node(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str
                 result[key] = child.get(key)
         if child.get("ref") is not None:
             result["flexibility"] = child.get("flexibility")
+        result["is_closed"] = bool(parent.get("is_closed")) or bool(
+            child.get("is_closed")
+        )
         return result
 
     result = deepcopy(dict(parent))
+    result["is_closed"] = bool(parent.get("is_closed")) or bool(
+        child.get("is_closed")
+    )
     # A specialized constraint wins when it explicitly says something.  The
     # parent supplies only omitted constraints.
     for key in (
@@ -956,6 +987,122 @@ def _effective_template(
         effective = _refine_sequence(parent_nodes, effective)
     memo[key] = deepcopy(effective)
     return effective
+
+
+def _compiled_element_matches(
+    nodes: Iterable[Mapping[str, Any]], element_id: str,
+) -> list[Mapping[str, Any]]:
+    result: list[Mapping[str, Any]] = []
+    for node in nodes:
+        if node.get("kind") == "element" and node.get("id") == element_id:
+            result.append(node)
+        result.extend(_compiled_element_matches(
+            list(node.get("children", [])), element_id
+        ))
+    return result
+
+
+def _apply_reviewed_extensions(
+    templates: dict[str, list[ET.Element]],
+    document_id: str,
+    document_effective: str | None,
+    explicit_reachable: Mapping[TemplateKey, ET.Element],
+    extensions: Iterable[CdaExtension],
+) -> list[CdaExtension]:
+    """Attach reviewed exact templates to explicit open parent elements."""
+    applied: list[CdaExtension] = []
+    memo: dict[TemplateKey, list[dict[str, Any]]] = {}
+    for extension in extensions:
+        if (
+            extension["document_template_id"] != document_id
+            or extension["document_template_effective_date"]
+            != str(document_effective or "")
+        ):
+            raise ValueError(
+                "CDA extension document identity does not match the selected "
+                f"template: {extension['document_template_id']}@"
+                f"{extension['document_template_effective_date']}"
+            )
+        parent_key = (
+            extension["parent_template_id"],
+            extension["parent_template_effective_date"],
+        )
+        target_key = (
+            extension["template_id"], extension["template_effective_date"],
+        )
+        if select_template(templates, *target_key) is None:
+            raise ValueError(
+                "CDA extension target template was not fetched exactly: "
+                f"{target_key[0]}@{target_key[1]}"
+            )
+        if parent_key not in explicit_reachable:
+            raise ValueError(
+                "CDA extension parent is not explicitly reachable from the "
+                f"selected document: {parent_key[0]}@{parent_key[1]}"
+            )
+        parent = select_template(templates, *parent_key)
+        if parent is None:
+            raise ValueError(
+                f"CDA extension parent template was not fetched: "
+                f"{parent_key[0]}@{parent_key[1]}"
+            )
+        effective_parent = _effective_template(parent, templates, memo)
+        effective_matches = _compiled_element_matches(
+            effective_parent, extension["parent_element_id"]
+        )
+        if len(effective_matches) != 1:
+            raise ValueError(
+                f"CDA extension parent element {extension['parent_element_id']} "
+                f"resolved {len(effective_matches)} times in "
+                f"{parent_key[0]}@{parent_key[1]}"
+            )
+        if effective_matches[0].get("is_closed"):
+            raise ValueError(
+                "CDA extension cannot attach below closed element "
+                f"{parent_key[0]}@{parent_key[1]}#"
+                f"{extension['parent_element_id']}"
+            )
+        if any(
+            child.get("kind") == "element"
+            and child.get("name") == extension["element_name"]
+            and child.get("contains") == extension["template_id"]
+            for child in effective_matches[0].get("children", [])
+        ):
+            raise ValueError(
+                f"CDA extension {extension['template_id']} is already explicitly "
+                f"contained by {parent_key[0]}@{parent_key[1]}"
+            )
+        source_matches = [
+            node for node in parent.iter()
+            if local(node.tag) == "element"
+            and node.get("id") == extension["parent_element_id"]
+        ]
+        if len(source_matches) != 1:
+            raise ValueError(
+                f"CDA extension parent element {extension['parent_element_id']} "
+                "must occur directly in the reviewed parent template"
+            )
+        host = source_matches[0]
+        synthetic_id = (
+            "decor2hl7-extension:"
+            f"{extension['parent_element_id']}:"
+            f"{extension['template_id']}@{extension['template_effective_date']}"
+        )
+        child = ET.Element("element", {
+            "name": extension["element_name"],
+            "id": synthetic_id,
+            "contains": extension["template_id"],
+            "flexibility": extension["template_effective_date"],
+            "minimumMultiplicity": str(extension["minimum_multiplicity"]),
+            "maximumMultiplicity": str(extension["maximum_multiplicity"]),
+            "conformance": extension["conformance"],
+            "_decor2hl7_source": "reviewed-extension",
+            "_decor2hl7_reason": extension["reason"],
+        })
+        host.append(child)
+        applied.append(extension)
+        memo.clear()
+    return applied
 
 
 def _final_min(value: Any) -> int:
@@ -1277,15 +1424,19 @@ def _expand_cda_model_structure(
     nodes: list[dict[str, Any]], definitions: dict[str, Any],
     stack: tuple[str, ...] = (),
     parent_definition: Any | None = None,
+    ancestor_closed: bool = False,
 ) -> None:
     """Overlay ART-DECOR constraints on CDA structural class definitions."""
     for node in nodes:
         if node.get("kind") != "element":
+            nested_closed = ancestor_closed or bool(node.get("is_closed"))
             _expand_cda_model_structure(
                 list(node.get("children", [])), definitions, stack,
-                parent_definition,
+                parent_definition, nested_closed,
             )
             continue
+        is_closed = ancestor_closed or bool(node.get("is_closed"))
+        node["is_closed"] = is_closed
         definition = element_definition(
             definitions,
             str(node.get("name") or ""),
@@ -1312,18 +1463,29 @@ def _expand_cda_model_structure(
                 existing_children[
                     _particle_key(str(item.get("name") or ""))
                 ].append(item)
+            if node.get("reviewed_extension"):
+                allowed = {_particle_key(part.name) for part in definition.parts}
+                node["extension_contained_roots_valid"] = all(
+                    key in allowed for key in existing_children
+                )
             for part in definition.parts:
                 part_path = current_path + "/" + part.name
                 key = _particle_key(part.name)
                 source = _model_source(node, part_path, part.name, "cda-rim")
                 if key in existing_children:
                     for child in existing_children[key]:
+                        if child.get("reviewed_extension"):
+                            child["extension_slot_valid"] = True
+                            child["extension_slot_maximum"] = part.maximum
                         if not child.get("datatype"):
                             child["datatype"] = part.datatype
                         child.setdefault("provenance", []).append({
                             **source, "source": "template + cda-rim",
                         })
-                else:
+                elif not is_closed and not node.get("reviewed_extension"):
+                    # The reviewed ``contains`` edge selects the wrapper's
+                    # concrete CDA root.  Do not turn the other core choice
+                    # branches into writable alternatives at that occurrence.
                     child = _datatype_child(
                         node, part.name, part.datatype, part.minimum, part.maximum,
                         part_path,
@@ -1358,7 +1520,7 @@ def _expand_cda_model_structure(
                     existing.setdefault("provenance", []).append({
                         **source, "source": "template + cda-rim",
                     })
-                else:
+                elif not is_closed:
                     item = _datatype_attribute(
                         node, attribute.name, attribute.datatype,
                         attribute.optional, path,
@@ -1373,8 +1535,74 @@ def _expand_cda_model_structure(
         _expand_cda_model_structure(
             list(node.get("children", [])), definitions,
             stack + ((definition.name,) if definition is not None else ()),
-            definition or parent_definition,
+            definition or parent_definition, is_closed,
         )
+
+
+def _validate_reviewed_extension_slots(nodes: Iterable[Mapping[str, Any]]) -> None:
+    """Reject reviewed attachments that CDA core cannot place unambiguously."""
+    for parent in nodes:
+        children = list(_transparent_element_children(
+            list(parent.get("children", []))
+        ))
+        by_name: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+        for child in children:
+            by_name[_particle_key(str(child.get("name") or ""))].append(child)
+        for siblings in by_name.values():
+            extensions = [item for item in siblings if item.get("reviewed_extension")]
+            if extensions and parent.get("is_closed"):
+                raise ValueError(
+                    "reviewed CDA extension cannot attach below closed element "
+                    f"{parent.get('name')}"
+                )
+            for extension in extensions:
+                if any(
+                    sibling is not extension
+                    and sibling.get("contains") == extension.get("contains")
+                    for sibling in siblings
+                ):
+                    raise ValueError(
+                        f"CDA extension {extension.get('contains')} is already "
+                        f"explicitly contained below {parent.get('name')}"
+                    )
+                if not extension.get("extension_slot_valid"):
+                    raise ValueError(
+                        "reviewed CDA extension does not match a CDA core child "
+                        f"of {parent.get('name')}: {extension.get('name')}"
+                    )
+                maximum = extension.get("extension_slot_maximum")
+                declared_maximum = extension.get("max")
+                if isinstance(maximum, int) and (
+                    declared_maximum == "*"
+                    or (
+                        isinstance(declared_maximum, int)
+                        and declared_maximum > maximum
+                    )
+                ):
+                    raise ValueError(
+                        "reviewed CDA extension multiplicity exceeds the CDA "
+                        f"core limit for {parent.get('name')}/"
+                        f"{extension.get('name')}"
+                    )
+                if isinstance(maximum, int) and len(siblings) > maximum:
+                    raise ValueError(
+                        "reviewed CDA extension exceeds the CDA core occurrence "
+                        f"limit for {parent.get('name')}/{extension.get('name')}"
+                    )
+                contained = list(_transparent_element_children(
+                    list(extension.get("children", []))
+                ))
+                if len(contained) != 1:
+                    raise ValueError(
+                        "reviewed CDA extension target must expose exactly one "
+                        f"template root below {extension.get('name')}"
+                    )
+                if not extension.get("extension_contained_roots_valid"):
+                    raise ValueError(
+                        "reviewed CDA extension contains a template root that is "
+                        f"not legal below {extension.get('name')}"
+                    )
+        _validate_reviewed_extension_slots(list(parent.get("children", [])))
 
 
 def _raw_datatype_targets(document: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -1908,6 +2136,7 @@ def compile_cda(
     strict: bool = True,
     core_definition_paths: Iterable[Path] = (),
     value_set_paths: Iterable[Path] = (),
+    cda_extensions: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     template_id = str(model.get("meta", {}).get("template_id") or "")
     if not template_id:
@@ -1915,6 +2144,24 @@ def compile_cda(
     template_effective = str(model.get("meta", {}).get("template_effective_date") or "") or None
     xml_paths = list(xml_paths)
     templates = collect_templates(xml_paths, fallback_paths, cutoff)
+    extensions = normalize_extensions(cda_extensions)
+    for extension in extensions:
+        if (
+            extension["transaction_id"]
+            != str(model.get("meta", {}).get("transaction_id") or "")
+            or extension["transaction_effective_date"]
+            != str(model.get("meta", {}).get("transaction_effective_date") or "")
+        ):
+            raise ValueError(
+                "CDA extension transaction identity does not match the compiled model"
+            )
+    explicit_reachable, _ = reachable_templates(
+        templates, template_id, template_effective
+    )
+    applied_extensions = _apply_reviewed_extensions(
+        templates, template_id, template_effective,
+        explicit_reachable, extensions,
+    )
     reachable, missing = reachable_templates(templates, template_id, template_effective)
     if strict and missing:
         formatted = ", ".join(
@@ -1929,8 +2176,13 @@ def compile_cda(
     effective = _effective_template(selected, templates, memo)
     document = _expand_nodes(effective, templates, memo, (_key(selected),))
     definitions = index_definitions(core_definition_paths)
+    if applied_extensions and not definitions:
+        raise ValueError(
+            "reviewed CDA extensions require the pinned CDA core definitions"
+        )
     if definitions:
         _expand_cda_model_structure(document, definitions)
+        _validate_reviewed_extension_slots(document)
     inventory = datatype_inventory(document)
     if inventory["unsupported"]:
         raise ValueError(
@@ -1997,6 +2249,7 @@ def compile_cda(
             "name": selected.get("name"),
             "display_name": selected.get("displayName"),
         },
+        "reviewed_extensions": applied_extensions,
         "targets": targets,
         # Filled after dataset-to-CDA mapping has established logical target
         # occurrences.  ``targets`` remains the physical template constraint
@@ -2016,6 +2269,7 @@ def compile_cda(
         ),
         "stats": {
             "reachable_templates": len(reachable),
+            "reviewed_extensions": len(applied_extensions),
             "targets": len(targets),
             "renderable_targets": sum(bool(target.get("renderable")) for target in targets.values()),
             "writable_value_targets": sum(bool(target.get("writable")) for target in targets.values()),
@@ -2050,12 +2304,14 @@ def write_cda_model(
     templates: Iterable[Path], model_dir: Path, model: dict[str, Any],
     core_definition_paths: Iterable[Path] = (),
     value_set_paths: Iterable[Path] = (),
+    cda_extensions: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Write ``cda.json`` while retaining unresolved nested references."""
     cda = compile_cda(
         templates, model, strict=False,
         core_definition_paths=core_definition_paths,
         value_set_paths=value_set_paths,
+        cda_extensions=cda_extensions,
     )
     write_json(model_dir / "cda.json", cda)
     (model_dir / "cda-assertions.sch").write_text(

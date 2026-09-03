@@ -601,6 +601,46 @@ Evidence: `src/decor2hl7/cda/datatypes.py`,
 `src/decor2hl7/cda/render.py`, `tests/test_cda_datatypes.py`,
 `docs/analyses/2026-09-02-medication-compound-dependency.md`.
 
+## DEC-021 — Open templates and reviewed CDA extension attachments
+
+**Decision:** accepted
+**Implementation:** verified
+
+ART-DECOR `isClosed` is part of the executable template constraint model.
+Closedness propagates through nested elements and `SPEC` refinement. The CDA
+core overlay may supply omitted structural children and attributes only in an
+open context; it may still type and complete explicitly selected particles in
+a closed context. This prevents CDA XSD permissiveness from turning content
+prohibited by a closed template into writable targets.
+
+An open template permits additional CDA-valid content but does not identify a
+particular standalone template or establish dataset semantics. `context="**"`,
+project membership and neighboring OIDs therefore remain insufficient for
+automatic containment. A maintainer may instead record an exact reviewed
+attachment in `config/cda-extensions.json`. Each attachment fixes the
+transaction, document template, explicitly reachable parent template, parent
+element, CDA child particle, target template revision, occurrence constraint
+and a non-empty review reason.
+
+`fetch` treats an attached target as an exact structural dependency, closes its
+own explicit dependencies recursively and snapshots the normalized attachment
+in transaction `closure.json`. `build` accepts it only when that exact target
+was fetched, the selected document identity matches, the parent is already
+explicitly reachable, the named element is declared by that parent template,
+the parent context is open, and the pinned CDA core proves both the child
+particle and contained template root legal. A now-explicit upstream containment
+makes a stale attachment fail instead of producing a duplicate.
+
+This is a reviewed local profile overlay, not inferred ART-DECOR truth. The
+compiled containment wrapper retains `reviewed-extension` provenance, while
+the attached template retains its own exact template provenance and openness.
+Because the attachment selects one concrete wrapper root, omitted alternative
+CDA core choice branches are not materialized at that occurrence.
+
+Evidence: `src/decor2hl7/cda/extensions.py`,
+`src/decor2hl7/retrieval/fetch.py`, `src/decor2hl7/cda/compile.py`,
+`tests/test_core.py`, `tests/test_cda_datatypes.py`.
+
 ## Maintenance rule
 
 A pull request that changes project semantics must update the affected decision

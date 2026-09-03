@@ -102,7 +102,7 @@ Release-wide downloads are shared; transaction-specific products are isolated.
 The workspace also expresses ownership: `mapping/` is a portable specification
 product, `site/` is deployment configuration, and `test/` is disposable
 verification input/output. `config/` is reserved for acquisition-wide settings
-such as repository source hints.
+such as repository source hints and exact reviewed CDA extension attachments.
 
 Runtime commands accept bundle overrides rather than a separate flag for every
 JSON file. `--cda-mapping` selects one reviewed mapping file;
@@ -146,6 +146,10 @@ Important rules retained from the prototype:
     supplements and cited `waiver` decisions. Builtins verify their package
     checksum and can be materialized offline; waivers are settled but remain
     non-successful and degraded. This phase is open for review under `DEC-012`.
+16. Add a target named by `config/cda-extensions.json` as an exact structural
+    dependency only after the record is scoped to the selected transaction;
+    snapshot the normalized record in `closure.json` for reproducible build
+    input. Generic template context and project evidence never create this edge.
 
 `manifest.json` answers “what is cached for this release?”; transaction
 `closure.json` answers “which cached resources belong to this transaction?” It
@@ -247,6 +251,17 @@ provided through one of those wrappers. One compiled path can
 therefore cross an ART-DECOR constraint, a CDA structural class, an HL7
 datatype, and its writable XML representation without class knowledge in
 mapping or rendering.
+
+`isClosed` propagates from templates and elements through `SPEC` refinement and
+the compiled tree. CDA/RIM expansion types explicit particles in both open and
+closed contexts, but materializes omitted particles only in open contexts. A
+reviewed CDA extension is an in-memory containment constraint with distinct
+provenance. Compilation rejects it unless its exact parent is already in the
+unmodified selected closure, the named element is declared in that exact parent
+template and remains open, and the pinned CDA XSD admits both its wrapper
+particle and contained template root. The attachment does not modify cached
+ART-DECOR XML. Its selected root suppresses omitted alternative core branches
+at the synthetic wrapper without closing the attached template's own content.
 
 `SPEC` is recursive constraint refinement, not tree concatenation. Matching
 child constraints inherit omitted parent properties and override explicit ones;

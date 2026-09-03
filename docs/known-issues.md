@@ -172,9 +172,14 @@ crosswalk plus repeat/coalescing rules.
 Exact draft templates for export interval, EDIS name and EDIS version exist in
 project evidence as `.10.85`, `.10.86` and `.10.87`. The selected Addendum
 Dokumentationsinformationen section `.10.73` contains only `.10.75`–`.10.77`,
-so the three exact entries have no active physical placement. Explicit selected
-containment is expected to make them directly recoverable. They are retained as
-evidence rather than forced into the active CDA closure. See the current
+so the three exact entries have no upstream-selected physical placement.
+DEC-021 now supports an exact, reasoned `config/cda-extensions.json` attachment
+to the open `.10.73` section: `fetch` then retrieves the selected entry revision
+and `build` validates its placement against CDA core. The reference workspace
+does not yet contain an approved attachment record, so the three templates
+remain evidence rather than being forced into the active CDA closure. Explicit
+upstream containment remains preferable and makes any duplicate local
+attachment fail. See the current
 field-by-field investigation in
 [`analyses/2026-09-02-seven-active-profile-gaps.md`](analyses/2026-09-02-seven-active-profile-gaps.md)
 and the earlier snapshot in

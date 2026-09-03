@@ -9,7 +9,8 @@ from ..retrieval.artifacts import (
     ArtifactRecord, artifact_integrity_problems, artifact_unavailable_reasons,
     closure_records, form_paths, transaction_record,
 )
-from ..workspace import write_json
+from ..cda.extensions import CdaExtension, normalize_extensions
+from ..workspace import load_json, write_json
 
 
 class CompilerInputs(TypedDict):
@@ -22,6 +23,7 @@ class CompilerInputs(TypedDict):
     terminology_resources: list[Path]
     templates: list[Path]
     mapping_evidence: list[Path]
+    cda_extensions: list[CdaExtension]
     unavailable_artifacts: list[dict[str, Any]]
     warnings: list[str]
 
@@ -51,6 +53,13 @@ def _unavailable_artifact(record: ArtifactRecord) -> dict[str, Any]:
 
 
 def compiler_inputs(release_dir: Path, transaction_dir: Path) -> CompilerInputs:
+    closure = load_json(transaction_dir / "closure.json")
+    raw_extensions = closure.get("cda_extensions", [])
+    if not isinstance(raw_extensions, list) or not all(
+        isinstance(item, Mapping) for item in raw_extensions
+    ):
+        raise ValueError("closure CDA extensions must contain an array of objects")
+    cda_extensions = normalize_extensions(raw_extensions)
     transaction = transaction_record(release_dir, transaction_dir)
     build = closure_records(release_dir, transaction_dir, "build")
     evidence = closure_records(release_dir, transaction_dir, "evidence")
@@ -104,6 +113,7 @@ def compiler_inputs(release_dir: Path, transaction_dir: Path) -> CompilerInputs:
         "terminology_resources": terminology_resources,
         "templates": templates,
         "mapping_evidence": mapping_evidence,
+        "cda_extensions": cda_extensions,
         "unavailable_artifacts": unavailable,
         "warnings": [
             reason for artifact in unavailable
