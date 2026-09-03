@@ -15,6 +15,13 @@ Current focused implementation plans:
   resulting 92→95 mapping gain, the corrected mandatory `value` targets and
   hour-unit normalization, the no-change DEC-015 re-review, and DEC-020's
   compound event/offset enforcement boundary.
+- [`2026-09-03-closure-gap-analysis.md`](2026-09-03-closure-gap-analysis.md)
+  records why the reference `spec/2026.1.2` closure is `degraded`: of 62 missing
+  artifacts only 21 are build-degrading, a plain `fetch` never re-probes settled
+  failures, the 65 validator errors are a separate value-set-expansion problem,
+  and each degrading resource is sorted into a display-reclassification,
+  `$expand`, exact-revision, reference-identity or waiver bucket. Supports
+  workstream A of the root [`PLAN.md`](../../PLAN.md).
 - [`2026-09-03-core-package-validation.md`](2026-09-03-core-package-validation.md)
   records the implemented checksum-pinned DECOR-core/full-CDA validation stack,
   the source-versus-compiled execution boundary, reference diagnostics,
