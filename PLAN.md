@@ -4,14 +4,15 @@ Status: phases 1–4 landed. Date opened: 2026-09-03.
 Baseline commit: `6d3ea59`. Reference workspace: `decor2hl7-test-workspace`
 `spec/2026.1.2`, transaction `notaufnahmeregister--60`.
 
-## Progress (as of `main` @ `315087e`)
+## Progress (as of `main` @ `4473eca`)
 
 Commits since baseline: `11b33f6`/`ac7eec5` (EDIS map+merge),
 `f9874a0` "Implement closure resolution and expansion phases", `15a52db` "added docs",
 `c55bce5` "added immediate plan" (this document), `838bfc1` "Settle the last five
 build-degrading closure artifacts" (phase 4), `315087e` "Recognize
-reference-declaration identity when adopting a cached artifact".
-**205 unit tests pass** (`python3 -m unittest discover -s tests`).
+reference-declaration identity when adopting a cached artifact", `ab85473`/`4473eca`
+"completed phase 5".
+**210 unit tests pass** (`python3 -m unittest discover -s tests`).
 
 | Item | State | Where |
 |---|---|---|
@@ -29,14 +30,21 @@ reference-declaration identity when adopting a cached artifact".
 | A7 — `--fail-on-degraded` flag + `tests/test_closure.py` | **done** — `fetch --fail-on-degraded` keeps the crawl gate, new `build --fail-on-degraded` gates on `build_degraded`; `tests/test_closure.py` pins the 3-item residue, the message ceiling and `complete: true`; coverage-delta guard wired | `cli.py`, `tests/test_closure.py`, `tests/test_cli.py` |
 | Phase 4 — validator scope, A5 waivers, B1, E2 | **done** — `build_degraded` 5 → 3, validator `complete: true`; `DEC-012` accepted, `DEC-010`/`DEC-019` amended | `compile/artifacts.py`, `conformance.py`, `retrieval/sources.py`, `retrieval/sources.json`, `docs/analyses/2026-09-03-closure-phase-4.md` |
 | Reference-declaration identity on cache adoption | **done**, `DEC-004` amended + arch rule 14 | `retrieval/fetch.py` (`_payload_matches_request`, `_resolved_effective_date`); `fetch --offline` now reports 0 unavailable and is idempotent; build metrics unchanged |
+| F1 — machine-readable `gap` per unresolved datapoint | **done**, `DEC-011` amended; frozen-`dynamic` terminology index, `DEC-013`/`DEC-004` noted | `compile/mapping.py::_gap_classification`, `compile/transaction.py::_resolve_value_set`, `compile/reports.py`, `cda/compile.py` (`is_closed` on targets), `docs/mapping-documentation-format.md` |
+| F2 — coverage guard on the documented headline | **done** — counts persisted as `summary.coverage_headline`; baseline/current reported in the documented line, no `+n/-n` shape | `compile/reports.py::coverage_headline_counts`/`format_coverage_headline`, `cli.py`, `tests/fixtures/reference-mapping-audit.json`, `scripts/update_reference_baseline.py`, `Makefile` (`check`, `baseline`) |
+| F3 — closure guard + reproducible validator hashes | **done**, `DEC-019` amended; **no CI workflow — deliberately out of scope** | `conformance.py` (`@see` normalization, 14 053 rewrites logged), `tests/test_closure.py` (all three hashes pinned, crawl/unavailable ceilings) |
 
-### Current reference-workspace metrics (after phase 4)
+### Current reference-workspace metrics (after phase 5)
 
 | Measure | Value |
 |---|---:|
-| Mapped datapoints | 95/120 → 97 leaves (unchanged by phase 4) |
+| Mapped datapoints | 95/120 → 97 leaves (unchanged by phases 4 and 5) |
 | Suggested / no-target | 5 / 20 |
+| Coverage headline | `Model: 120 datapoints · ✓ mapped 95 dp → 97 leaves · ! suggested 5 dp → 5 leaves · × no target 20 dp · ○ no source 368 leaves`, now persisted as `summary.coverage_headline` |
+| Field gap partition | `physical:datatype_component` 19, `semantic:shared_target` 4, `physical:no_writable_leaf` 1, `semantic:missing_companion` 1, `terminology:closure` 1; **`semantic:no_association` 0** |
+| Group gap partition | `physical:datatype_component` 18, `blocked_upstream:no_candidate` 8, `physical:no_writable_leaf` 4 |
 | Validator | `executable: true`, **`complete: true`**, 0 compile errors, 3 generation messages (was 65), all outside the selected closure |
+| Validator hashes | `assembled`/`schematron`/`validator` **all reproducible and pinned** after the `@see` normalization |
 | Build diagnostics | `status: degraded`; `crawl_degraded: 56`, **`build_degraded: 3`** |
 
 The 5 phase-3 `build_degraded` items and their phase-4 disposition
@@ -101,7 +109,7 @@ genuinely active AKTIN), **G4** (`1.0.3166.1`), plus **S1**
 (`template:…10.20.1.53@2005-09-07`), **S2** (datasets `…2.6.60.3.1.2` / `.3`),
 **S3** (IHE ValueSet `1.3.6.1.4.1.19376.1.3.11.11`).
 
-After phases 1–3 (see [Progress](#progress-as-of-main--315087e)): 95/120 mapped;
+After phases 1–3 (see [Progress](#progress-as-of-main--4473eca)): 95/120 mapped;
 `build_degraded: 5`; validator `executable: true`, 3 generation messages. The
 G1/G4 reclassification landed; G2 mostly moved to `crawl_degraded` only; the
 remaining 5 are the concrete `build_degraded` list above.
@@ -583,8 +591,8 @@ are normalized. Detailed steps in [Implementation instructions § F3](#f3-impl).
 | 2 | A2a, A2b-mechanism, A2c | **done**; A2b cluster entries deferred (no owner found) | 0 |
 | 3 | A6 (`DEC-013` amend) | **done**; 65 → 3 validator messages | 0 this round (blocked enums need the phase-4 residue) |
 | 4 | A5 for the 5 `build_degraded` items; S1/B1; E2; A7 finish | **done** — `build_degraded` 5 → 3, validator `complete: true`; B1 opened no medication slots | 0 (quality) |
-| 5 (next) | F1–F3 | specified — see [Phase 5](#phase-5--gate-labelled-reporting-and-regression-guards-next); A7 already shipped part of the F2/F3 assertions | 0 (infra) |
-| 6 | C1, C6, B3 | specified — see [Phase 6](#phase-6--semantic-evidence-and-expansion-completeness-specified-not-started); offline research done, B3 and C1's parser can start during phase 5 | opportunistic +n |
+| 5 | F1–F3 | **done** (`4473eca`) — `gap` labels, `coverage_headline`, reproducible pinned hashes; CI workflow deliberately omitted | 0 (infra) |
+| 6 (next) | B3, C6, C1 (in that order) | specified — see [Phase 6](#phase-6--semantic-evidence-and-expansion-completeness-next); all preconditions met; C1 re-aimed after phase 5 measured `semantic:no_association` as empty | opportunistic +n |
 | 7 | C5, D1 | not started | up to +4 medication datapoints |
 | 8 | C3 (`DEC-025`), C4 (`DEC-026`), C2 | not started | +1 (insurance), +1 (X-ray) subject to review |
 
@@ -888,11 +896,33 @@ Files: `retrieval/fetch.py`, `retrieval/references.py`, `compile/terminology.py`
 8. **`DEC-013`** amend: frozen `$expand` for dynamic bindings is part of the
    compiled terminology contract.
 
-### Phase 5 — gate-labelled reporting and regression guards (next)
+### Phase 5 — gate-labelled reporting and regression guards — LANDED
 
 Scope: F1, F2, F3. Coverage effect 0; this phase buys honest reporting and a
 guard that keeps phases 6–8 from silently regressing. No ART-DECOR server
 access is required — every question below is decidable from the local archives.
+
+**As executed (`4473eca`, 210 tests).** The specification below landed as
+written, with three recorded deviations:
+
+- **No CI workflow.** F3 step 1 proposed `.github/workflows/checks.yml`. Adding
+  one was **deliberately left out of scope** by the repository owner. The guards
+  therefore run as ordinary unit tests through `make check`; they are not
+  enforced by a hosted runner, and this document does not treat that as an open
+  task. Do not re-propose it.
+- **A stronger frozen-`dynamic` rule than specified.** Beyond resolving a literal
+  `dynamic` request to the newest frozen revision, the compiler now also settles
+  the case where analysis exposes *both* a dated embedded view and a dynamic
+  association for the same OID: the dynamic association governs and the
+  revisions are not unioned (`DEC-013`, preserving `DEC-004` exactness).
+- **All three validator hashes turned out to be pinnable.** The `@see`
+  normalization made `assembled_sha256`, `schematron_sha256` and
+  `validator_sha256` reproducible (14 053 rewrites logged in the repair
+  manifest), so `tests/test_closure.py` pins all three rather than only the
+  assembled input.
+
+Phase 5 also produced the measurement that re-aims phase 6: see
+[Phase 6 § Status after phase 5](#phase-6--semantic-evidence-and-expansion-completeness-next).
 
 **Already landed, do not redo.** A7 shipped most of the *assertions* that F2/F3
 describe: `tests/test_closure.py` pins `build_degraded ⊆ {3 reviewed items}`,
@@ -1134,15 +1164,15 @@ Files: `.github/workflows/checks.yml` (new), `conformance.py`,
 `tests/test_closure.py`, `docs/decisions.md` (`DEC-019` amend),
 `docs/known-issues.md`.
 
-1. **Decide the CI host.** Add `.github/workflows/checks.yml` running Python
-   3.10 and 3.12 over `python3 -m unittest discover -s tests` plus
-   `python -m mypy src tests`. Be explicit about a consequence:
-   `tests/test_closure.py::setUpClass` raises `SkipTest` when `../test-workplace`
-   is absent, which it will be in a fresh clone — so on CI the closure and
-   coverage guards protect nothing unless the companion workspace is checked out
-   as a second step. Either check it out (it is private; the runner needs a
-   deploy key or PAT) or make the skip visible in the workflow summary. Do not
-   leave it silently green.
+1. **CI host — decided: none.** This step originally proposed
+   `.github/workflows/checks.yml`. Adding a CI workflow was **deliberately left
+   out of scope**; the item is closed, not deferred, and must not be
+   re-proposed. The guards run locally through `make check`
+   (`python3 -m unittest discover -s tests`). One consequence is recorded here
+   so it is not rediscovered as a defect: `tests/test_closure.py::setUpClass`
+   raises `SkipTest` when the companion `../test-workplace` is absent, so in a
+   clone without the reference workspace the closure and coverage guards skip
+   rather than fail. That is intended behaviour for an optional local companion.
 2. **Normalize the Schematron `@see` URIs before pinning any hash.**
    `validator-manifest.json` carries `schematron_sha256` and `validator_sha256`,
    and **neither is reproducible across machines**: 225 of the 1032
@@ -1228,28 +1258,95 @@ smallest diff, largest correctness effect, and F1's labels depend on it;
 **(b)** the rest of F1; **(c)** F2 and F3 together, since both touch the fixture
 and the new workflow.
 
-### Phase 6 — semantic evidence and expansion completeness (specified, not started)
+### Phase 6 — semantic evidence and expansion completeness (next)
 
-Scope: C1, C6, B3. Coverage effect: opportunistic. The offline research below is
-**already done** and is recorded here as evidence; what remains is the reviewed
-rule for each item and its code.
+Scope: B3, C6, C1, **in that order**, plus one small follow-up
+([§ B0](#b0-impl)) that phase 5's own output exposed. Coverage effect:
+opportunistic. The offline research recorded below is **already done**; what
+remains is the reviewed rule for each item and its code. No ART-DECOR server
+access is required.
 
-**What can start before phase 5 finishes.**
+#### Status after phase 5
 
-- **B3 is fully independent.** It touches `cda/compile.py` and
-  `cda/datatypes.py` only, and its findings are already in hand. It can run in
-  parallel with F1/F2/F3, and it is the natural first item because sub-item 1
-  below also unblocks D1 in phase 7.
-- **C1's parser is independent.** It reads `@context` and `@test` from the
-  generated `include/*.sch`; it does not read `@see`, which is the only thing
-  [§ F3](#f3-impl) rewrites in those files. Do not sequence C1 behind F3 — but
-  do write the parser so it ignores `@see` entirely, so the two stay decoupled.
-  C1's *integration* into `_candidates` benefits from F1's gap labels, because
-  `semantic:no_association` is exactly C1's candidate list.
-- **C6 must follow [F1 step 0](#f1-impl).** C6 audits the concept→code index and
-  the value-set membership that feed `TERM` evidence, and F1 step 0 changes
-  `formal_terminology` for seven fields. Running C6 first would audit a surface
-  that is about to move.
+Every precondition named in the original phase-6 draft is now met: `is_closed`
+is carried on compiled targets, the frozen-`dynamic` terminology index has
+landed, and `mapping-audit.json` persists a `gap` per unresolved datapoint. Two
+of phase 5's measurements change what phase 6 should do.
+
+**1. `semantic:no_association` is empty — C1 must be re-aimed.** The draft
+justified C1 partly as "the candidate list for fields with no association". The
+measured field partition after phase 5 is:
+
+| Gap key | Fields | Groups |
+|---|---:|---:|
+| `physical:datatype_component` | 19 | 18 |
+| `semantic:shared_target` | 4 | — |
+| `physical:no_writable_leaf` | 1 | 4 |
+| `semantic:missing_companion` | 1 | — |
+| `terminology:closure` | 1 | — |
+| `blocked_upstream:no_candidate` | 0 | 8 |
+| **`semantic:no_association`** | **0** | **0** |
+
+No selected-model field fails on a missing association. C1 therefore keeps only
+its *structural* justifications — confirmed `required` status, discriminator
+domains for repetition rules, occurrence upper bounds, and permitted `xsi:type`
+branches — and drops the "find the missing association" motivation entirely. It
+also moves **last** in the phase, because it can no longer unblock a field on
+its own. See [§ C1](#c1-impl), which is rewritten accordingly.
+
+**2. The medication cluster is a depth problem, not an evidence problem.**
+Thirteen of the nineteen `physical:datatype_component` fields are the medication
+cluster, and every one of them reopens against
+`Medikation.substanceAdministration`. Their `reopens_with` lists the *immediate*
+components of that container — `Medikation.moodCode`, `…routeCode`,
+`…approachSiteCode`, `CDASubstanceAdministration.substanceAdministration.repeatNumber`
+and so on — because `_gap_classification` (`compile/mapping.py:1125-1154`)
+selects writable targets exactly one location level below the context node.
+The leaves that actually fit those fields (`…doseQuantity@20230130`,
+`…rateQuantity@20230130`, the `effectiveTime` branches) sit on the contained UV
+Subordinate administration, several levels deeper. The label is correct; the
+evidence stops too shallow to be actionable. [§ B0](#b0-impl) fixes that, and it
+is a precondition for phase 7 reading its own targets out of the audit.
+
+Ordering for the phase: [B0](#b0-impl) → [B3](#b3-impl) → [C6](#c6-impl) →
+[C1](#c1-impl). B0 is hours, B3 is the only item that opens new physical leaves,
+C6 is audit-first and may end as a one-paragraph "no gap", and C1 is now the
+most speculative of the four.
+
+<a id="b0-impl"></a>
+#### B0. Deepen `datatype_component` reopening evidence (new, from phase 5)
+
+Files: `compile/mapping.py` (`_gap_classification`, lines 1125-1154),
+`tests/test_core.py`, `docs/mapping-documentation-format.md` (one sentence),
+`tests/fixtures/reference-mapping-audit.json` if the headline moves (it should
+not — this changes evidence, not selection).
+
+The depth-1 component rule is right for a plain complex datatype (`AD`, `EN`,
+an `IVL_PQ`) whose parts are its immediate children. It is wrong for a
+*structural* container such as `hl7:substanceAdministration`, whose payload
+leaves live under contained templates.
+
+1. Keep depth-1 as the rule for a context node whose datatype classifies as
+   `datatype` or `alias` (`cda/datatypes.py::classify_datatype`).
+2. When the context datatype classifies as `structural` (`POCD_MT000040.*`),
+   descend instead to the **nearest writable leaves** below the context
+   location, at any depth, and cap the list (twenty is enough; the audit is
+   evidence, not a proposal). Prefer leaves whose compiled logical type is
+   compatible with the field's model type, so the medication timestamps surface
+   the `effectiveTime` branches and `dosismenge_und_einheit` surfaces
+   `doseQuantity`.
+3. Do not change the `gap.kind` and do not turn any of this into a candidate:
+   `reopens_with` is reopening evidence for a reviewer, never a mapping. The
+   selection path (`_candidates`) is untouched, so the coverage headline must
+   come out identical — assert that.
+4. Test: a field whose context is a datatype container keeps the depth-1 list; a
+   field whose context is a structural container gets leaves from below the
+   contained template; the reference coverage headline is unchanged.
+
+Acceptance: the thirteen medication fields reopen against the UV Subordinate
+administration leaves that `docs/analyses/2026-09-02-residual-mapping-boundaries.md`
+names by hand today, so phase 7 can read its targets out of the audit instead of
+the analysis prose.
 
 <a id="b3-impl"></a>
 #### B3. Datatype / RIM expansion completeness audit
@@ -1391,6 +1488,26 @@ every `<assert>/@test` in them:
 This is spec-derived and already computed — C1 re-uses an artifact `build`
 produces, it does not add clinical knowledge.
 
+##### Re-aimed after phase 5
+
+Phase 5 measured **zero** fields and zero groups in `semantic:no_association`,
+so C1 can no longer be justified as the route to a field that lacks an
+association. What survives is structural, and each use must name the gap it
+serves:
+
+| Surviving use | Serves |
+|---|---|
+| confirmed `required` status (1 180 `count(…) >= n`) | strengthens an existing WEAK/MEDIUM candidate |
+| discriminator domains (1 134 value-set + 2 463 fixed-value) | `repeat_by_discriminator` rule construction |
+| occurrence upper bounds (2 988 `count(…) <= n`) | stops a rule proposing more occurrences than allowed |
+| permitted `xsi:type` branches (3 825) | `DEC-017` choice selection; independent cross-check on [B3 finding 1](#b3-impl) |
+
+Consequences for scope: C1 runs **last** in phase 6, its acceptance criterion is
+evidence quality rather than coverage, and step 3 below is explicitly *not*
+allowed to create a candidate. If the match rate measured in step 2 is poor, the
+honest outcome is an analysis recording that the generated Schematron cannot be
+cross-referenced reliably — not a looser matcher.
+
 ##### Steps
 
 1. **`compile/schematron.py` (new).** Parse each `include/*.sch` pattern file
@@ -1413,7 +1530,9 @@ produces, it does not add clinical knowledge.
    **strengthens** an existing WEAK/MEDIUM candidate to actionable when a
    `required` or `value_set` constraint confirms the leaf, exactly as
    `boolean_example_discriminator_rules` treats neutral examples as supporting
-   evidence.
+   evidence. Guard this in a test: a field with no candidate before the
+   contributor runs must still have no candidate after it, on the reference
+   workspace as well as on a synthetic case.
 4. **Feed `repeat_by_discriminator`.** `compile/structural.py:518
    _schematron_unique_codes` already consumes uniqueness assertions; extend it
    with the 1 134 value-set and 2 463 fixed-value constraints so a repetition
@@ -1492,24 +1611,47 @@ archives): the `SXCM_TS` subtype graph in the pinned core XSD; the absent
 `representation_type` XSD-base-chain explanation for writable `IVL_TS`; the
 `.10.4040` `width`-only declaration and its compiled consequence; the
 `.10.4058` single-writable-leaf inventory; the Schematron assertion census; the
-`terminologyAssociation` parent census.
+`terminologyAssociation` parent census. All of it re-verified against the
+post-phase-5 workspace: `SXCM_TS` is still an `ALIAS` (`cda/datatypes.py:55`)
+and phase 5 changed nothing in datatype expansion, so every B3 finding stands.
+
+**Newly available from phase 5, use it rather than re-deriving it.**
+
+- `is_closed` is now carried on every compiled target (`cda/compile.py`, the
+  `_annotate_targets` predicate). B3 finding 3 — whether dropping `low`/`high`
+  from a `width`-declaring element is intended `DEC-014` refinement — should be
+  answered against that flag rather than by re-reading the template source.
+- `mapping-audit.json` `summary.gaps` and per-datapoint `gap` give C6 and C1 a
+  measured target list instead of a hand-maintained one.
+- `summary.coverage_headline` gives every phase-6 change a one-line
+  before/after check; `make check` runs the guards.
 
 **Offline, still to do.**
 
 1. **Schematron context match rate.** Before writing the evidence contributor,
    measure what fraction of the 5 530 rule contexts resolve to a compiled target
    by the template-id-plus-trailing-step rule. A low rate means step 2 needs a
-   better matcher, not that the evidence is unusable.
+   better matcher, not that the evidence is unusable. Now the **first** thing to
+   measure in C1, because after the re-aiming a poor match rate is grounds to
+   stop rather than to widen the matcher.
 2. **New-association count for C6.** Step 1 of C6 above; it decides whether C6
-   is a compiler change or a one-paragraph "no gap" analysis.
+   is a compiler change or a one-paragraph "no gap" analysis. Its precondition
+   (F1 step 0) is now satisfied, so this can run immediately.
 3. **`xsi:type` cross-check.** Compare the 3 825 Schematron `xsi:type`
    assertions against the XSD-derived substitutable sets from B3 finding 1. Two
    independent sources agreeing is strong evidence for the polymorphic
    materialization; a disagreement localizes a compiler or publication defect.
 4. **Blast radius of B3 finding 1.** Count how many compiled elements declare a
    datatype that has XSD extensions and no value-bearing children, so the size
-   of the new target surface is known before the change lands (it affects the
-   `no source` count in the F2 coverage headline).
+   of the new target surface is known before the change lands. It moves the
+   `○ no source` term of the coverage headline, which
+   `tests/test_closure.py` now pins — so measure it first and update the
+   baseline through `make baseline` in the same change, with the delta explained
+   in the commit.
+5. **B0 depth check.** For each of the nineteen `physical:datatype_component`
+   fields, confirm whether its context node's datatype classifies as
+   `structural` or as a plain datatype; that count is the exact scope of
+   [§ B0](#b0-impl) and predicts how many reopening lists change.
 
 **Online.** Only one question, and it is not blocking: whether HL7 publishes an
 erratum or clarification on writing `@value` on an `IVL_TS` element that
