@@ -32,7 +32,8 @@ from decor2hl7.retrieval.artifacts import artifact_problems, artifact_record, cl
 from decor2hl7.retrieval.catalog import parse_releases, parse_transactions, transactions
 from decor2hl7.retrieval.fetch import (
     RequestBudgetExceeded, _candidate_projects, _evidence_references, _fetch_want,
-    _inventory, display_references, fetch_spec, hard_references, soft_references,
+    _inventory, _payload_matches_request, _resolved_effective_date,
+    display_references, fetch_spec, hard_references, soft_references,
 )
 from decor2hl7.retrieval.api import REQUIRED_PATHS, artifact_representations
 from decor2hl7.retrieval.sources import apply_source_hint, load_source_hints
@@ -2713,6 +2714,84 @@ class CoreTests(unittest.TestCase):
                 entry["source_warning"], "source representation unavailable"
             )
             self.assertEqual(mocked.call_count, 0)
+
+    def test_referenced_codesystem_cache_is_adopted_offline(self) -> None:
+        """A cached reference declaration is a cache hit for its own identity.
+
+        A code system a project references rather than defines is published with
+        its identity on `ref`, and its analysis form is a project envelope
+        carrying no revision. Offline adoption must recognise it instead of
+        reporting the cached file as missing, and must recover the revision from
+        the cached source form the way a download does.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            analysis = release_dir / "codesystems" / "cs_resource.xml"
+            analysis.parent.mkdir(parents=True)
+            analysis.write_text('<codeSystems><project ident="hl7de-"><codeSystem ref="2.16.840.1.113883.6.96" name="Snomedct" displayName="Snomed-CT" language="de-DE"/></project></codeSystems>', encoding="utf-8")
+            source = release_dir / "codesystems" / "cs_resource.source.xml"
+            source.write_text('<codeSystem ref="2.16.840.1.113883.6.96" name="Snomedct" external="true" effectiveDate="2025-04-30T00:00:00" ident="hl7de-"><issueAssociation count="0"/></codeSystem>', encoding="utf-8")
+            key = "codesystem:2.16.840.1.113883.6.96"
+            manifest = {"resources": {key: {
+                "status": "ok",
+                "file": "codesystems/cs_resource.xml",
+                "project": "hl7de-",
+                "requested_effective_date": "dynamic",
+                "resolved_effective_date": "",
+                "representations": {
+                    "analysis": {
+                        "status": "ok", "file": "codesystems/cs_resource.xml",
+                    },
+                    "source": {
+                        "status": "ok",
+                        "file": "codesystems/cs_resource.source.xml",
+                    },
+                },
+            }}}
+            want = {
+                "kind": "codesystem", "id": "2.16.840.1.113883.6.96",
+                "effective_date": "", "project": "hl7de-",
+            }
+            with patch("decor2hl7.retrieval.fetch.get") as mocked:
+                _fetch_want(
+                    release_dir, manifest, want, owners={},
+                    repositories=["hl7de-"], language="de-DE", ipv4=True,
+                    retry_missing=False, offline=True,
+                )
+            self.assertEqual(mocked.call_count, 0)
+            entry = manifest["resources"][key]
+            self.assertEqual(entry["status"], "ok")
+            self.assertEqual(
+                entry["resolved_effective_date"], "2025-04-30T00:00:00"
+            )
+            self.assertEqual(
+                entry["identity"]["effective_date"], "2025-04-30T00:00:00"
+            )
+
+    def test_reference_declaration_cannot_satisfy_another_revision(self) -> None:
+        """`ref` proves identity, never a revision the payload does not carry."""
+        envelope = '<codeSystems><project ident="hl7de-"><codeSystem ref="2.16.840.1.113883.6.96" name="Snomedct" displayName="Snomed-CT" language="de-DE"/></project></codeSystems>'.encode()
+        dynamic = {
+            "kind": "codesystem", "id": "2.16.840.1.113883.6.96",
+            "effective_date": "",
+        }
+        self.assertTrue(_payload_matches_request(envelope, dynamic))
+        self.assertFalse(_payload_matches_request(
+            envelope, {**dynamic, "effective_date": "2025-04-30T00:00:00"}
+        ))
+        dated = '<codeSystem ref="2.16.840.1.113883.6.96" name="Snomedct" external="true" effectiveDate="2025-04-30T00:00:00" ident="hl7de-"><issueAssociation count="0"/></codeSystem>'.encode()
+        self.assertTrue(_payload_matches_request(
+            dated, {**dynamic, "effective_date": "2025-04-30T00:00:00"}
+        ))
+        self.assertFalse(_payload_matches_request(
+            dated, {**dynamic, "effective_date": "2011-01-01T00:00:00"}
+        ))
+        self.assertFalse(_payload_matches_request(
+            envelope, {**dynamic, "id": "2.16.840.1.113883.6.1"}
+        ))
+        self.assertEqual(
+            _resolved_effective_date(dated, dynamic), "2025-04-30T00:00:00"
+        )
 
     def test_fetch_want_redownloads_checksum_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

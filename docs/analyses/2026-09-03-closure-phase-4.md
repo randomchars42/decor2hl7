@@ -156,16 +156,42 @@ The three remaining `build_degraded` artifacts are
 are settled with cited evidence and named reopening conditions; none can be
 closed from inside this repository.
 
-## Incidental finding, not addressed here
+## Incidental finding, fixed
 
-Running `fetch --offline` against the reference snapshot flips four code systems
-(`0.4.0.127.0.16.1.1.2.1`, `2.16.840.1.113883.15.6`, `2.16.840.1.113883.6.1`,
-`2.16.840.1.113883.6.96`) and the alias key `2.16.840.1.1138836.96` from `ok` to
-`unavailable` with "not cached; network disabled by `--offline`". Their cached
-analysis payloads are project reference stubs
-(`<codeSystem ref="…"/>`, no `id`), so offline cache adoption correctly refuses
-them while the original online fetch had recorded them as `ok`. This was
-reproduced with the phase-4 changes stashed and is therefore pre-existing
-behaviour, unrelated to this work; a subsequent online `fetch` restores all
-five. It is recorded here so the inconsistency between the online and offline
-adoption paths is not lost.
+Running `fetch --offline` against the reference snapshot flipped four code
+systems (`0.4.0.127.0.16.1.1.2.1`, `2.16.840.1.113883.15.6`,
+`2.16.840.1.113883.6.1`, `2.16.840.1.113883.6.96`) and the alias key
+`2.16.840.1.1138836.96` from `ok` to `unavailable` with "not cached; network
+disabled by `--offline`". This was first reproduced with the phase-4 changes
+stashed, so it was pre-existing behaviour rather than a phase-4 regression.
+
+The cause is an identity-modelling gap, not a cache problem. ART-DECOR publishes
+a code system that a project references rather than defines as a reference
+declaration carrying its identity on `ref`:
+
+```xml
+<codeSystems><project ident="hl7de-">
+  <codeSystem ref="2.16.840.1.113883.6.96" name="Snomedct" language="de-DE"/>
+</project></codeSystems>
+```
+
+`_payload_matches_request` recognised only the defining `id` form, so cache
+adoption rejected a file that was in fact present and correct, and reported it
+as not cached. The download path never ran that check, which is why the same
+bytes were `ok` online.
+
+Both `_payload_matches_request` and `_resolved_effective_date` now accept either
+identity attribute. The revision guard is unchanged in strength: a reference
+declaration identifies the artifact but proves no revision, so it satisfies a
+static request only when it carries the requested `effectiveDate` — the analysis
+envelope carries none and correctly cannot. Because that envelope has no
+revision while the source form does, adoption now also reads the revision from
+the cached source form, the way a download does, instead of downgrading the
+recorded identity to `dynamic`.
+
+After the fix, `fetch --offline` against the committed snapshot reports
+`0 unavailable` and changes no artifact status. It additionally fills
+`resolved_effective_date` for the three dated reference declarations, which had
+been empty while `identity.effective_date` already carried the same value. The
+manifest-reconstruct path (`manifest.json` deleted, then `fetch --offline`) also
+adopts all four instead of reporting them missing.

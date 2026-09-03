@@ -22,8 +22,10 @@ Current focused implementation plans:
   document never instantiates; the AKTIN referral-actions value set cannot
   expand because its DIVI intension code system is published nowhere; and the
   CCD Product SPEC parent exists in no revision but `2007-04-01`. Records the
-  resulting 5→3 `build_degraded` and `complete: true` metrics. Closes phase 4
-  of the root [`PLAN.md`](../../PLAN.md).
+  resulting 5→3 `build_degraded` and `complete: true` metrics. Also records the
+  reference-declaration identity gap that made `fetch --offline` report cached
+  code systems as missing, and its fix. Closes phase 4 of the root
+  [`PLAN.md`](../../PLAN.md).
 - [`2026-09-03-closure-gap-analysis.md`](2026-09-03-closure-gap-analysis.md)
   records why the reference `spec/2026.1.2` closure is `degraded`: of 62 missing
   artifacts only 21 are build-degrading, a plain `fetch` never re-probes settled

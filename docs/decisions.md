@@ -94,6 +94,16 @@ cache-only fetch makes no HTTP attempts, reconstructs closure from valid local
 files, and records uncached references as unavailable so a later online fetch
 will retry them.
 
+An artifact declares its identity on `id` when it defines itself and on `ref`
+when a project references it rather than defining it — the published shape for
+an external terminology such as SNOMED CT or LOINC, whose analysis form is a
+project envelope with no revision. Both shapes identify the artifact, so cache
+adoption recognises either and a cached reference declaration is a genuine cache
+hit rather than a missing file. Identification is not revision proof: a
+reference declaration satisfies a static request only when it carries the
+requested `effectiveDate`, and the resolved revision is read from the richer
+cached form, exactly as a download reads it.
+
 Evidence: `docs/architecture.md`, `src/decor2hl7/retrieval/`.
 
 ## DEC-005 — Target-neutral model and target boundary

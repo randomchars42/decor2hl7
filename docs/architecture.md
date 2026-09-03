@@ -141,7 +141,10 @@ Important rules retained from the prototype:
     mandatory.
 14. In `--offline` mode, perform closure discovery from cached files without any
     HTTP attempt and record uncached references as retryable unavailable
-    dependencies.
+    dependencies. Adopting a cached file matches the requested kind and
+    identifier against both the defining `id` and the referencing `ref` form, so
+    a repeated offline run neither re-reports a cached artifact as missing nor
+    downgrades its recorded revision.
 15. Consult exact catalog entries for package-local `builtin` supplements and
     cited `waiver` decisions. Every such entry declares `source_url`,
     `source_version` and `license`, and a `completeness` from a closed

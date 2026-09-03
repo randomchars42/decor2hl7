@@ -320,24 +320,49 @@ def _evidence_references(root: ET.Element, relevant_ids: set[str]) -> list[Want]
     return list(found.values())
 
 
+ARTIFACT_TAG_FOR_KIND = {
+    "dataset": "dataset",
+    "concept": "concept",
+    "template": "template",
+    "valueset": "valueSet",
+    "codesystem": "codeSystem",
+}
+
+
+def _artifact_identity_nodes(
+    root: ET.Element, want: Mapping[str, str]
+) -> list[ET.Element]:
+    """Return the nodes in a payload that declare the requested identity.
+
+    A defining artifact carries its identity on `id`.  A code system that a
+    project references rather than defines — an external terminology such as
+    SNOMED CT or LOINC, but also a locally referenced table — is published as a
+    reference declaration that carries the same identity on `ref` instead, in
+    both the source and the analysis form.  Such a node identifies the artifact
+    even though it enumerates no concepts, so a cached reference declaration is
+    a genuine cache hit for its own identity.
+    """
+    wanted_tag = ARTIFACT_TAG_FOR_KIND.get(want.get("kind", ""))
+    wanted_id = want.get("id") or ""
+    if not wanted_tag or not wanted_id:
+        return []
+    return [
+        node for node in root.iter()
+        if local(node.tag) == wanted_tag
+        and wanted_id in {node.get("id"), node.get("ref")}
+    ]
+
+
 def _resolved_effective_date(payload: bytes, want: Mapping[str, str]) -> str:
     try:
         root, _ = parse_text(payload.decode("utf-8", "replace"))
     except (ET.ParseError, ValueError):
         return ""
-    tag_for = {
-        "dataset": "dataset",
-        "concept": "concept",
-        "template": "template",
-        "valueset": "valueSet",
-        "codesystem": "codeSystem",
-    }
-    wanted_tag = tag_for.get(want.get("kind", ""))
-    rows: list[str] = []
-    for node in root.iter():
-        if wanted_tag and local(node.tag) == wanted_tag and node.get("id") == want.get("id"):
-            if node.get("effectiveDate"):
-                rows.append(node.get("effectiveDate") or "")
+    rows = [
+        node.get("effectiveDate") or ""
+        for node in _artifact_identity_nodes(root, want)
+        if node.get("effectiveDate")
+    ]
     if not rows and root.get("effectiveDate"):
         rows.append(root.get("effectiveDate") or "")
     return max(rows) if rows else ""
@@ -349,29 +374,17 @@ def _payload_matches_request(payload: bytes, want: Mapping[str, str]) -> bool:
     Deterministic filenames make an orphan cache discoverable after the
     manifest is deleted, but the filename alone is not evidence that the
     contents have the requested kind, identifier and (for static requests)
-    revision.
+    revision.  A reference declaration proves kind and identifier; it can only
+    satisfy a static request when it also carries the requested revision.
     """
     try:
         root, _ = parse_text(payload.decode("utf-8", "replace"))
     except (ET.ParseError, ValueError):
         return False
-    tag_for = {
-        "dataset": "dataset",
-        "concept": "concept",
-        "template": "template",
-        "valueset": "valueSet",
-        "codesystem": "codeSystem",
-    }
-    wanted_tag = tag_for.get(want.get("kind", ""))
-    wanted_id = want.get("id") or ""
     wanted_date = want.get("effective_date") or ""
-    if not wanted_tag or not wanted_id:
-        return False
     return any(
-        local(node.tag) == wanted_tag
-        and node.get("id") == wanted_id
-        and (not wanted_date or node.get("effectiveDate") == wanted_date)
-        for node in root.iter()
+        not wanted_date or node.get("effectiveDate") == wanted_date
+        for node in _artifact_identity_nodes(root, want)
     )
 
 
@@ -1066,6 +1079,13 @@ def _fetch_want(
     cached_source = cached_payloads.get("source")
     if existing is not None:
         resolved_date = _resolved_effective_date(existing, resolved_want)
+        # The analysis form of a reference declaration is a project envelope
+        # that carries no revision, while its source form does.  A download
+        # records the revision from the richer form, so cache adoption must
+        # consult the same evidence instead of downgrading the identity to
+        # `dynamic`.
+        if not resolved_date and cached_source is not None:
+            resolved_date = _resolved_effective_date(cached_source, resolved_want)
         requested_date = requested_want.get("effective_date") or ""
         # A static dependency must not accidentally adopt another revision that
         # happens to have the expected filename. Dynamic dependencies may adopt
