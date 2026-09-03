@@ -388,11 +388,19 @@ not select lot number because no source association to that target has been
 found. The mapping and renderer contain no medication-class, template-OID or
 field-name exception.
 
+A 2026-09-03 active-profile re-review found no candidate withheld by the
+one-slot or unique-nearest-occurrence gates. Sixty relevant static-association
+routes resolve directly and six routes resolve through one unique slot; the
+seven unresolved routes expose no CDA/RIM slot at all. They reference
+pharmaceutical-model particles or an unattached precondition template, so
+relaxing this decision would not recover them safely.
+
 Evidence: `src/decor2hl7/compile/mapping.py`,
 `src/decor2hl7/cda/core.py`, `src/decor2hl7/cda/compile.py`,
 `src/decor2hl7/transforms.py`, `tests/test_core.py`,
 `tests/test_cda_datatypes.py`,
-`docs/analyses/2026-09-01-medication-common-base-slot.md`.
+`docs/analyses/2026-09-01-medication-common-base-slot.md`,
+`docs/analyses/2026-09-03-reviewed-edis-attachments-and-decision-review.md`.
 
 ## DEC-016 — Empty owned coded domains and target-governed fallback
 
@@ -599,7 +607,8 @@ Evidence: `src/decor2hl7/cda/datatypes.py`,
 `src/decor2hl7/cda/compile.py`, `src/decor2hl7/compile/mapping.py`,
 `src/decor2hl7/validate.py`, `src/decor2hl7/bindings.py`,
 `src/decor2hl7/cda/render.py`, `tests/test_cda_datatypes.py`,
-`docs/analyses/2026-09-02-medication-compound-dependency.md`.
+`docs/analyses/2026-09-02-medication-compound-dependency.md`,
+`docs/analyses/2026-09-03-reviewed-edis-attachments-and-decision-review.md`.
 
 ## DEC-021 — Open templates and reviewed CDA extension attachments
 

@@ -99,6 +99,7 @@ def _unit_key(value: Any) -> str:
         "mmhg": "mm[hg]", "mm[hg]": "mm[hg]",
         "°c": "cel", "degc": "cel", "cel": "cel",
         "1/min": "/min", "min-1": "/min",
+        "stunde": "h", "stunden": "h",
     }
     return aliases.get(text, text)
 
