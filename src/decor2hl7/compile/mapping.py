@@ -2958,15 +2958,23 @@ def cda_mapping_proposal(
 def mapping_field_delta(
     baseline: Mapping[str, Any], current: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Compare executable mappings field by field across two proposals."""
-    baseline_fields = {
-        str(path) for path, value in baseline.get("fields", {}).items()
-        if value is not None
-    }
-    current_fields = {
-        str(path) for path, value in current.get("fields", {}).items()
-        if value is not None
-    }
+    """Compare executable mappings across proposals or structured audits."""
+
+    def mapped_fields(document: Mapping[str, Any]) -> set[str]:
+        result: set[str] = set()
+        fields = document.get("fields", {})
+        for path, value in fields.items() if isinstance(fields, Mapping) else ():
+            selected = (
+                value.get("selected")
+                if isinstance(value, Mapping) and "selected" in value
+                else value
+            )
+            if selected is not None:
+                result.add(str(path))
+        return result
+
+    baseline_fields = mapped_fields(baseline)
+    current_fields = mapped_fields(current)
     preserved = sorted(baseline_fields & current_fields)
     lost = sorted(baseline_fields - current_fields)
     gained = sorted(current_fields - baseline_fields)
@@ -2977,6 +2985,80 @@ def mapping_field_delta(
         "lost": lost,
         "gained": gained,
     }
+
+
+def _mapping_configuration_notes(
+    proposal: Mapping[str, Any],
+    audit: Mapping[str, Any],
+    model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Describe configured evidence that an executable proposal actually uses."""
+    selected_templates: dict[str, list[str]] = defaultdict(list)
+    selected_fields: set[str] = set()
+    targets = cda.get("targets", {})
+    for field, selection in proposal.get("fields", {}).items():
+        rules = mapping_rules(selection)
+        if rules:
+            selected_fields.add(str(field))
+        for rule in rules:
+            target = (
+                targets.get(cda_target_name(rule), {})
+                if isinstance(targets, Mapping) else {}
+            )
+            if isinstance(target, Mapping) and target.get("template_id"):
+                selected_templates[str(target["template_id"])].append(str(field))
+
+    notes: list[dict[str, Any]] = []
+    reviewed = cda.get("reviewed_extensions", [])
+    extension_templates = sorted({
+        str(extension.get("template_id"))
+        for extension in reviewed if isinstance(extension, Mapping)
+        and extension.get("template_id") in selected_templates
+    })
+    if extension_templates:
+        fields = sorted({
+            field for template in extension_templates
+            for field in selected_templates[template]
+        })
+        notes.append({
+            "generated": True,
+            "source": "config/cda-extensions.json",
+            "note": (
+                "Uses reviewed CDA attachment configuration for "
+                f"{len(extension_templates)} template(s) in {len(fields)} mapped field(s)."
+            ),
+            "templates": extension_templates,
+            "fields": fields,
+        })
+
+    selected_evidence = " ".join(
+        str(detail.get("primary") or "")
+        for field, detail in audit.get("fields", {}).items()
+        if str(field) in selected_fields
+        and isinstance(detail, Mapping)
+        and detail.get("selected")
+    )
+    configured_rules = model.get("meta", {}).get("configured_source_rules", [])
+    for rule in configured_rules if isinstance(configured_rules, list) else ():
+        if not isinstance(rule, Mapping):
+            continue
+        identifiers = {
+            str(rule.get("requested_id") or ""),
+            str(rule.get("resolved_id") or ""),
+        } - {""}
+        template_use = identifiers & set(selected_templates)
+        evidence_use = any(identifier in selected_evidence for identifier in identifiers)
+        if not template_use and not evidence_use:
+            continue
+        rule_name = str(rule.get("rule") or "configured source rule")
+        notes.append({
+            "generated": True,
+            "source": "config/sources.json",
+            "note": f"Uses {rule_name} while resolving mapping evidence.",
+            "artifact": str(rule.get("request_key") or ""),
+        })
+    return notes
 
 
 def _headers(input_dir: Path | None) -> dict[str, list[str]]:
@@ -3354,6 +3436,9 @@ def write_cda_mapping(
     """Write the ART-DECOR/model-to-CDA proposal without inspecting CSV input."""
     cda_proposal, audit, _, cda_details = cda_mapping_audit(
         model, cda, xml_paths
+    )
+    cda_proposal["configuration_notes"] = _mapping_configuration_notes(
+        cda_proposal, audit, model, cda
     )
     enriched_cda = dict(cda)
     enriched_cda["datapoints"] = cda_datapoints(cda, cda_proposal)

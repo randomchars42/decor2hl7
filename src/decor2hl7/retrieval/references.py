@@ -26,6 +26,11 @@ class Want(TypedDict, total=False):
     license: str
     sha256: str
     reason: str
+    alias_of: str
+    source_hint_origin: str
+    alias_requested_key: str
+    alias_reason: str
+    alias_source_hint_origin: str
     dataset: str
     dataset_effective_date: str
     role: str
@@ -85,14 +90,29 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
             return
         found[identity] = want
 
-    stack: list[tuple[ET.Element, tuple[str, ...]]] = [(root, ())]
+    stack: list[
+        tuple[ET.Element, tuple[str, ...], ET.Element | None, ET.Element | None]
+    ] = [
+        (root, (), None, None)
+    ]
     while stack:
-        node, ancestors = stack.pop()
+        node, ancestors, enclosing_value_domain, enclosing_member_scope = stack.pop()
         tag = local(node.tag)
         parent_tag = ancestors[-1] if ancestors else ""
         project_context = reference_project(node)
+        child_value_domain = node if tag == "valueDomain" else enclosing_value_domain
+        child_member_scope = (
+            node
+            if tag in {"conceptList", "valueDomain"}
+            else enclosing_member_scope
+        )
         for child in node:
-            stack.append((child, ancestors + (tag,)))
+            stack.append((
+                child,
+                ancestors + (tag,),
+                child_value_domain,
+                child_member_scope,
+            ))
 
         if not soft:
             if tag == "include" and node.get("ref"):
@@ -148,7 +168,12 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
                 add(
                     "dataset",
                     node.get("sourceDataset"),
-                    node.get("sourceDatasetFlexibility"),
+                    node.get("sourceDatasetEffectiveDate")
+                    or node.get("sourceDatasetFlexibility"),
+                    node.get("sourceDatasetPrefix")
+                    or node.get("prefix")
+                    or node.get("ident")
+                    or node.get("templateIdent"),
                 )
             elif tag == "valueSet":
                 if node.get("ref"):
@@ -188,12 +213,33 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
                     role="display-evidence",
                 )
             elif tag == "include" and node.get("codeSystem"):
+                value_domain_type = (
+                    enclosing_value_domain.get("type")
+                    if enclosing_value_domain is not None else ""
+                ) or ""
+                has_inline_members = bool(
+                    enclosing_member_scope is not None
+                    and any(
+                        local(member.tag) in {"concept", "exception"}
+                        and member.get("code")
+                        and member.get("codeSystem")
+                        for member in enclosing_member_scope.iter()
+                    )
+                )
+                has_intensional_selector = bool(
+                    node.get("code") or node.get("op")
+                )
                 add(
                     "codesystem",
                     node.get("codeSystem"),
                     node.get("effectiveDate") or node.get("flexibility"),
                     node.get("prefix"),
-                    role="expansion-support",
+                    role=(
+                        "display-evidence"
+                        if (value_domain_type and value_domain_type != "code")
+                        or (has_inline_members and not has_intensional_selector)
+                        else "expansion-support"
+                    ),
                 )
             elif tag in {"concept", "exception"} and node.get("codeSystem"):
                 add(

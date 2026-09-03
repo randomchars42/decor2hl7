@@ -34,7 +34,8 @@ from .api import (
 )
 from .client import DEFAULT_API_BASE, FINAL_STATUS, get
 from .artifacts import REQUIRED_ROLES
-from .sources import apply_source_hint, builtin_payload
+from .sources import apply_source_hint, builtin_payload, resolve_alias
+from .expansion import expansion_status
 from .xml import local, parse_text
 from .references import (
     KIND_ORDER, KINDS, Want, display_references, hard_references,
@@ -159,11 +160,54 @@ def _parse(path: Path) -> ET.Element | None:
         return None
 
 
-def _valueset_complete(node: ET.Element) -> bool:
+def _valueset_complete(
+    node: ET.Element, document: ET.Element | None = None,
+) -> bool:
+    resources = document if document is not None else node
+    members = any(
+        local(child.tag) in {"concept", "exception"}
+        and child.get("code")
+        and child.get("codeSystem")
+        for child in node.iter()
+    )
+    if not members:
+        return False
+    local_value_sets = {
+        child.get("id") for child in resources.iter()
+        if local(child.tag) == "valueSet" and child.get("id")
+    }
+    local_code_systems = {
+        child.get("id") for child in resources.iter()
+        if local(child.tag) == "codeSystem" and child.get("id")
+    }
     for child in node.iter():
-        if local(child.tag) in {"concept", "exception"} and child.get("code") and child.get("codeSystem"):
-            return True
-    return False
+        if local(child.tag) != "include":
+            continue
+        if child.get("ref") and child.get("ref") not in local_value_sets:
+            return False
+        if (
+            child.get("codeSystem")
+            and child.get("codeSystem") not in local_code_systems
+        ):
+            return False
+    return True
+
+
+def _valueset_needs_expansion(payload: bytes) -> bool:
+    try:
+        root, _ = parse_text(payload.decode("utf-8", "replace"))
+    except (ET.ParseError, ValueError):
+        return False
+    value_sets = [
+        node for node in root.iter() if local(node.tag) == "valueSet"
+    ]
+    if not value_sets and local(root.tag) == "valueSet":
+        value_sets = [root]
+    return (
+        any(local(node.tag) == "include" for node in root.iter())
+        or not value_sets
+        or any(not _valueset_complete(node, root) for node in value_sets)
+    )
 
 
 def _inventory(root: ET.Element | None) -> set[tuple[str, str, str]]:
@@ -185,7 +229,7 @@ def _inventory(root: ET.Element | None) -> set[tuple[str, str, str]]:
             continue
         if kind == "template" and not (node.get("name") or node.get("displayName") or node.get("effectiveDate")):
             continue
-        if kind == "valueset" and not _valueset_complete(node):
+        if kind == "valueset" and not _valueset_complete(node, root):
             continue
         result.add((kind, ident, node.get("effectiveDate") or ""))
     return result
@@ -469,6 +513,20 @@ def _external_manifest_fields(want: Mapping[str, str]) -> dict[str, str]:
         "source_version": want.get("source_version") or "",
         "license": want.get("license") or "",
         **({"source_hint": want["source_hint"]} if want.get("source_hint") else {}),
+        **(
+            {"source_hint_origin": want["source_hint_origin"]}
+            if want.get("source_hint_origin") else {}
+        ),
+    }
+
+
+def _source_hint_fields(want: Mapping[str, str]) -> dict[str, str]:
+    return {
+        **({"source_hint": want["source_hint"]} if want.get("source_hint") else {}),
+        **(
+            {"source_hint_origin": want["source_hint_origin"]}
+            if want.get("source_hint_origin") else {}
+        ),
     }
 
 
@@ -907,17 +965,40 @@ def _fetch_want(
     release: str = "",
     api_base: str = DEFAULT_API_BASE,
     source_hints: Mapping[str, Mapping[str, str]] | None = None,
+    configured_oid_owners: Mapping[str, str] | None = None,
     artifact_owners: dict[str, str] | None = None,
     save_artifact_owners: Callable[[], None] | None = None,
 ) -> Path | None:
     requested_want = dict(want)
-    resolved_want = apply_source_hint(want, source_hints or {})
+    resolved_want = resolve_alias(want, source_hints or {})
+    requested_key = _key(requested_want)
     key = _key(resolved_want)
     old = manifest.setdefault("resources", {}).get(key, {})
     relative = str(old.get("file") or _filename(resolved_want))
     target = release_dir / relative
     display = _resource_label(resolved_want)
     external_mode = resolved_want.get("mode") or ""
+
+    def finish(path: Path | None) -> Path | None:
+        """Record a reviewed malformed identity without fabricating success."""
+        if requested_key != key and resolved_want.get("alias_requested_key"):
+            manifest.setdefault("resources", {})[requested_key] = {
+                "status": "alias",
+                "alias_of": key,
+                "identity_corrected": True,
+                "requested_effective_date": (
+                    requested_want.get("effective_date") or "dynamic"
+                ),
+                "identity": _identity(requested_want),
+                "reason": resolved_want.get("alias_reason") or "",
+                "source_hint": resolved_want.get("alias_requested_key") or "",
+                "source_hint_origin": (
+                    resolved_want.get("alias_source_hint_origin") or "bundled"
+                ),
+            }
+            if save_manifest is not None:
+                save_manifest()
+        return path
 
     def external_resolution() -> tuple[bool, Path | None]:
         return _materialize_external(
@@ -934,7 +1015,7 @@ def _fetch_want(
     ):
         handled, external_path = external_resolution()
         if handled:
-            return external_path
+            return finish(external_path)
     existing = _existing_cache_payload(target, old)
     if existing is not None and not _payload_matches_request(existing, resolved_want):
         existing = None
@@ -953,9 +1034,19 @@ def _fetch_want(
 
     cached_representations: dict[str, dict[str, Any]] = {}
     cached_payloads: dict[str, bytes] = {}
+    cached_expansion_warning = ""
     for form in old_representations:
         payload, entry = cached_representation(str(form))
         if payload is not None:
+            if str(form) == "expansion":
+                usable, warning = expansion_status(payload)
+                if not usable:
+                    cached_expansion_warning = warning
+                    cached_representations["expansion-evidence"] = entry
+                    cached_payloads["expansion-evidence"] = payload
+                    continue
+            elif str(form) == "expansion-evidence":
+                _, cached_expansion_warning = expansion_status(payload)
             cached_representations[str(form)] = entry
             cached_payloads[str(form)] = payload
     cached_source = cached_payloads.get("source")
@@ -993,7 +1084,7 @@ def _fetch_want(
                     effective_date=resolved_date or str(old.get("resolved_effective_date") or ""),
                     api_base=str(old.get("api_base") or api_base),
                 ),
-                **({"source_hint": resolved_want["source_hint"]} if resolved_want.get("source_hint") else {}),
+                **_source_hint_fields(resolved_want),
                 **(
                     {"source_warning": "source representation unavailable"}
                     if cached_source is None else {}
@@ -1001,6 +1092,27 @@ def _fetch_want(
             }
             if cached_source is not None:
                 cache_entry.pop("source_warning", None)
+            needs_expansion = (
+                resolved_want.get("kind") == "valueset"
+                and "expansion" not in cached_representations
+                and _valueset_needs_expansion(existing)
+                and (
+                    retry_missing
+                    or not (
+                        cached_expansion_warning
+                        or old.get("expansion_warning")
+                    )
+                    or "request budget" in str(old.get("expansion_warning") or "")
+                    or "network is disabled" in str(old.get("expansion_warning") or "")
+                )
+            )
+            if needs_expansion and offline:
+                cache_entry["expansion_warning"] = (
+                    cached_expansion_warning
+                    or "value-set expansion unavailable while network is disabled"
+                )
+            elif "expansion" in cached_representations:
+                cache_entry.pop("expansion_warning", None)
             manifest["resources"][key] = cache_entry
             repaired = (
                 old.get("status") != "ok"
@@ -1011,13 +1123,24 @@ def _fetch_want(
             _emit(progress, f"fetch: {display}: cached{suffix}")
             if repaired and save_manifest is not None:
                 save_manifest()
-            return target
+            if not needs_expansion or offline:
+                return finish(target)
     if old.get("status") == "missing" and not retry_missing:
         handled, external_path = external_resolution()
         if handled:
-            return external_path
+            return finish(external_path)
+        normalized_old = dict(old)
+        normalized_old["projects_considered"] = list(
+            old.get("projects_considered") or old.get("attempted_projects") or []
+        )
+        normalized_old["resolution_attempts"] = list(
+            old.get("resolution_attempts") or old.get("attempts") or []
+        )
+        manifest["resources"][key] = normalized_old
+        if save_manifest is not None:
+            save_manifest()
         _emit(progress, f"fetch: {display}: known missing")
-        return None
+        return finish(None)
 
     request_want: Want = dict(resolved_want)
     if not request_want.get("effective_date") and old.get("resolved_effective_date"):
@@ -1043,7 +1166,7 @@ def _fetch_want(
     if offline:
         handled, external_path = external_resolution()
         if handled:
-            return external_path
+            return finish(external_path)
         manifest["resources"][key] = {
             "status": "unavailable",
             "reason": "not cached; network disabled by --offline",
@@ -1058,12 +1181,12 @@ def _fetch_want(
                 effective_date=str(old.get("resolved_effective_date") or ""),
                 api_base=str(old.get("api_base") or api_base),
             ),
-            **({"source_hint": resolved_want["source_hint"]} if resolved_want.get("source_hint") else {}),
+            **_source_hint_fields(resolved_want),
         }
         if save_manifest is not None:
             save_manifest()
         _emit(progress, f"fetch: {display}: not cached (offline)")
-        return None
+        return finish(None)
 
     def request(project: str, form: str, url: str) -> bytes | None:
         if request_budget is not None:
@@ -1123,24 +1246,45 @@ def _fetch_want(
         path = release_dir / form_relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
-        saved_representations[form] = {
+        representation = {
             "status": "ok",
             "file": form_relative,
             "url": url,
             "bytes": len(payload),
             "sha256": _digest(payload),
         }
+        saved_representations[form] = representation
+        # Dynamic and exact requests can converge on one frozen representation
+        # path. Expansion envelopes carry request-time UUID/timestamp metadata,
+        # so a later equivalent response changes the physical checksum. Keep
+        # every manifest reference to that shared file synchronized.
+        resources = manifest.get("resources", {})
+        for resource in resources.values() if isinstance(resources, Mapping) else ():
+            if not isinstance(resource, dict):
+                continue
+            forms = resource.get("representations", {})
+            if not isinstance(forms, dict):
+                continue
+            for old_form, old_representation in list(forms.items()):
+                if (
+                    isinstance(old_representation, Mapping)
+                    and old_representation.get("file") == form_relative
+                ):
+                    forms[old_form] = dict(representation)
         return path
 
     candidates = deque(_candidate_projects(
-        request_want, owners, repositories, artifact_owners
+        request_want, owners, repositories, artifact_owners,
+        configured_oid_owners,
     ))
     attempted_candidates: set[str] = set()
+    considered_projects: list[str] = []
     while candidates:
         project = candidates.popleft()
         if project in attempted_candidates:
             continue
         attempted_candidates.add(project)
+        considered_projects.append(project)
         forms = _requests(
             request_want,
             project,
@@ -1228,17 +1372,16 @@ def _fetch_want(
         # Expansion sets are additional frozen evidence for intensional value
         # sets; failure does not invalidate the extracted definition.
         expansion_error = ""
-        if request_want["kind"] == "valueset" and resolved_date:
-            try:
-                root, _ = parse_text(analysis_payload.decode("utf-8", "replace"))
-                intensional = any(
-                    local(node.tag) == "include" for node in root.iter()
+        if request_want["kind"] == "valueset":
+            needs_expansion = _valueset_needs_expansion(analysis_payload)
+            if needs_expansion and "expansion" not in saved_representations:
+                expansion_effective = (
+                    resolved_date
+                    or request_want.get("effective_date")
+                    or "dynamic"
                 )
-            except (ET.ParseError, ValueError):
-                intensional = False
-            if intensional:
                 expansion_url = valueset_expansion_url(
-                    request_want["id"], resolved_date,
+                    request_want["id"], expansion_effective,
                     project=project, language=language,
                     base_url=request_want.get("api_base") or api_base,
                 )
@@ -1251,7 +1394,13 @@ def _fetch_want(
                     else request(project, "expansion", expansion_url)
                 )
                 if expansion_payload is not None:
-                    store("expansion", expansion_payload, expansion_url)
+                    usable, expansion_error = expansion_status(expansion_payload)
+                    if usable:
+                        store("expansion", expansion_payload, expansion_url)
+                    else:
+                        store(
+                            "expansion-evidence", expansion_payload, expansion_url
+                        )
                 else:
                     expansion_error = (
                         "value-set expansion deferred by request budget"
@@ -1272,8 +1421,18 @@ def _fetch_want(
                 request_want, project=project, effective_date=resolved_date,
                 api_base=request_want.get("api_base") or api_base,
             ),
+            "projects_considered": considered_projects,
+            "resolution_attempts": attempts,
+            **(
+                {"owner_source": "configured-oid-owner"}
+                if not _owner(request_want["id"], owners)
+                and project == _owner(
+                    request_want["id"], configured_oid_owners or {}
+                )
+                else {}
+            ),
             "representations": saved_representations,
-            **({"source_hint": request_want["source_hint"]} if request_want.get("source_hint") else {}),
+            **_source_hint_fields(request_want),
             **({"publication_url": request_want["publication_url"]} if request_want.get("publication_url") else {}),
             **(
                 {"source_warning": "source representation unavailable"}
@@ -1305,7 +1464,7 @@ def _fetch_want(
         )
         if save_manifest is not None:
             save_manifest()
-        return analysis_path
+        return finish(analysis_path)
 
     relevant_attempts = [item for item in attempts if item.get("form") == "analysis"]
     if not relevant_attempts:
@@ -1317,31 +1476,36 @@ def _fetch_want(
     )
     handled, external_path = external_resolution()
     if handled:
-        return external_path
+        return finish(external_path)
     final_status = "missing" if settled else "error"
     owner = _owner(resolved_want["id"], owners)
-    attempted_projects = list(dict.fromkeys(
-        str(item.get("project") or "") for item in attempts
-    ))
+    configured_owner = _owner(
+        resolved_want["id"], configured_oid_owners or {}
+    )
+    projects_considered = considered_projects
     manifest["resources"][key] = {
         "status": final_status,
         "settled": settled,
         "owner": owner,
+        **({"configured_owner": configured_owner} if configured_owner else {}),
         "declared_project": resolved_want.get("project") or "",
-        "attempted_projects": attempted_projects,
+        "projects_considered": projects_considered,
+        "resolution_attempts": attempts,
+        # Compatibility spellings retained for existing generated workspaces.
+        "attempted_projects": projects_considered,
         "attempts": attempts,
         "representations": saved_representations,
         "identity": _identity(
             resolved_want,
-            project=attempted_projects[-1] if attempted_projects else "",
+            project=projects_considered[-1] if projects_considered else "",
             api_base=resolved_want.get("api_base") or api_base,
         ),
-        **({"source_hint": resolved_want["source_hint"]} if resolved_want.get("source_hint") else {}),
+        **_source_hint_fields(resolved_want),
     }
     if save_manifest is not None:
         save_manifest()
     _emit(progress, f"fetch: {display}: {final_status} after {len(attempts)} attempt(s)")
-    return None
+    return finish(None)
 
 
 def verify_manifest(release_dir: Path) -> list[str]:
@@ -1400,6 +1564,13 @@ def closure_paths(release_dir: Path, transaction_dir: Path, role: str = "build")
     result: list[Path] = []
     for key in keys:
         entry = manifest.get("resources", {}).get(key, {})
+        seen = {str(key)}
+        while isinstance(entry, Mapping) and entry.get("status") == "alias":
+            target_key = str(entry.get("alias_of") or "")
+            if not target_key or target_key in seen:
+                break
+            seen.add(target_key)
+            entry = manifest.get("resources", {}).get(target_key, {})
         if entry.get("status") == "ok" and entry.get("file"):
             path = release_dir / str(entry["file"])
             if path.exists():
@@ -1516,25 +1687,48 @@ def fetch_spec(
 
     def checkpoint(*, complete: bool, interrupted: bool = False) -> dict[str, Any]:
         current_keys = roles["build"] | roles["evidence"]
+
+        def resolved_entry(key: str) -> Mapping[str, Any]:
+            resources = manifest.get("resources", {})
+            entry = resources.get(key, {}) if isinstance(resources, Mapping) else {}
+            seen = {key}
+            while isinstance(entry, Mapping) and entry.get("status") == "alias":
+                target = str(entry.get("alias_of") or "")
+                if not target or target in seen:
+                    break
+                seen.add(target)
+                entry = (
+                    resources.get(target, {})
+                    if isinstance(resources, Mapping) else {}
+                )
+            return entry if isinstance(entry, Mapping) else {}
+
+        def resolved_status(key: str) -> str:
+            return str(resolved_entry(key).get("status") or "unknown")
+
         current_errors = sorted(
             key for key in current_keys
-            if manifest.get("resources", {}).get(key, {}).get("status") == "error"
+            if resolved_status(key) == "error"
         )
         current_missing = sorted(
             key for key in current_keys
-            if manifest.get("resources", {}).get(key, {}).get("status") == "missing"
+            if resolved_status(key) == "missing"
         )
         current_unavailable = sorted(
             key for key in current_keys
-            if manifest.get("resources", {}).get(key, {}).get("status") == "unavailable"
+            if resolved_status(key) == "unavailable"
         )
         current_waived = sorted(
             key for key in current_keys
-            if manifest.get("resources", {}).get(key, {}).get("status") == "waived"
+            if resolved_status(key) == "waived"
         )
         current_partial = sorted(
             key for key in current_keys
-            if manifest.get("resources", {}).get(key, {}).get("status") == "partial"
+            if resolved_status(key) == "partial"
+        )
+        current_aliases = sorted(
+            key for key in current_keys
+            if manifest.get("resources", {}).get(key, {}).get("status") == "alias"
         )
         build_pending = pending_keys("build")
         evidence_pending = pending_keys("evidence")
@@ -1545,8 +1739,29 @@ def fetch_spec(
                 role in REQUIRED_ROLES
                 for role in resource_roles.get(key, set())
             )
-            and manifest.get("resources", {}).get(key, {}).get("status") != "ok"
+            and (
+                resolved_status(key) != "ok"
+                or bool(resolved_entry(key).get("expansion_warning"))
+            )
         )
+        resolution = {
+            key: {
+                "projects_considered": list(
+                    resolved_entry(key).get("projects_considered")
+                    or resolved_entry(key).get("attempted_projects")
+                    or []
+                ),
+                "resolution_attempts": list(
+                    resolved_entry(key).get("resolution_attempts")
+                    or resolved_entry(key).get("attempts")
+                    or []
+                ),
+            }
+            for key in sorted(
+                set(required_failures) | set(current_missing)
+                | set(current_unavailable) | set(current_errors)
+            )
+        }
         readiness_errors: list[str] = []
         if root_status["transaction"] != "ok":
             readiness_errors.append("selected transaction analysis form is unavailable")
@@ -1557,7 +1772,13 @@ def fetch_spec(
         if validation_packages and root_status["validation_packages"] != "ok":
             readiness_errors.append("pinned validation package set is unavailable")
         degradation_warnings = [
-            f"dependency unavailable: {key}" for key in required_failures
+            (
+                f"dependency expansion incomplete: {key}: "
+                f"{resolved_entry(key).get('expansion_warning')}"
+                if resolved_entry(key).get("expansion_warning")
+                else f"dependency unavailable: {key}"
+            )
+            for key in required_failures
         ]
         build_ready = crawl_complete and not readiness_errors
         closure = {
@@ -1573,7 +1794,9 @@ def fetch_spec(
             "readiness_errors": readiness_errors,
             "degraded": bool(degradation_warnings),
             "degraded_resources": required_failures,
+            "crawl_degraded": required_failures,
             "degradation_warnings": degradation_warnings,
+            "resolution": resolution,
             "interrupted": interrupted,
             "phase": phase,
             "build_resources": sorted(roles["build"]),
@@ -1594,17 +1817,19 @@ def fetch_spec(
             "unavailable": current_unavailable,
             "waived": current_waived,
             "partial": current_partial,
+            "aliases": current_aliases,
             "errors": current_errors + root_errors,
             "root_status": dict(root_status),
             "summary": {
                 "ok": sum(
-                    manifest.get("resources", {}).get(key, {}).get("status") == "ok"
+                    resolved_status(key) == "ok"
                     for key in current_keys
                 ) + int(root_status["project_config"] == "ok") + int(root_status["transaction"] == "ok"),
                 "missing": len(current_missing),
                 "unavailable": len(current_unavailable),
                 "waived": len(current_waived),
                 "partial": len(current_partial),
+                "alias": len(current_aliases),
                 "error": len(current_errors) + len(root_errors),
             },
             "resources_considered": resources_considered,
@@ -1620,6 +1845,7 @@ def fetch_spec(
             "unavailable": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "unavailable"),
             "waived": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "waived"),
             "partial": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "partial"),
+            "alias": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "alias"),
             "error": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "error"),
         }
         write_json(manifest_path, manifest)
@@ -1750,6 +1976,7 @@ def fetch_spec(
         owners = _project_directory(
             _parse(project_directory) if project_directory else None
         )
+        configured_owners = getattr(source_hints, "oid_owners", {})
         repositories = _repositories(
             _parse(project_config) if project_config else None,
             *(build_roots + evidence_roots),
@@ -1840,6 +2067,7 @@ def fetch_spec(
                             save_manifest=save_manifest,
                             main_project=prefix, release=release_date,
                             api_base=api_base, source_hints=source_hints,
+                            configured_oid_owners=configured_owners,
                             artifact_owners=artifact_owners,
                             save_artifact_owners=save_artifact_owners,
                         )
@@ -1910,6 +2138,7 @@ def fetch_spec(
                         save_manifest=save_manifest,
                         main_project=prefix, release=release_date,
                         api_base=api_base, source_hints=source_hints,
+                        configured_oid_owners=configured_owners,
                         artifact_owners=artifact_owners,
                         save_artifact_owners=save_artifact_owners,
                     )

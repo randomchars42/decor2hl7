@@ -26,6 +26,13 @@ mapping coverage categories or be presented as source-to-target evidence. A
 legal CDA leaf is not thereby a meaningful dataset correspondence, and a
 selected mapping is not thereby a schema-valid complete document.
 
+The editable JSON may contain `configuration_notes`. Generated entries have
+`generated: true`, name the configuration source, and briefly identify a
+reviewed attachment or source-resolution rule actually used by an executable
+mapping. `init-cda-mapping` may refresh those generated entries, but it must
+preserve reviewer-authored notes and every reviewed field/structure/default
+choice. A note records provenance; it is not additional semantic evidence.
+
 The report should answer, in order:
 
 1. Where would mapped data appear in the CDA?

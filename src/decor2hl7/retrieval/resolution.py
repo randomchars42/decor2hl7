@@ -130,9 +130,11 @@ def candidate_projects(
     oid_owners: Mapping[str, str],
     repositories: Iterable[str],
     artifact_owners: Mapping[str, str] | None = None,
+    configured_oid_owners: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Order repository candidates without widening authoritative scope."""
     owner = project_owner(want["id"], oid_owners)
+    configured_owner = project_owner(want["id"], configured_oid_owners or {})
     declared = want.get("project") or ""
     indexed = indexed_artifact_owner(artifact_owners or {}, want)
     result: list[str] = []
@@ -141,7 +143,7 @@ def candidate_projects(
         if declared and declared != owner:
             result.append(declared)
         return result
-    for value in (declared, indexed):
+    for value in (configured_owner, declared, indexed):
         if value and value not in result:
             result.append(value)
     for value in repositories:

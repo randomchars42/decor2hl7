@@ -9,6 +9,7 @@ from typing import Any, Iterable, Mapping
 import xml.etree.ElementTree as ET
 
 from ..retrieval.xml import child_text, local, parse_file
+from ..retrieval.expansion import normalized_value_sets
 from ..transforms import mapping_rules, selected_cda_targets
 
 
@@ -29,7 +30,15 @@ def value_set_members(
             root, _ = parse_file(path)
         except ET.ParseError:
             continue
-        for value_set in root.iter():
+        value_sets = (
+            normalized_value_sets(root)
+            if local(root.tag) == "valueSetExpansionSet"
+            else [
+                node for node in root.iter()
+                if local(node.tag) == "valueSet"
+            ]
+        )
+        for value_set in value_sets:
             if local(value_set.tag) != "valueSet" or not value_set.get("id"):
                 continue
             oid = value_set.get("id") or ""

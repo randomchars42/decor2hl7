@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from decor2hl7.cli import (
+    _merge_mapping_configuration_notes,
     _migrate_repeat_by_discriminator, _prune_absent_pending,
     _prune_stale_pending, main,
 )
@@ -26,6 +27,50 @@ TRANSACTIONS = [{
 
 
 class CliTests(unittest.TestCase):
+    def test_fetch_fail_on_degraded_is_an_explicit_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            set_release(root, RELEASES[0])
+            set_transaction(root, TRANSACTIONS[0])
+            result = {"closure": {
+                "summary": {}, "build_resources": [], "evidence_resources": [],
+                "errors": [], "truncated": False, "build_ready": True,
+                "degraded_resources": ["valueset:1.2.3"],
+                "degradation_warnings": ["dependency unavailable: valueset:1.2.3"],
+            }}
+            with patch(
+                "decor2hl7.retrieval.fetch.fetch_spec", return_value=result
+            ):
+                self.assertEqual(main(["--root", str(root), "fetch"]), 0)
+                self.assertEqual(main([
+                    "--root", str(root), "fetch", "--fail-on-degraded",
+                ]), 2)
+
+    def test_generated_mapping_notes_refresh_without_replacing_user_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proposed = root / "proposed.json"
+            current = root / "current.json"
+            write_json(proposed, {"configuration_notes": [{
+                "generated": True, "source": "config/sources.json",
+                "note": "Current generated note",
+            }]})
+            write_json(current, {"fields": {}, "configuration_notes": [
+                {"note": "Reviewer note"},
+                {"generated": True, "note": "Stale generated note"},
+            ]})
+            self.assertEqual(
+                _merge_mapping_configuration_notes(proposed, current), 1
+            )
+            self.assertEqual(load_json(current)["configuration_notes"], [
+                {"note": "Reviewer note"},
+                {
+                    "generated": True, "source": "config/sources.json",
+                    "note": "Current generated note",
+                },
+            ])
+
     def test_legacy_fan_out_is_migrated_only_by_matching_generated_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -97,6 +142,11 @@ class CliTests(unittest.TestCase):
                 "templates": [template],
                 "mapping_evidence": [source, analysis, template],
                 "unavailable_artifacts": unavailable,
+                "crawl_degraded_artifacts": unavailable + [{
+                    "request_key": "valueset:partial",
+                    "type": "valueset", "status": "partial-expansion",
+                    "roles": ["formal-terminology"], "reasons": ["partial"],
+                }],
                 "warnings": unavailable[0]["reasons"],
             }
             stderr = StringIO()
@@ -106,7 +156,13 @@ class CliTests(unittest.TestCase):
             diagnostics = load_json(model_dir / "build-diagnostics.json")
             self.assertEqual(diagnostics["status"], "degraded")
             self.assertEqual(diagnostics["summary"]["unavailable_artifacts"], 1)
+            self.assertEqual(diagnostics["summary"]["crawl_degraded"], 2)
             self.assertEqual(diagnostics["summary"]["unresolved_templates"], 1)
+            model = load_json(model_dir / "model.json")
+            self.assertEqual(
+                model["meta"]["artifact_closure"]["crawl_degraded_artifacts"],
+                ["dataset:old@2005", "valueset:partial"],
+            )
             self.assertIn("warning: degraded build", stderr.getvalue())
 
     def test_symmetric_release_and_transaction_selection(self) -> None:
@@ -277,6 +333,7 @@ class CliTests(unittest.TestCase):
             model.mkdir(parents=True)
             write_json(model / "model.json", {"fields": {"a": {"type": "text"}}})
             write_json(model / "cda.json", {"document": [], "targets": {}})
+            write_json(model / "mapping-audit.json", {"fields": {}})
             (model / "cda-mapping.proposed.json").write_text('{"fields":{"a":"Doc.value"}}')
             (model / "cda-mapping.md").write_text("# CDA guide", encoding="utf-8")
             (model / "cda-mapping-details.md").write_text("# CDA details", encoding="utf-8")

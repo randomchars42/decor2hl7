@@ -232,9 +232,30 @@ statically dated reference must resolve to that exact revision.
 
 Known cross-project references are data-driven. The bundled source catalog, plus
 an optional `config/sources.json` override with the same shape, can supply an API
-base, project, and exact effective date that an XML reference omits. Once the
-source is resolved, recursive template analysis is identical for local and
-external artifacts; no template-specific special case exists in the compiler.
+base, project, and exact effective date that an XML reference omits. A top-level
+`oid_owners` object can route a reviewed OID prefix before blind repository
+probing; the fetched global project directory always has higher precedence.
+Every failed request and ordered project candidate remains in the manifest and
+transaction closure. Once the source is resolved, recursive template analysis
+is identical for local and external artifacts; no template-specific special
+case exists in the compiler.
+
+```json
+{
+  "oid_owners": {"1.2.3": "reviewed-project-"},
+  "artifacts": {
+    "template:malformed-id": {
+      "mode": "alias",
+      "alias_of": "template:corrected-id",
+      "reason": "Reviewed correction of the published identity"
+    }
+  }
+}
+```
+
+Aliases request only the corrected identity but preserve both identities and
+the reason in `manifest.json`. They satisfy a closure dependency only when the
+corrected target is successful.
 
 An open ART-DECOR template permits additional CDA-valid content, but neither
 `context="**"` nor project membership identifies which standalone template
@@ -279,9 +300,10 @@ The source catalog also has a provisional external-artifact phase (`DEC-012`).
 An exact entry may use `mode: "builtin"` to materialize a small reviewed XML
 supplement shipped with the package, or `mode: "waiver"` to retain a cited
 decision that no complete external artifact is currently available. Builtins
-work with `fetch --offline`; waivers are never reported as successful artifacts
-and keep the affected build visibly degraded. This mechanism and the initial
-entries remain open for review; it is not a generic web scraper.
+work with `fetch --offline`; waivers are never reported as successful artifacts.
+This supplement/waiver mechanism and its initial entries remain open for
+review; it is not a generic web scraper. Exact aliases are governed separately
+by accepted `DEC-022`.
 
 `fetch` also caches checksum-pinned validation inputs: DECOR-core 2.2.28, the
 complete official CDA R2 normative and SDTC XSD trees at the compiler's pinned
@@ -303,18 +325,27 @@ Dynamic external references are frozen after their first resolution: the
 manifest records both the requested `dynamic` binding and the resolved
 `effectiveDate`, project, API base, source and expanded representation URLs, and
 checksums. A missing cache file is refetched using that exact resolved date.
+Intensional, dynamic or otherwise incomplete ValueSets also receive frozen
+`$expand` evidence when the service supplies it. Compilation and validator
+generation consume the response only when its `current`/`count` totals prove a
+complete, non-empty expansion. Server-capped prefixes remain cached as
+`expansion-evidence`, are reported as degraded, and are not mistaken for the
+whole formal domain. Exact terminology embedded in another selected build
+artifact is available to both model and validator compilation.
 `--max-requests` limits actual recursive HTTP attempts rather than merely logical
-resource count.
+resource count. `fetch --fail-on-degraded` is a conservative acquisition gate
+that returns nonzero when any required retrieval dependency remains degraded.
 
 `closure.json` separates crawler settlement from compiler readiness. A settled
 crawl can contain unavailable recursive dependencies. `build` uses the exact
 artifacts that are present and writes `build-diagnostics.json` plus a concise
-`build-diagnostics.md` describing every omission. It never substitutes another
+`build-diagnostics.md` describing the full `crawl_degraded` set separately from
+`build_degraded`, the subset actually consulted by selected formal terminology,
+validator ValueSets or CDA template compilation. It never substitutes another
 revision. The selected transaction source/analysis pair, the representing CDA
 document template, identity mismatches, and corrupt successful downloads remain
-fatal. Missing datasets, terminology, nested templates, display evidence, or
-mapping evidence produce a visibly degraded build instead of preventing all
-analysis.
+fatal. Other unavailable evidence remains visible without falsely changing the
+headline build status.
 
 ## Generated models
 
@@ -330,7 +361,8 @@ analysis.
   referenced lists, so an intentional empty list is not reported as a missing
   standalone ValueSet.
 - `build-diagnostics.json` / `build-diagnostics.md`: unavailable dependency
-  identities, their expected build effect, and unresolved CDA template links.
+  identities split into crawl and actual-build impact, plus unresolved CDA
+  template links.
 - `conformance-validation/build-conformance.json` and `.md`: report-only
   DECOR source XSD/Schematron findings, exact-closure validator generation and
   the explicit status of native compiled-project validation. Source findings
@@ -473,6 +505,10 @@ names; JSON configuration excerpts precede read-only XML previews.
 template/element identifiers, and structural group context. The reusable,
 target-neutral format is specified in
 [`docs/mapping-documentation-format.md`](docs/mapping-documentation-format.md).
+When selected mappings use reviewed attachment or source-resolution
+configuration, the editable JSON also contains short generated
+`configuration_notes`; `init-cda-mapping` refreshes those notes without
+overwriting reviewer-authored notes or field choices.
 
 ### CSV → model
 

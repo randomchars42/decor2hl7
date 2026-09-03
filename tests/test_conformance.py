@@ -14,6 +14,7 @@ from unittest.mock import patch
 from decor2hl7.cda.core import CORE_FILES, CORE_REVISION, core_paths
 from decor2hl7.conformance import (
     _complete_schematron_namespaces,
+    _repair_generated_stylesheet,
     _safe_member,
     _extract_cda,
     _extract_decor,
@@ -28,6 +29,25 @@ from decor2hl7.retrieval.fetch import _fetch_direct
 
 
 class ConformanceTests(unittest.TestCase):
+    def test_generated_supply_match_repair_is_exact_and_logged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            stylesheet = Path(temporary) / "validator.xsl"
+            stylesheet.write_text(
+                '<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform">'
+                '<xsl:template match="hl7:entryRelationship[@typeCode=\'REFR\'][[hl7:supply]"/>'
+                '<xsl:template match="hl7:entryRelationship[@typeCode=\'REFR\'][hl7:supply]"/>'
+                '<xsl:template match="hl7:other[[hl7:supply][x]"/>'
+                '</xsl:stylesheet>', encoding="utf-8",
+            )
+            repairs = _repair_generated_stylesheet(stylesheet)
+            updated = stylesheet.read_text(encoding="utf-8")
+            self.assertEqual(len(repairs), 1)
+            self.assertIn(
+                'match="hl7:entryRelationship[@typeCode=\'REFR\'][hl7:supply]"',
+                updated,
+            )
+            self.assertIn('match="hl7:other[[hl7:supply][x]"', updated)
+
     def test_generated_schematron_declares_qname_string_namespaces(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -173,6 +193,53 @@ class ConformanceTests(unittest.TestCase):
             self.assertEqual([(item.get("id"), item.get("effectiveDate")) for item in values], [
                 ("7.8.9", "2026-01-04T00:00:00")
             ])
+
+    def test_assembled_closure_merges_valueset_definition_and_expansion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_dir = root / "spec"
+            release_dir.mkdir()
+            (release_dir / "project.xml").write_text(
+                '<project prefix="demo-"/>', encoding="utf-8"
+            )
+            dataset = root / "dataset.xml"
+            dataset.write_text(
+                '<dataset id="d" effectiveDate="2026"/>', encoding="utf-8"
+            )
+            transaction = root / "transaction.xml"
+            transaction.write_text(
+                '<transaction id="t" effectiveDate="2026"/>', encoding="utf-8"
+            )
+            definition = root / "definition.xml"
+            definition.write_text('''<valueSet id="vs" effectiveDate="2025">
+              <conceptList><include codeSystem="cs"/></conceptList>
+            </valueSet>''', encoding="utf-8")
+            expansion = root / "expansion.xml"
+            expansion.write_text('''<valueSetExpansionSet current="1" count="1">
+              <valueSet id="vs" effectiveDate="2025">
+                <conceptList><include codeSystem="cs"/></conceptList>
+              </valueSet>
+              <expansion><items is="concept" code="A" codeSystem="cs"/></expansion>
+            </valueSetExpansionSet>''', encoding="utf-8")
+            output = root / "assembled.xml"
+            assemble_decor_closure(
+                release_dir,
+                {
+                    "transaction_analysis": dataset,
+                    "transaction_source": transaction,
+                    "model_resources": [], "templates": [],
+                    "terminology_resources": [definition, expansion],
+                },
+                {"key": "2026", "date": "2026"},
+                {"id": "t", "effective_date": "2026"}, output,
+            )
+            terminology = ET.parse(output).getroot().find("terminology")
+            self.assertIsNotNone(terminology)
+            assert terminology is not None
+            value_sets = terminology.findall("valueSet")
+            self.assertEqual(len(value_sets), 1)
+            self.assertIsNone(value_sets[0].find(".//include"))
+            self.assertIsNotNone(value_sets[0].find(".//concept"))
 
     def test_markdown_report_is_bounded_but_json_is_complete(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

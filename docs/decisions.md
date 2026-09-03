@@ -35,6 +35,8 @@ is not necessarily an accepted clinical policy.
 | DEC-018 | Neutral-example boolean discriminator occurrences | accepted | verified |
 | DEC-019 | DECOR-core and complete CDA validation stack | accepted | verified |
 | DEC-020 | Compound-datatype companion requirements | accepted | verified |
+| DEC-021 | Open templates and reviewed CDA extension attachments | accepted | verified |
+| DEC-022 | Reviewed malformed artifact-identity aliases | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -194,6 +196,15 @@ transaction forms, corrupt successful artifacts and exact-identity
 contradictions remain fatal. Static references are never silently replaced by
 another revision.
 
+Retrieval and build degradation are distinct. `closure.json` retains every
+required dependency that the crawler could not obtain as `crawl_degraded`.
+`build-diagnostics.json` additionally reports `build_degraded`: only an absent
+artifact consulted by a selected field's formal terminology, a generated
+validator ValueSet (including its unresolved CodeSystem intension), or the CDA
+template compiler affects the headline build status. A CodeSystem reference
+under a non-code value domain or beside complete inline members is display
+evidence unless another standalone ValueSet genuinely requires it.
+
 Evidence: `src/decor2hl7/compile/artifacts.py`, `docs/architecture.md`,
 `docs/known-issues.md`.
 
@@ -207,6 +218,11 @@ Evidence: `src/decor2hl7/compile/artifacts.py`, `docs/architecture.md`,
 `cda-mapping-details.md` derive from the same analysis. The concise guide shows
 human names, exact keys, contextual read-only XML and explicit candidate/result
 classes. Configuration is edited in JSON, never in generated Markdown or XML.
+
+When an executable proposal depends on a reviewed attachment, identity alias,
+source hint or OID-owner override, `cda-mapping.json` carries a short generated
+`configuration_notes` entry. Reinitialization refreshes generated notes while
+preserving reviewer-authored notes and mapping choices.
 
 Its stable coverage headline separates mapped dataset datapoints and target
 leaves, actionable unselected suggestions, datapoints with no suitable writable
@@ -302,6 +318,21 @@ Structural occurrence rules from `DEC-007`, including medication `for_each` and
 specification-derived pupil `repeat_by_discriminator`, remain authoritative
 because datatype expansion supplies legal XML value structure, not
 source/target occurrence semantics.
+
+A frozen `$expand` response is a first-class terminology representation.
+Dynamic bindings resolve to the effective revision returned by the analysis
+form, and both that identity and the returned expansion evidence are cached.
+Only a non-empty expansion whose ART-DECOR `current` and `count` totals prove
+that the response is complete becomes compiler input. A complete wrapper is
+normalized from its sibling `expansion/items` into an extensional concept list,
+replacing the definition's unresolved includes. A server-capped response is
+retained as `expansion-evidence`, reported as degraded, and never treated as the
+whole value set. The terminology compiler and DECOR validator assembly consume
+the same accepted frozen members. An unavailable or partial expansion leaves
+the formal domain unresolved; it does not promote dataset labels, a returned
+prefix, or another revision into normative members. Exact value-set revisions
+embedded in another selected build artifact are also supplied to validator
+assembly, matching the model compiler's existing closure view.
 
 Evidence: `src/decor2hl7/cda/`, `src/decor2hl7/semantics.py`,
 `tests/test_cda_datatypes.py`, `tests/test_core.py`.
@@ -548,6 +579,16 @@ project. Since no complete native compiled project
 is published by the fetched API forms, that distinct validation stage is
 recorded as `not-run` rather than inferred from source or analysis views.
 
+The assembler restores QName-string namespace declarations omitted by the
+publication transform. One reviewed DECOR-core emission defect is repaired
+narrowly: a generated `match` containing the unbalanced
+`hl7:entryRelationship[@typeCode='REFR'][[hl7:supply]` token loses the extra
+opening bracket. Every rewrite is recorded in `validator-manifest.json`; other
+malformed XPath remains untouched and the executable probe still fails closed.
+The same before/after record is written to
+`validator-compilation-errors.txt` for the publication-transform diagnostic
+trail; a logged reviewed repair is not itself a compilation failure.
+
 `validate-cda` is a separate enforced gate: it validates documents against the
 complete SDTC schema entry point and the generated transaction/datatype
 Schematron. It fails closed if package or validator checksums differ, generation
@@ -649,6 +690,31 @@ CDA core choice branches are not materialized at that occurrence.
 Evidence: `src/decor2hl7/cda/extensions.py`,
 `src/decor2hl7/retrieval/fetch.py`, `src/decor2hl7/cda/compile.py`,
 `tests/test_core.py`, `tests/test_cda_datatypes.py`.
+
+## DEC-022 — Reviewed malformed artifact-identity aliases
+
+**Decision:** accepted
+**Implementation:** verified
+
+A source catalog entry may declare an exact `alias` from one malformed
+published artifact key to one reviewed corrected key. The alias requires a
+non-empty reason and cannot carry builtin/waiver payload fields. Retrieval
+requests and caches only the corrected identity, while `manifest.json` retains
+both keys: the published key has `status: "alias"`, its target and correction
+reason; the corrected key owns the bytes and resolved identity.
+
+An alias satisfies a closure dependency only while its target is `ok`. A
+missing, partial, waived or erroneous target remains degraded, so an alias can
+never fabricate an artifact. Compiler records retain requested and resolved
+identities and mark the correction explicitly. The initial reviewed aliases
+correct the malformed SNOMED CT CodeSystem OID
+`2.16.840.1.1138836.96` and template OID
+`2.16.840.1.1133883.17.3.10.1.34`.
+
+Evidence: `src/decor2hl7/retrieval/sources.py`,
+`src/decor2hl7/retrieval/fetch.py`,
+`src/decor2hl7/retrieval/artifacts.py`,
+`tests/test_external_sources.py`.
 
 ## Maintenance rule
 

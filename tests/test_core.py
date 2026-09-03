@@ -271,6 +271,39 @@ class CoreTests(unittest.TestCase):
                     {"id": "tx", "effective_date": "2026"},
                 )
 
+    def test_mapping_notes_only_report_configured_rules_in_selected_use(self) -> None:
+        proposal = {"fields": {"field": "Attached.value"}}
+        audit = {"fields": {
+            "field": {"selected": "Attached.value", "primary": {"via": "entry"}}
+        }}
+        model = {"meta": {"configured_source_rules": [
+            {
+                "rule": "configured OID-owner override",
+                "request_key": "template:entry",
+                "requested_id": "entry", "resolved_id": "entry",
+            },
+            {
+                "rule": "configured artifact source hint",
+                "request_key": "template:unused",
+                "requested_id": "unused", "resolved_id": "unused",
+            },
+        ]}}
+        cda_model = {
+            "targets": {"Attached.value": {"template_id": "entry"}},
+            "reviewed_extensions": [{"template_id": "entry"}],
+        }
+        notes = mapping_compiler._mapping_configuration_notes(
+            proposal, audit, model, cda_model
+        )
+        self.assertEqual(len(notes), 2)
+        self.assertTrue(all(note["generated"] for note in notes))
+        self.assertFalse(any("unused" in str(note) for note in notes))
+
+        unselected = mapping_compiler._mapping_configuration_notes(
+            {"fields": {"field": None}}, audit, model, cda_model
+        )
+        self.assertEqual(unselected, [])
+
     def test_codesystem_and_concept_context_references_are_typed(self) -> None:
         root = ET.fromstring('''<valueSet id="vs">
           <sourceCodeSystem id="1.2.3" effectiveDate="2020-01-01" prefix="term-"/>
@@ -332,6 +365,44 @@ class CoreTests(unittest.TestCase):
         self.assertNotIn(
             "display-cs", {row["id"] for row in hard + soft_references(root)}
         )
+
+    def test_noncode_and_partly_inline_codesystem_includes_are_display_only(self) -> None:
+        root = ET.fromstring('''<dataset>
+          <concept id="text"><valueDomain type="text"><conceptList>
+            <include codeSystem="text-cs"/>
+          </conceptList></valueDomain></concept>
+          <concept id="coded"><valueDomain type="code"><conceptList>
+            <concept code="A" codeSystem="inline-cs"/>
+            <include codeSystem="inline-cs"/>
+          </conceptList></valueDomain></concept>
+          <valueSet id="standalone"><conceptList>
+            <concept code="B" codeSystem="standalone-inline-cs"/>
+            <include codeSystem="standalone-inline-cs"/>
+          </conceptList></valueSet>
+        </dataset>''')
+        self.assertEqual(
+            [row["id"] for row in hard_references(root)], ["standalone"]
+        )
+        self.assertEqual(
+            {row["id"] for row in display_references(root)},
+            {"text-cs", "inline-cs", "standalone-inline-cs"},
+        )
+
+    def test_representing_template_preserves_exact_source_dataset_identity(self) -> None:
+        root = ET.fromstring('''<transaction>
+          <representingTemplate sourceDataset="1.2.3"
+            sourceDatasetEffectiveDate="2020-01-02" templateIdent="owner-"/>
+        </transaction>''')
+        dataset = next(
+            row for row in hard_references(root) if row["kind"] == "dataset"
+        )
+        self.assertEqual(dataset["effective_date"], "2020-01-02")
+        self.assertEqual(dataset["project"], "owner-")
+        urls = artifact_representations(
+            dataset, project=dataset["project"], main_project="aktin-",
+            release=RELEASE["date"], language="de-DE",
+        )
+        self.assertTrue(all("/dataset/1.2.3/2020-01-02" in row["url"] for row in urls))
 
 
     def test_model_separates_groups_and_fields(self) -> None:
@@ -1430,6 +1501,21 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(delta["preserved"], ["a"])
             self.assertEqual(delta["lost"], ["b"])
             self.assertEqual(delta["gained"], ["c"])
+            audit_delta = mapping_compiler.mapping_field_delta(
+                {"fields": {
+                    "a": {"selected": "A"},
+                    "b": {"selected": "B"},
+                    "c": {"selected": None},
+                }},
+                {"fields": {
+                    "a": {"selected": "A2"},
+                    "b": {"selected": None},
+                    "c": {"selected": "C"},
+                }},
+            )
+            self.assertEqual(audit_delta["preserved"], ["a"])
+            self.assertEqual(audit_delta["lost"], ["b"])
+            self.assertEqual(audit_delta["gained"], ["c"])
 
     def test_semantic_negation_transform_beats_unrelated_named_code_slot(self) -> None:
         model = {"groups": {}, "fields": {"measures.isolation": {
@@ -2519,6 +2605,20 @@ class CoreTests(unittest.TestCase):
             model = compile_model(transaction, [valueset])
             self.assertEqual(accepted_values(model["fields"]["status"])["aktiv"]["code"], "A")
 
+    def test_complete_expansion_wrapper_populates_structural_members(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            expansion = Path(tmp) / "valueset.expansion.xml"
+            expansion.write_text('''<valueSetExpansionSet current="1" count="1">
+              <valueSet id="1.2.3" effectiveDate="2025">
+                <conceptList><include codeSystem="9.9"/></conceptList>
+              </valueSet>
+              <expansion><items is="concept" code="A" codeSystem="9.9"
+                displayName="Active"/></expansion>
+            </valueSetExpansionSet>''', encoding="utf-8")
+            members = value_set_members([expansion])
+            self.assertEqual(members[("1.2.3", "2025")][0]["code"], "A")
+            self.assertEqual(members[("1.2.3", "2025")][0]["kind"], "concept")
+
     def test_live_evidence_does_not_seed_unrelated_external_crawl(self) -> None:
         root = ET.fromstring('''<project>
           <concept id="relevant"><name>Relevant</name><inherit ref="old" datasetId="9.1" datasetEffectiveDate="2020-01-01" prefix="ext-"/></concept>
@@ -2631,6 +2731,26 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(
             _candidate_projects(stale, {"1.2.3": "aktin-"}, ["aktin-", "pmp-"]),
             ["aktin-", "old-"],
+        )
+
+    def test_configured_owner_precedes_probe_but_not_project_directory(self) -> None:
+        want = {
+            "kind": "template", "id": "1.2.3.4",
+            "effective_date": "", "project": "",
+        }
+        self.assertEqual(
+            _candidate_projects(
+                want, {}, ["aktin-", "configured-"], None,
+                {"1.2.3": "configured-"},
+            ),
+            ["configured-", "aktin-"],
+        )
+        self.assertEqual(
+            _candidate_projects(
+                want, {"1.2": "directory-"}, ["aktin-"], None,
+                {"1.2.3": "configured-"},
+            ),
+            ["directory-"],
         )
 
     def test_static_template_selection_never_substitutes_revision(self) -> None:
@@ -2760,6 +2880,7 @@ class CoreTests(unittest.TestCase):
 
             inputs = compiler_inputs(release, transaction)
             self.assertEqual(inputs["templates"], [template])
+            self.assertIn(analysis, inputs["terminology_resources"])
             self.assertEqual(
                 [item["request_key"] for item in inputs["unavailable_artifacts"]],
                 ["dataset:missing@2020"],
@@ -2797,6 +2918,76 @@ class CoreTests(unittest.TestCase):
             report = (model_dir / "build-diagnostics.md").read_text(encoding="utf-8")
             self.assertIn("valueset:vs@2020", report)
             self.assertIn("nested", report)
+
+    def test_build_diagnostics_limit_headline_to_consulted_terminology(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp)
+            value_set = model_dir / "valueset.xml"
+            value_set.write_text('''<valueSet id="vs" effectiveDate="2020">
+              <conceptList><include codeSystem="active-cs"/></conceptList>
+            </valueSet>''', encoding="utf-8")
+            inputs = {
+                "terminology_resources": [value_set],
+                "build_artifacts": [],
+                "unavailable_artifacts": [
+                    {
+                        "request_key": "codesystem:active-cs",
+                        "type": "codesystem", "id": "active-cs",
+                        "status": "missing", "roles": ["expansion-support"],
+                        "reasons": [],
+                    },
+                    {
+                        "request_key": "codesystem:display-only",
+                        "type": "codesystem", "id": "display-only",
+                        "status": "missing", "roles": ["display-evidence"],
+                        "reasons": [],
+                    },
+                ],
+            }
+            model = {"fields": {"coded": {"formal_terminology": {
+                "status": "unresolved", "value_sets": [{"id": "vs"}],
+            }}}}
+            result = write_build_diagnostics(
+                model_dir, inputs, {"unresolved_templates": []}, model
+            )
+            self.assertEqual(result["status"], "degraded")
+            self.assertEqual(result["summary"]["crawl_degraded"], 2)
+            self.assertEqual(
+                [item["request_key"] for item in result["build_degraded"]],
+                ["codesystem:active-cs"],
+            )
+
+    def test_partial_expansion_degrades_only_an_active_value_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = {
+                "terminology_resources": [],
+                "unavailable_artifacts": [],
+                "build_artifacts": [{
+                    "request_key": "valueset:active",
+                    "resolved": {"type": "valueset", "id": "active"},
+                    "resolution": {"expansion_warning": (
+                        "partial value-set expansion: returned 100 of 200 members"
+                    )},
+                    "forms": {"analysis": {}, "expansion-evidence": {}},
+                    "roles": ["formal-terminology"],
+                }, {
+                    "request_key": "valueset:inactive",
+                    "resolved": {"type": "valueset", "id": "inactive"},
+                    "resolution": {"expansion_warning": "partial"},
+                    "forms": {"analysis": {}},
+                    "roles": ["formal-terminology"],
+                }],
+            }
+            model = {"fields": {"coded": {"formal_terminology": {
+                "status": "unresolved", "value_sets": [{"id": "active"}],
+            }}}}
+            result = write_build_diagnostics(
+                Path(tmp), inputs, {"unresolved_templates": []}, model
+            )
+            self.assertEqual(
+                [item["request_key"] for item in result["build_degraded"]],
+                ["valueset:active"],
+            )
 
     def test_missing_formal_valueset_does_not_promote_logical_labels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

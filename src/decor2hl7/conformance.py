@@ -478,7 +478,7 @@ def _copy_children(
     only request identity and an inner, effective-dated ``template`` carrying
     the definition.  Only the latter is valid publication-transform input.
     """
-    seen: set[tuple[str, str, str]] = set()
+    seen: dict[tuple[str, str, str], ET.Element] = {}
     for path in paths:
         try:
             declared_namespaces = dict(
@@ -488,21 +488,29 @@ def _copy_children(
             root = ET.parse(path).getroot()
         except (OSError, ET.ParseError):
             continue
-        candidates = [
-            node for node in root.iter()
-            if node.tag in names
-            and bool(node.get("effectiveDate"))
-            and bool(node.get("id") or node.get("name"))
-        ]
-        for node in candidates:
+        from .retrieval.expansion import normalized_value_sets
+        from .retrieval.xml import local
+
+        is_expansion = (
+            local(root.tag) == "valueSetExpansionSet"
+            or local(root.tag) == "valueSet"
+            and path.name.endswith(".expansion.xml")
+        )
+        if is_expansion and "valueSet" in names:
+            candidates = [(node, True) for node in normalized_value_sets(root)]
+        else:
+            candidates = [
+                (node, False) for node in root.iter()
+                if node.tag in names
+                and bool(node.get("effectiveDate"))
+                and bool(node.get("id") or node.get("name"))
+            ]
+        for node, extensional in candidates:
             identity = (
                 node.tag,
                 str(node.get("id") or node.get("ref") or node.get("name") or ""),
                 str(node.get("effectiveDate") or ""),
             )
-            if identity in seen:
-                continue
-            seen.add(identity)
             copied = copy.deepcopy(node)
             attribute_values = " ".join(
                 str(value)
@@ -537,7 +545,63 @@ def _copy_children(
                                 attribute,
                                 re.sub(pattern, f"{output_prefix}:", value),
                             )
+            existing = seen.get(identity)
+            if existing is not None:
+                if node.tag in {"valueSet", "codeSystem"}:
+                    _merge_terminology_resource(
+                        existing, copied,
+                        replace_concept_list=extensional and node.tag == "valueSet",
+                    )
+                continue
+            seen[identity] = copied
             destination.append(copied)
+
+
+def _merge_terminology_resource(
+    destination: ET.Element, incoming: ET.Element, *,
+    replace_concept_list: bool = False,
+) -> None:
+    """Merge analysis and frozen expansion forms of one exact revision."""
+    for name, value in incoming.attrib.items():
+        if name not in destination.attrib:
+            destination.set(name, value)
+
+    def signature(node: ET.Element) -> tuple[str, ...]:
+        return (
+            node.tag,
+            str(node.get("id") or ""),
+            str(node.get("code") or ""),
+            str(node.get("codeSystem") or ""),
+            str(node.get("ref") or ""),
+            str(node.get("effectiveDate") or node.get("flexibility") or ""),
+            str(node.get("op") or ""),
+        )
+
+    for child in incoming:
+        if child.tag == "conceptList":
+            if replace_concept_list:
+                for item in list(destination):
+                    if item.tag == "conceptList":
+                        destination.remove(item)
+                destination.append(copy.deepcopy(child))
+                continue
+            target = next(
+                (item for item in destination if item.tag == "conceptList"),
+                None,
+            )
+            if target is None:
+                destination.append(copy.deepcopy(child))
+                continue
+            known = {signature(item) for item in target}
+            for item in child:
+                marker = signature(item)
+                if marker not in known:
+                    target.append(copy.deepcopy(item))
+                    known.add(marker)
+            continue
+        marker = signature(child)
+        if marker not in {signature(item) for item in destination}:
+            destination.append(copy.deepcopy(child))
 
 
 def assemble_decor_closure(
@@ -667,6 +731,37 @@ def _complete_schematron_namespaces(assembled: Path, schematron: Path) -> None:
     tree.write(schematron, encoding="utf-8", xml_declaration=True)
 
 
+_SUPPLY_MATCH_DEFECT = "[[hl7:supply]"
+
+
+def _repair_generated_stylesheet(stylesheet: Path) -> list[dict[str, Any]]:
+    """Repair the one reviewed DECOR-core malformed supply-match emission."""
+    text = stylesheet.read_text(encoding="utf-8")
+    repairs: list[dict[str, Any]] = []
+    attribute = re.compile(r'\bmatch="([^"]*)"')
+
+    def replace(match: re.Match[str]) -> str:
+        value = match.group(1)
+        if (
+            _SUPPLY_MATCH_DEFECT not in value
+            or "hl7:entryRelationship[@typeCode='REFR']" not in value
+            or value.count("[") != value.count("]") + 1
+        ):
+            return match.group(0)
+        repaired = value.replace(_SUPPLY_MATCH_DEFECT, "[hl7:supply]", 1)
+        repairs.append({
+            "kind": "decor-core-supply-match-bracket",
+            "before": value,
+            "after": repaired,
+        })
+        return f'match="{repaired}"'
+
+    updated = attribute.sub(replace, text)
+    if repairs:
+        stylesheet.write_text(updated, encoding="utf-8")
+    return repairs
+
+
 def generate_transaction_schematron(
     release_dir: Path,
     assembled: Path,
@@ -722,6 +817,7 @@ def generate_transaction_schematron(
     shutil.copytree(include, target_include)
     validator = output_dir / "cda-template.xsl"
     compiled = compile_schematron(release_dir, schema, validator)
+    compiled["stylesheet_repairs"] = _repair_generated_stylesheet(validator)
     compiled["generation_messages"] = [line for line in log.splitlines() if line]
     probe_error = ""
     with tempfile.TemporaryDirectory(prefix="decor2hl7-validator-probe-") as temporary:
@@ -744,8 +840,17 @@ def generate_transaction_schematron(
         log + ("\n" if log else ""), encoding="utf-8"
     )
     compilation_error_path = output_dir / "validator-compilation-errors.txt"
-    if probe_error:
-        compilation_error_path.write_text(probe_error + "\n", encoding="utf-8")
+    repair_log = "\n".join(
+        "REPAIR {kind}\nbefore: {before}\nafter:  {after}".format(**repair)
+        for repair in compiled["stylesheet_repairs"]
+    )
+    diagnostics_log = "\n\n".join(
+        item for item in (repair_log, probe_error) if item
+    )
+    if diagnostics_log:
+        compilation_error_path.write_text(
+            diagnostics_log + "\n", encoding="utf-8"
+        )
     elif compilation_error_path.exists():
         compilation_error_path.unlink()
     write_json(output_dir / "validator-manifest.json", {
@@ -763,7 +868,12 @@ def generate_transaction_schematron(
         "compilation_error_file": (
             compilation_error_path.name if probe_error else None
         ),
+        "stylesheet_repair_log_file": (
+            compilation_error_path.name
+            if compiled["stylesheet_repairs"] else None
+        ),
         "generation_messages": compiled["generation_messages"],
+        "stylesheet_repairs": compiled["stylesheet_repairs"],
     })
     return compiled
 

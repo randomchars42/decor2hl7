@@ -16,7 +16,9 @@ from ..workspace import load_json
 ArtifactKind = Literal[
     "transaction", "dataset", "concept", "template", "valueset", "codesystem",
 ]
-ArtifactFormName = Literal["source", "analysis", "expansion"]
+ArtifactFormName = Literal[
+    "source", "analysis", "expansion", "expansion-evidence",
+]
 DependencyRole = Literal[
     "structure", "formal-terminology", "expansion-support",
     "mapping-evidence", "display-evidence",
@@ -55,7 +57,7 @@ class ArtifactRecord(TypedDict, total=False):
     roles: list[str]
     required: bool
     status: str
-    resolution: dict[str, str]
+    resolution: dict[str, Any]
 
 
 def _request_identity(key: str, entry: Mapping[str, Any]) -> ArtifactIdentity:
@@ -139,13 +141,20 @@ def artifact_record(
         "status": str(entry.get("status") or "unknown"),
         "resolution": {
             "source_hint": str(entry.get("source_hint") or ""),
+            "source_hint_origin": str(entry.get("source_hint_origin") or ""),
             "publication_url": str(entry.get("publication_url") or ""),
             "origin": str(entry.get("origin") or "art-decor"),
             "source_url": str(entry.get("source_url") or ""),
             "source_version": str(entry.get("source_version") or ""),
             "completeness": str(entry.get("completeness") or ""),
             "reason": str(entry.get("reason") or ""),
+            "expansion_warning": str(entry.get("expansion_warning") or ""),
             "owner": str(entry.get("owner") or resolved.get("project") or ""),
+            "owner_source": str(entry.get("owner_source") or ""),
+            "identity_corrected": bool(entry.get("identity_corrected")),
+            "alias_of": str(entry.get("alias_of") or ""),
+            "projects_considered": list(entry.get("projects_considered", [])),
+            "resolution_attempts": list(entry.get("resolution_attempts", [])),
         },
     }
 
@@ -166,18 +175,27 @@ def artifact_integrity_problems(record: Mapping[str, Any]) -> list[str]:
     if not isinstance(requested, Mapping) or not isinstance(resolved, Mapping):
         return [f"{key}: malformed identity"]
     if record.get("status") == "ok":
+        corrected = bool(
+            isinstance(record.get("resolution"), Mapping)
+            and record.get("resolution", {}).get("identity_corrected")
+        )
         resolved_date = str(resolved.get("effective_date") or "")
         requests = record.get("requests", [requested])
         for request in (requests if isinstance(requests, list) else [requested]):
             if not isinstance(request, Mapping):
                 continue
             requested_date = str(request.get("effective_date") or "")
-            if requested_date and requested_date != resolved_date:
+            if not corrected and requested_date and requested_date != resolved_date:
                 problems.append(
                     f"{key}: requested static revision {requested_date}, "
                     f"resolved {resolved_date or 'unknown'}"
                 )
-            if request.get("id") and resolved.get("id") and request.get("id") != resolved.get("id"):
+            if (
+                not corrected
+                and request.get("id")
+                and resolved.get("id")
+                and request.get("id") != resolved.get("id")
+            ):
                 problems.append(
                     f"{key}: requested id {request.get('id')}, resolved {resolved.get('id')}"
                 )
@@ -252,7 +270,38 @@ def closure_records(
         roles = role_map.get(key, []) if isinstance(role_map, Mapping) else []
         if not isinstance(entry, Mapping):
             continue
-        record = artifact_record(release_dir, str(key), entry, roles)
+        alias_keys = [str(key)]
+        alias_entry = entry
+        seen = {str(key)}
+        while entry.get("status") == "alias":
+            target_key = str(entry.get("alias_of") or "")
+            if not target_key or target_key in seen or not isinstance(resources, Mapping):
+                break
+            target = resources.get(target_key, {})
+            if not isinstance(target, Mapping):
+                break
+            seen.add(target_key)
+            alias_keys.append(target_key)
+            entry = target
+        if len(alias_keys) > 1:
+            merged = dict(entry)
+            merged["requested_effective_date"] = alias_entry.get(
+                "requested_effective_date", "dynamic"
+            )
+            alias_identity = alias_entry.get("identity", {})
+            if isinstance(alias_identity, Mapping):
+                merged["declared_project"] = alias_identity.get("project", "")
+            merged["identity_corrected"] = True
+            merged["alias_of"] = alias_keys[-1]
+            merged["reason"] = alias_entry.get("reason", "")
+            merged["source_hint"] = alias_entry.get("source_hint", "")
+            merged["source_hint_origin"] = alias_entry.get(
+                "source_hint_origin", ""
+            )
+            record = artifact_record(release_dir, str(key), merged, roles)
+            record["aliases"] = alias_keys
+        else:
+            record = artifact_record(release_dir, str(key), entry, roles)
         resolved = record.get("resolved", {})
         canonical_key = (
             str(resolved.get("type") or ""),
@@ -284,6 +333,20 @@ def closure_records(
             list(current.get("roles", [])) + list(record.get("roles", []))
         ))
         current["required"] = bool(current.get("required") or record.get("required"))
+        current_resolution = current.get("resolution", {})
+        record_resolution = record.get("resolution", {})
+        if (
+            isinstance(current_resolution, dict)
+            and isinstance(record_resolution, Mapping)
+        ):
+            if record_resolution.get("identity_corrected"):
+                current_resolution["identity_corrected"] = True
+            for name in (
+                "alias_of", "reason", "source_hint", "source_hint_origin",
+                "expansion_warning",
+            ):
+                if record_resolution.get(name):
+                    current_resolution[name] = record_resolution[name]
     return records
 
 

@@ -265,11 +265,15 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     if closure.get("errors"):
         for error in closure.get("errors", []):
             _say(f"error: {error}")
-    return 0 if (
+    succeeded = (
         not closure.get("errors")
         and not closure.get("truncated")
         and closure.get("build_ready", True)
-    ) else 2
+    )
+    if getattr(args, "fail_on_degraded", False) and closure.get("degraded_resources"):
+        _say("error: --fail-on-degraded rejected the degraded retrieval closure")
+        succeeded = False
+    return 0 if succeeded else 2
 
 
 def _build_inputs(root: Path) -> tuple[Path, list[Path], list[Path], list[Path], list[Path]]:
@@ -296,7 +300,7 @@ def _compiler_inputs(root: Path) -> dict[str, Any]:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    from .compile.artifacts import write_build_diagnostics
+    from .compile.artifacts import configured_source_rules, write_build_diagnostics
     from .compile.mapping import write_code_mapping
     from .cda.compile import write_cda_model
     from .cda.core import core_paths
@@ -316,9 +320,17 @@ def cmd_build(args: argparse.Namespace) -> int:
         inputs["terminology_resources"],
         model_dir,
     )
+    model.setdefault("meta", {})["configured_source_rules"] = (
+        configured_source_rules(inputs)
+    )
     unavailable = list(inputs.get("unavailable_artifacts", []))
+    crawl_degraded = list(inputs.get("crawl_degraded_artifacts", unavailable))
     model.setdefault("meta", {})["artifact_closure"] = {
-        "degraded": bool(unavailable),
+        "crawl_degraded": bool(crawl_degraded),
+        "crawl_degraded_artifacts": [
+            str(item.get("request_key") or "artifact")
+            for item in crawl_degraded
+        ],
         "unavailable_artifacts": [
             str(item.get("request_key") or "artifact") for item in unavailable
         ],
@@ -336,11 +348,19 @@ def cmd_build(args: argparse.Namespace) -> int:
     cda_mapping = write_mapping_model(
         inputs["mapping_evidence"], model_dir, model, cda
     )
-    diagnostics = write_build_diagnostics(model_dir, inputs, cda)
     from .conformance import build_conformance_artifacts
     conformance = build_conformance_artifacts(
         release_spec_dir(root, release), model_dir, inputs, release, transaction
     )
+    diagnostics = write_build_diagnostics(model_dir, inputs, cda, model)
+    model["meta"]["artifact_closure"].update({
+        "degraded": diagnostics["status"] == "degraded",
+        "build_degraded": [
+            str(item.get("request_key") or "artifact")
+            for item in diagnostics.get("build_degraded", [])
+        ],
+    })
+    write_json(model_dir / "model.json", model)
     _say(f"model: {len(model['fields'])} datapoints, {len(model['groups'])} groups")
     _say(f"code mapping defaults: {sum(len(values) for values in code_mapping['fields'].values())} aliases across {len(code_mapping['fields'])} coded fields")
     _say(
@@ -353,7 +373,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         summary = diagnostics["summary"]
         _say(
             "warning: degraded build: "
-            f"{summary['unavailable_artifacts']} unavailable artifacts, "
+            f"{summary['build_degraded']} degraded artifacts affect this build, "
+            f"{summary['crawl_degraded']} degraded artifacts in the crawl, "
             f"{summary['unresolved_templates']} unresolved CDA references; "
             f"see {model_dir / 'build-diagnostics.md'}"
         )
@@ -579,6 +600,36 @@ def _copy_generated_guide(source: Path, destination: Path) -> None:
     _say("updated " + str(destination))
 
 
+def _merge_mapping_configuration_notes(
+    source: Path,
+    destination: Path,
+    *,
+    generated_notes: list[dict[str, Any]] | None = None,
+) -> int:
+    """Refresh generated provenance notes without changing reviewed mappings."""
+    proposed = load_json(source)
+    current = load_json(destination)
+    proposed_notes = (
+        generated_notes
+        if generated_notes is not None
+        else proposed.get("configuration_notes", [])
+    )
+    current_notes = current.get("configuration_notes", [])
+    generated = [
+        dict(item) for item in proposed_notes
+        if isinstance(item, Mapping) and item.get("generated") is True
+    ] if isinstance(proposed_notes, list) else []
+    retained = [
+        item for item in current_notes
+        if not (isinstance(item, Mapping) and item.get("generated") is True)
+    ] if isinstance(current_notes, list) else []
+    merged = retained + generated
+    if merged != current_notes:
+        current["configuration_notes"] = merged
+        write_json(destination, current)
+    return len(generated)
+
+
 def _mapping_lock(
     release: Mapping[str, Any], transaction: Mapping[str, Any],
     model: Mapping[str, Any], cda: Mapping[str, Any], mapping: Mapping[str, Any],
@@ -606,6 +657,8 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
     source = _require(
         model_dir / "cda-mapping.proposed.json", "run `decor2hl7 build` first"
     )
+    model = load_json(_require(model_dir / "model.json"))
+    cda = load_json(_require(model_dir / "cda.json"))
     destination = _cda_mapping_path(
         root, release, transaction, getattr(args, "cda_mapping", None)
     )
@@ -615,7 +668,21 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         _say("created " + str(destination))
     else:
         migrated = _migrate_repeat_by_discriminator(source, destination)
-        suffix = f" (migrated {migrated} discriminator rule(s))" if migrated else ""
+        from .compile.mapping import _mapping_configuration_notes
+        audit = load_json(_require(model_dir / "mapping-audit.json"))
+        notes = _merge_mapping_configuration_notes(
+            source,
+            destination,
+            generated_notes=_mapping_configuration_notes(
+                load_json(destination), audit, model, cda
+            ),
+        )
+        changes = []
+        if migrated:
+            changes.append(f"migrated {migrated} discriminator rule(s)")
+        if notes:
+            changes.append(f"refreshed {notes} configuration note(s)")
+        suffix = f" ({'; '.join(changes)})" if changes else ""
         _say("kept    " + str(destination) + suffix)
         from .compile.mapping import mapping_field_delta
         delta = mapping_field_delta(load_json(destination), load_json(source))
@@ -629,8 +696,6 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
             _say("review  " + str(path))
     for guide_name in ("cda-mapping.md", "cda-mapping-details.md"):
         _copy_generated_guide(model_dir / guide_name, destination.parent / guide_name)
-    model = load_json(_require(model_dir / "model.json"))
-    cda = load_json(_require(model_dir / "cda.json"))
     mapping = load_json(destination)
     lock = destination.parent / "mapping-lock.json"
     if not lock.exists():
@@ -1189,6 +1254,10 @@ def parser() -> argparse.ArgumentParser:
         help="use cached specification files only; make no HTTP requests",
     )
     q.add_argument("--max-requests", type=int, default=1500)
+    q.add_argument(
+        "--fail-on-degraded", action="store_true",
+        help="return nonzero when required retrieval dependencies are degraded",
+    )
     _add_network_override(q)
     q.set_defaults(func=cmd_fetch)
 

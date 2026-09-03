@@ -150,12 +150,24 @@ Important rules retained from the prototype:
     dependency only after the record is scoped to the selected transaction;
     snapshot the normalized record in `closure.json` for reproducible build
     input. Generic template context and project evidence never create this edge.
+17. Resolve a reviewed malformed identity only through an exact catalog
+    `alias`; retain both keys and satisfy the published key only while the
+    corrected target is successful (`DEC-022`).
+18. Route a configured OID owner below the fetched project directory and above
+    blind probing, retaining ordered candidates and attempts as evidence.
+19. Fetch and freeze expansion evidence for dynamic, intensional or otherwise
+    incomplete ValueSets. Admit only a complete, non-empty response as an
+    `expansion` compiler form; retain a capped response separately as
+    `expansion-evidence` and crawl-degradation evidence.
 
 `manifest.json` answers “what is cached for this release?”; transaction
 `closure.json` answers “which cached resources belong to this transaction?” It
 also separates crawler settlement (`crawl_complete`) from availability of the
 selected transaction pair (`build_ready`) and records unavailable recursive
 dependencies as degraded resources.
+Build diagnostics retain that complete `crawl_degraded` list but derive their
+headline from `build_degraded`, the subset consulted by selected formal
+terminology, validator ValueSets or CDA template compilation.
 
 `manifest.json` is reconstructible metadata rather than the sole index of
 deterministically named cache files. If it is deleted, `fetch` validates and
@@ -170,6 +182,12 @@ Every compiler artifact retains requested and resolved identity, dependency
 role, resolution provenance and all available source/analysis/expansion forms.
 A static identity mismatch is an error. Optional usable forms remain accessible
 even when another optional representation is unavailable.
+Analysis and complete expansion forms of the same exact terminology identity
+are merged when assembling DECOR validator input. ART-DECOR expansion wrappers
+are converted to extensional concept lists and replace unresolved includes;
+identity deduplication must not discard the frozen members. Dataset/concept
+analysis containers are also scanned for exact embedded terminology already in
+the build closure. Partial expansion evidence is never passed to a compiler.
 
 Dependency analysis forms determine cache/build availability. Dependency source
 forms add provenance and mapping evidence but are not synchronously backfilled
@@ -299,6 +317,9 @@ references resolve to a frozen manifest identity.
 
 Editable JSON stores only selections. `mapping-audit.json` stores the structured
 decision record, and both Markdown views are produced from the same analysis.
+Short `configuration_notes` are the exception to selection-only minimality:
+they record configured attachments or resolution rules actually used by an
+executable selection and are not themselves semantic evidence.
 Evidence includes:
 
 - direct/lineage-mediated `templateAssociation` (`TA`)

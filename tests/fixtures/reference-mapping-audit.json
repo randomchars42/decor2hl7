@@ -1,0 +1,291 @@
+{
+  "version": 1,
+  "note": "2026.1.2/notaufnahmeregister--60 mapped-field regression baseline",
+  "fields": {
+    "patient.anschrift.postleitzahl": {
+      "selected": true
+    },
+    "patient.identifikatoren.patienten_id": {
+      "selected": true
+    },
+    "hauptkostentrager.kostentrager.name": {
+      "selected": true
+    },
+    "administrative_aufnahmeinformationen.aufnahmezeitpunkt": {
+      "selected": true
+    },
+    "administrative_aufnahmeinformationen.fallnummer": {
+      "selected": true
+    },
+    "administrative_aufnahmeinformationen.episodennummer": {
+      "selected": true
+    },
+    "administrative_aufnahmeinformationen.zuweisung_zur_notaufnahme.zuweisung": {
+      "selected": true
+    },
+    "administrative_aufnahmeinformationen.transport.transportmittel": {
+      "selected": true
+    },
+    "administrative_aufnahmeinformationen.transport.medizinische_begleitung": {
+      "selected": true
+    },
+    "ersteinschatzung.direkter_arztkontakt": {
+      "selected": true
+    },
+    "ersteinschatzung.parameter_der_ersteinschatzung.ergebnis_der_ersteinschatzung": {
+      "selected": true
+    },
+    "ersteinschatzung.parameter_der_ersteinschatzung.zeitpunkt_der_ersteinschatzung": {
+      "selected": true
+    },
+    "ersteinschatzung.parameter_der_ersteinschatzung.verwendetes_ersteinschatzungssystem": {
+      "selected": true
+    },
+    "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsprasentationsdiagramm": {
+      "selected": true
+    },
+    "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_rot": {
+      "selected": true
+    },
+    "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_orange": {
+      "selected": true
+    },
+    "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_gelb": {
+      "selected": true
+    },
+    "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_grun": {
+      "selected": true
+    },
+    "ersteinschatzung.parameter_der_ersteinschatzung.esitriage": {
+      "selected": true
+    },
+    "notfallanamnese.beschwerden_bei_vorstellung.beschwerden_bei_vorstellung_freitext": {
+      "selected": true
+    },
+    "notfallanamnese.beschwerden_bei_vorstellung.beschwerden_bei_vorstellung_cedis": {
+      "selected": true
+    },
+    "notfallanamnese.zeitpunkt_erster_arztkontakt": {
+      "selected": true
+    },
+    "notfallanamnese.notfallanamnese_des_patienten": {
+      "selected": true
+    },
+    "notfallanamnese.unfallanamnese.unfallursache": {
+      "selected": true
+    },
+    "notfallanamnese.unfallanamnese.fahrzeug_des_verunfallten": {
+      "selected": true
+    },
+    "notfallanamnese.unfallanamnese.unfallkinetik": {
+      "selected": true
+    },
+    "notfallanamnese.unfallanamnese.unfallart_trauma_register": {
+      "selected": true
+    },
+    "notfallanamnese.verdacht_auf_alkohol_drogen_medikamenteneinflussq": {
+      "selected": true
+    },
+    "klinische_basisdaten_patient.allergien.allergie_beschreibung": {
+      "selected": true
+    },
+    "klinische_basisdaten_patient.allergien.agens": {
+      "selected": true
+    },
+    "klinische_basisdaten_patient.allergien.abgeleitete_informationen_zur_weitergabe.antibiotikaallergie": {
+      "selected": true
+    },
+    "klinische_basisdaten_patient.allergien.abgeleitete_informationen_zur_weitergabe.kontrastmittelallergie": {
+      "selected": true
+    },
+    "klinische_basisdaten_patient.schwangerschaft": {
+      "selected": true
+    },
+    "klinische_basisdaten_patient.tetanusschutz": {
+      "selected": true
+    },
+    "vitalparameter.zeitpunkt": {
+      "selected": true
+    },
+    "vitalparameter.atemfrequenz": {
+      "selected": true
+    },
+    "vitalparameter.pulsoximetrische_sauerstoffsattigung": {
+      "selected": true
+    },
+    "vitalparameter.blutdruck.systolischer_blutdruck": {
+      "selected": true
+    },
+    "vitalparameter.blutdruck.diastolischer_blutdruck": {
+      "selected": true
+    },
+    "vitalparameter.herzfrequenz": {
+      "selected": true
+    },
+    "vitalparameter.puls.pulsfrequenz": {
+      "selected": true
+    },
+    "vitalparameter.pupillenweite.pupillenweite_rechts": {
+      "selected": true
+    },
+    "vitalparameter.pupillenweite.pupillenweite_links": {
+      "selected": true
+    },
+    "vitalparameter.pupillenreaktion.pupillenreaktion_rechts": {
+      "selected": true
+    },
+    "vitalparameter.pupillenreaktion.pupillenreaktion_links": {
+      "selected": true
+    },
+    "vitalparameter.korperkerntemperatur.korperkerntemperatur": {
+      "selected": true
+    },
+    "scores.glasgow_coma_scale_gcs.gcs_augenoffnen": {
+      "selected": true
+    },
+    "scores.glasgow_coma_scale_gcs.gcs_verbale_antwort": {
+      "selected": true
+    },
+    "scores.glasgow_coma_scale_gcs.gcs_motorische_antwort": {
+      "selected": true
+    },
+    "scores.glasgow_coma_scale_gcs.gcs_summe": {
+      "selected": true
+    },
+    "scores.modified_rankin_skala_score": {
+      "selected": true
+    },
+    "scores.schmerzmessung.numerischen_rating_skala": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.mikrobiologie_angefordert": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.bga_angefordert": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.ekg_angefordert": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.sonographie_angefordert": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.rontgenthorax_angefordert": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.rontgenthorax_durchgefuhrt": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.rontgenbecken_durchgefuhrt": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.rontgenwirbelsaule_durchgefuhrt": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.ct_kopf_durchgefuhrt": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.ct_hws_durchgefuhrt": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.ct_thorax_durchgefuhrt": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.ct_abdomen_durchgefuhrt": {
+      "selected": true
+    },
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.ct_bzw_mr_bzw_dsangiographie": {
+      "selected": true
+    },
+    "diagnostik.wildcard_diagnostik.klinisch_relevante_zeitangaben.zeitpunkt": {
+      "selected": true
+    },
+    "diagnostik.wildcard_diagnostik.klinisch_relevante_zeitangaben.zeitraum": {
+      "selected": true
+    },
+    "diagnostik.wildcard_diagnostik.code": {
+      "selected": true
+    },
+    "diagnostik.wildcard_diagnostik.wert": {
+      "selected": true
+    },
+    "diagnostik.wildcard_diagnostik.definitorischer_link": {
+      "selected": true
+    },
+    "masnahmen.isolation.isolation": {
+      "selected": true
+    },
+    "masnahmen.isolation.isolation_begrundung": {
+      "selected": true
+    },
+    "masnahmen.wildcard_therapie.klinisch_relevante_zeitangaben.zeitpunkt": {
+      "selected": true
+    },
+    "masnahmen.wildcard_therapie.klinisch_relevante_zeitangaben.zeitraum": {
+      "selected": true
+    },
+    "masnahmen.wildcard_therapie.code": {
+      "selected": true
+    },
+    "masnahmen.wildcard_therapie.definitorischer_link": {
+      "selected": true
+    },
+    "abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose": {
+      "selected": true
+    },
+    "abschlussdiagnosen.abschlussdiagnose.icd10": {
+      "selected": true
+    },
+    "abschlussdiagnosen.abschlussdiagnose.zusatzkennzeichen": {
+      "selected": true
+    },
+    "abschlussdiagnosen.abschlussdiagnose.fuhrende_abschlussdiagnoseq_sequenznummer": {
+      "selected": true
+    },
+    "weiteres_procedere_therapieempfehlung_weiterbehandler.procedere": {
+      "selected": true
+    },
+    "administrative_verlegungsentlassungsinformationen.typ_verlegung": {
+      "selected": true
+    },
+    "administrative_verlegungsentlassungsinformationen.typ_entlassung": {
+      "selected": true
+    },
+    "administrative_verlegungsentlassungsinformationen.zeitpunkt_entscheidung_zur_verlegung_entlassung": {
+      "selected": true
+    },
+    "administrative_verlegungsentlassungsinformationen.zeitpunkt_patient_verlegungs_entlassungsfahig": {
+      "selected": true
+    },
+    "administrative_verlegungsentlassungsinformationen.zeitpunkt_patient_verlegt_entlassen_nach": {
+      "selected": true
+    },
+    "dokumentationsinformationen.beginn_patientenbezogene_dokumentation.zeitpunkt_beginn_patientenbezogene_dokumentation": {
+      "selected": true
+    },
+    "dokumentationsinformationen.berechnete_zeitintervalle.zeit_bis_zum_export": {
+      "selected": true
+    },
+    "dokumentationsinformationen.datenbereitstellung.name_des_edis": {
+      "selected": true
+    },
+    "dokumentationsinformationen.datenbereitstellung.version_des_edis": {
+      "selected": true
+    },
+    "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname": {
+      "selected": true
+    },
+    "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelcode": {
+      "selected": true
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.sequenznummer": {
+      "selected": true
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.freitext": {
+      "selected": true
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.art_der_anwendung": {
+      "selected": true
+    }
+  }
+}

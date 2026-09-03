@@ -173,13 +173,14 @@ Exact draft templates for export interval, EDIS name and EDIS version exist in
 project evidence as `.10.85`, `.10.86` and `.10.87`. The selected Addendum
 Dokumentationsinformationen section `.10.73` contains only `.10.75`–`.10.77`,
 so the three exact entries have no upstream-selected physical placement.
-DEC-021 now supports an exact, reasoned `config/cda-extensions.json` attachment
-to the open `.10.73` section: `fetch` then retrieves the selected entry revision
+DEC-021 supports an exact, reasoned `config/cda-extensions.json` attachment to
+the open `.10.73` section: `fetch` then retrieves the selected entry revision
 and `build` validates its placement against CDA core. The reference workspace
-does not yet contain an approved attachment record, so the three templates
-remain evidence rather than being forced into the active CDA closure. Explicit
-upstream containment remains preferable and makes any duplicate local
-attachment fail. See the current
+now contains the three reviewed `.10.85`–`.10.87` attachment records and the
+accepted mapping selects their `value` leaves, raising reviewed coverage from
+92/120 to 95/120 dataset fields without replacing an existing selection.
+Explicit upstream containment remains preferable and makes any duplicate
+local attachment fail. See the current
 field-by-field investigation in
 [`analyses/2026-09-02-seven-active-profile-gaps.md`](analyses/2026-09-02-seven-active-profile-gaps.md)
 and the earlier snapshot in
@@ -208,20 +209,40 @@ DECOR Core Schematron reports 381 error, 1,780 warning and 536 information
 events. These are source-project quality findings and remain report-only; they
 do not make a local compiler build fail or change mapping coverage.
 
-The exact-closure template generator currently reports 65 errors for missing
-or undefined ValueSet contents, including dynamic bindings. The generated
-structural and datatype rules are still retained for evidence, but
-`validator-manifest.json` marks the validator incomplete and `validate-cda`
-fails closed. Missing terminology is never filled from the live project
-evidence or a different revision merely to make validation pass.
+The prior reference snapshot's exact-closure template generator reported 65
+errors for missing or undefined ValueSet contents, including dynamic bindings.
+`fetch` now requests and freezes `$expand` evidence for dynamic, intensional
+and otherwise incomplete ValueSets. Complete non-empty responses are normalized
+from `expansion/items` into extensional validator/compiler input. Several live
+ART-DECOR responses are capped (`current < count`), including large HL7 value
+sets; these prefixes are retained as `expansion-evidence` and reported as
+degraded instead of being presented as complete. Any expansion still partial
+or unavailable after a refetch remains unresolved; terminology is never filled
+from the live project evidence or a different revision merely to make
+validation pass. The exact ten-member ActStatus revision is already embedded
+in a selected frozen dataset artifact and is now supplied to validator assembly
+as well as the model compiler, so no duplicate builtin is introduced.
 
-The Saxon compilation probe also rejects the current generated validator. The
-assembler restores the QName-string namespace declarations omitted by the
+After these changes, the 2026.1.2 reference generator reports 3 messages (down
+from 65 in the published baseline and 140 during the unsafe intermediate merge).
+All three are honest undefined-content findings for two external medication
+ValueSets: `2.16.840.1.113762.1.4.1021.30` occurs twice and
+`2.16.840.1.113762.1.4.1099.12` once; their live `$expand` responses report a
+complete zero-member result. The generated stylesheet is executable and has no
+compilation errors, but `complete` remains false while these messages remain.
+The reference mapping stays at 95/120 with no lost or gained mapped fields. The
+build diagnostics report 56 crawl-degraded artifacts, of which 5 affect the
+selected build; three of those five are expansion gaps and two are missing
+external artifacts.
+
+The assembler restores the QName-string namespace declarations omitted by the
 publication transform, including the two distinct pharmaceutical namespaces.
-The remaining failure is two malformed source XPath match expressions,
-`[[hl7:supply]`, from two revisions of the same fetched template. Complete
-compiler diagnostics are retained in `validator-compilation-errors.txt`; the
-invalid stylesheet is never executed by `validate-cda`.
+It now also repairs only the reviewed unbalanced `[[hl7:supply]` emission under
+the exact `entryRelationship[@typeCode='REFR']` match pattern and records every
+rewrite in `validator-manifest.json` and `validator-compilation-errors.txt`.
+Other malformed XPath still reaches the Saxon probe unchanged; a validator
+that remains invalid or has unresolved generation errors is never executed by
+`validate-cda`.
 
 The fetched API forms also do not publish one native complete compiled DECOR
 project. Source-project validation and exact-closure generation are therefore
@@ -238,17 +259,21 @@ The pre-implementation rationale remains in
 ## Exact/static historical template resolution
 
 Static template and terminology references are exact identities. An unavailable
-auxiliary revision is reported as a degraded-build omission and is never replaced
-with an older or newer revision. The representing document template itself is
-still mandatory. Dynamic references remain explicitly dynamic and resolve to a
-frozen identity recorded in the manifest.
+auxiliary revision is reported as a crawl omission and is never replaced with
+an older or newer revision. `build-diagnostics.json` distinguishes the full
+`crawl_degraded` list from `build_degraded`, the subset actually consulted by
+selected formal terminology, validator ValueSets or CDA template compilation.
+The representing document template itself is still mandatory. Dynamic
+references remain explicitly dynamic and resolve to a frozen identity recorded
+in the manifest.
 
 ## Provisional external artifact catalog
 
 Decision record: open `DEC-012` in [`decisions.md`](decisions.md).
 
-Phase 1 supports package-local `builtin` supplements and evidence-backed
-`waiver` entries. This mechanism and its first two concrete uses require review:
+Phase 1 supports package-local `builtin` supplements, evidence-backed `waiver`
+entries and exact reviewed malformed-identity `alias` entries. The builtin and
+waiver mechanism and its first two concrete uses require review:
 
 - CodeSystem `1.2.276.0.76.5.401` is packaged as a ten-code builtin derived
   from the public HL7 Germany metastasis table and provisionally marked
@@ -256,7 +281,24 @@ Phase 1 supports package-local `builtin` supplements and evidence-backed
 - IHE split-dose template `1.3.6.1.4.1.19376.1.5.3.1.4.9` has a provisional
   spec-only waiver because the IHE text presents it as a discriminator under
   Medication Entry and no independent template body was located. The waiver is
-  intentionally not an `ok` artifact and the build remains degraded.
+  intentionally not an `ok` artifact, so the crawl remains degraded; it affects
+  the build headline only when the selected compiler inputs consult it.
+
+The accepted alias policy is recorded separately in `DEC-022`. Its initial
+entries correct the malformed SNOMED CT CodeSystem OID
+`2.16.840.1.1138836.96` and template OID
+`2.16.840.1.1133883.17.3.10.1.34`. Both published keys remain visible in the
+manifest and count as satisfied only when their corrected target is `ok`.
+
+No `oid_owners` override is currently shipped for the
+`2.16.840.1.113883.3.2898` or `2.16.840.1.113883.17.3.10.1` clusters. The local
+ART-DECOR project directory identifies no owner for either prefix. The
+[AKTIN trauma publication](https://wiki.hl7.de/index.php?title=IG%3ANotaufnahmeregister_trauma)
+and the
+[HL7 EMS Patient Care Report](https://wiki.hl7.org/w/images/wiki.hl7.org/f/f5/CDAR2L3_IG_EMSRUNRPT_R1_N1_2013SEP.pdf)
+establish the referenced template specifications, but not a current
+ART-DECOR API project prefix. Guessing one would merely reorder blind probes,
+so those evidence-only clusters remain without an owner override.
 
 The exact IHE Medicine Entry analysis artifact
 `1.3.6.1.4.1.19376.1.9.1.3.1@2019-08-27T16:13:43` is resolved by the existing

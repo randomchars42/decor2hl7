@@ -5,10 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 from decor2hl7.retrieval.api import REQUIRED_PATHS
 from decor2hl7.retrieval.fetch import _fetch_want, fetch_spec
+from decor2hl7.retrieval.artifacts import (
+    artifact_integrity_problems, closure_records,
+)
 from decor2hl7.retrieval.sources import load_source_hints
 
 
@@ -20,6 +24,253 @@ API_CONTRACT = json.dumps({
 
 
 class ExternalSourceTests(unittest.TestCase):
+    def test_configured_alias_and_oid_owners_are_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "sources.json"
+            source.write_text(json.dumps({
+                "oid_owners": {"1.2.3": "owner-"},
+                "artifacts": {"template:bad": {
+                    "mode": "alias", "alias_of": "template:good",
+                    "reason": "Reviewed correction",
+                }},
+            }), encoding="utf-8")
+            hints = load_source_hints(source)
+            self.assertEqual(hints.oid_owners["1.2.3"], "owner-")
+            self.assertIn("template:bad", hints.configured_artifacts)
+            source.write_text(json.dumps({"artifacts": {"template:bad": {
+                "mode": "alias", "alias_of": "template:good",
+                "reason": "Reviewed correction", "sha256": "forbidden",
+            }}}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "cannot contain"):
+                load_source_hints(source)
+            for invalid in (
+                {"mode": "alias", "alias_of": "template:good"},
+                {"mode": "alias", "reason": "Reviewed correction"},
+                {
+                    "mode": "alias", "alias_of": "valueset:good",
+                    "reason": "Wrong artifact kind",
+                },
+            ):
+                source.write_text(json.dumps({
+                    "artifacts": {"template:bad": invalid}
+                }), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    ValueError, "requires|'alias_of'|same artifact kind"
+                ):
+                    load_source_hints(source)
+
+    def test_reviewed_alias_fetches_corrected_identity_and_keeps_both_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            manifest: dict[str, object] = {"resources": {}}
+            published = "2.16.840.1.1133883.17.3.10.1.34"
+            corrected = "2.16.840.1.113883.17.3.10.1.34"
+            payload = (
+                f'<template id="{corrected}" effectiveDate="2020" name="Corrected">'
+                '<element name="hl7:observation"/></template>'
+            ).encode()
+            calls: list[str] = []
+
+            def fake_get(url: str, **_: object) -> bytes:
+                calls.append(url)
+                return payload
+
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
+                path = _fetch_want(
+                    release_dir, manifest,
+                    {"kind": "template", "id": published, "effective_date": ""},
+                    owners={}, repositories=["aktin-"], language="de-DE",
+                    ipv4=True, retry_missing=False,
+                    source_hints=load_source_hints(),
+                )
+            self.assertIsNotNone(path)
+            self.assertTrue(all(published not in url for url in calls))
+            resources = manifest["resources"]  # type: ignore[assignment]
+            self.assertEqual(resources[f"template:{published}"]["status"], "alias")  # type: ignore[index]
+            self.assertEqual(
+                resources[f"template:{published}"]["alias_of"],  # type: ignore[index]
+                f"template:{corrected}",
+            )
+            self.assertEqual(resources[f"template:{corrected}"]["status"], "ok")  # type: ignore[index]
+
+            transaction = release_dir / "transactions" / "tx"
+            transaction.mkdir(parents=True)
+            (release_dir / "manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            (transaction / "closure.json").write_text(json.dumps({
+                "crawl_complete": True,
+                "build_resources": [
+                    f"template:{corrected}", f"template:{published}"
+                ],
+                "resource_roles": {
+                    f"template:{corrected}": ["structure"],
+                    f"template:{published}": ["structure"],
+                },
+            }), encoding="utf-8")
+            record = closure_records(release_dir, transaction)[0]
+            self.assertEqual(len(closure_records(release_dir, transaction)), 1)
+            self.assertEqual(record["resolved"]["id"], corrected)
+            self.assertEqual(
+                {request["id"] for request in record["requests"]},
+                {published, corrected},
+            )
+            self.assertTrue(record["resolution"]["identity_corrected"])
+            self.assertEqual(artifact_integrity_problems(record), [])
+
+    def test_reviewed_alias_does_not_hide_missing_corrected_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            published = "2.16.840.1.1133883.17.3.10.1.34"
+            corrected = "2.16.840.1.113883.17.3.10.1.34"
+            manifest: dict[str, object] = {"resources": {
+                f"template:{corrected}": {
+                    "status": "missing", "settled": True,
+                    "identity": {
+                        "type": "template", "id": corrected,
+                        "effective_date": "dynamic",
+                    },
+                }
+            }}
+            with patch("decor2hl7.retrieval.fetch.get") as mocked_get:
+                result = _fetch_want(
+                    release_dir, manifest,
+                    {"kind": "template", "id": published, "effective_date": ""},
+                    owners={}, repositories=["aktin-"], language="de-DE",
+                    ipv4=True, retry_missing=False,
+                    source_hints=load_source_hints(),
+                )
+            self.assertIsNone(result)
+            mocked_get.assert_not_called()
+            resources = manifest["resources"]  # type: ignore[assignment]
+            self.assertEqual(resources[f"template:{published}"]["status"], "alias")  # type: ignore[index]
+
+            transaction = release_dir / "transactions" / "tx"
+            transaction.mkdir(parents=True)
+            (release_dir / "manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            (transaction / "closure.json").write_text(json.dumps({
+                "crawl_complete": True,
+                "build_resources": [f"template:{published}"],
+                "resource_roles": {f"template:{published}": ["structure"]},
+            }), encoding="utf-8")
+            self.assertEqual(
+                closure_records(release_dir, transaction)[0]["status"], "missing"
+            )
+
+    def test_dynamic_incomplete_valueset_fetches_frozen_expansion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            manifest: dict[str, object] = {"resources": {}}
+            definition = (
+                b'<valueSet id="1.2.3" effectiveDate="2025-01-02">'
+                b'<conceptList><include codeSystem="9.8.7"/></conceptList></valueSet>'
+            )
+            expansion = (
+                b'<valueSetExpansionSet current="1" count="1">'
+                b'<valueSet id="1.2.3" effectiveDate="2025-01-02">'
+                b'<conceptList><include codeSystem="9.8.7"/></conceptList>'
+                b'</valueSet><expansion><items is="concept" code="A" '
+                b'codeSystem="9.8.7"/></expansion></valueSetExpansionSet>'
+            )
+            calls: list[str] = []
+
+            def fake_get(url: str, **_: object) -> bytes:
+                calls.append(url)
+                return expansion if "/$expand" in url else definition
+
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
+                _fetch_want(
+                    release_dir, manifest,
+                    {"kind": "valueset", "id": "1.2.3", "effective_date": ""},
+                    owners={}, repositories=["term-"], language="de-DE",
+                    ipv4=True, retry_missing=False,
+                )
+            self.assertTrue(any(
+                "/valueset/1.2.3/2025-01-02/$expand" in url for url in calls
+            ))
+            entry = manifest["resources"]["valueset:1.2.3"]  # type: ignore[index]
+            self.assertIn("expansion", entry["representations"])
+            self.assertEqual(entry["resolved_effective_date"], "2025-01-02")
+
+    def test_partial_frozen_expansion_is_degradation_not_compiler_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            manifest: dict[str, object] = {"resources": {}}
+            definition = (
+                b'<valueSet id="1.2.3" effectiveDate="2025-01-02">'
+                b'<conceptList><include codeSystem="9.8.7"/></conceptList></valueSet>'
+            )
+            expansion = (
+                b'<valueSetExpansionSet current="1" count="2">'
+                b'<valueSet id="1.2.3" effectiveDate="2025-01-02"/>'
+                b'<expansion><items is="concept" code="A" '
+                b'codeSystem="9.8.7"/></expansion></valueSetExpansionSet>'
+            )
+
+            def fake_get(url: str, **_: object) -> bytes:
+                return expansion if "/$expand" in url else definition
+
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
+                _fetch_want(
+                    release_dir, manifest,
+                    {"kind": "valueset", "id": "1.2.3", "effective_date": ""},
+                    owners={}, repositories=["term-"], language="de-DE",
+                    ipv4=True, retry_missing=False,
+                )
+            entry = manifest["resources"]["valueset:1.2.3"]  # type: ignore[index]
+            self.assertNotIn("expansion", entry["representations"])
+            self.assertIn("expansion-evidence", entry["representations"])
+            self.assertEqual(
+                entry["expansion_warning"],
+                "partial value-set expansion: returned 1 of 2 members",
+            )
+
+            # A settled partial response is frozen evidence. Ordinary fetches
+            # reuse it without repeatedly calling the server; the explicit
+            # retry mode remains the mechanism for refreshing it.
+            with patch(
+                "decor2hl7.retrieval.fetch.get",
+                side_effect=AssertionError("settled expansion retried"),
+            ) as mocked_get:
+                reused = _fetch_want(
+                    release_dir, manifest,
+                    {"kind": "valueset", "id": "1.2.3", "effective_date": ""},
+                    owners={}, repositories=["term-"], language="de-DE",
+                    ipv4=True, retry_missing=False,
+                )
+            mocked_get.assert_not_called()
+            self.assertIsNotNone(reused)
+
+    def test_resolution_trace_records_failed_and_successful_projects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest: dict[str, object] = {"resources": {}}
+            payload = (
+                b'<template id="1.2.3" effectiveDate="2020" name="Found">'
+                b'<element name="hl7:act"/></template>'
+            )
+
+            def fake_get(url: str, **_: object) -> bytes:
+                if "project=first-" in url:
+                    raise HTTPError(url, 404, "missing", {}, None)
+                return payload
+
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
+                _fetch_want(
+                    Path(tmp), manifest,
+                    {"kind": "template", "id": "1.2.3", "effective_date": ""},
+                    owners={}, repositories=["first-", "second-"],
+                    language="de-DE", ipv4=True, retry_missing=False,
+                )
+            entry = manifest["resources"]["template:1.2.3"]  # type: ignore[index]
+            self.assertEqual(entry["projects_considered"], ["first-", "second-"])
+            self.assertTrue(any(
+                attempt.get("project") == "first-"
+                and attempt.get("http_status") == 404
+                for attempt in entry["resolution_attempts"]
+            ))
+
     def test_builtin_materializes_without_http_in_offline_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
