@@ -4,11 +4,14 @@ Status: phases 1–4 landed. Date opened: 2026-09-03.
 Baseline commit: `6d3ea59`. Reference workspace: `decor2hl7-test-workspace`
 `spec/2026.1.2`, transaction `notaufnahmeregister--60`.
 
-## Progress (as of `main` @ `15a52db`)
+## Progress (as of `main` @ `315087e`)
 
 Commits since baseline: `11b33f6`/`ac7eec5` (EDIS map+merge),
-`f9874a0` "Implement closure resolution and expansion phases", `15a52db` "added docs".
-**202 unit tests pass** (`python3 -m unittest discover -s tests`).
+`f9874a0` "Implement closure resolution and expansion phases", `15a52db` "added docs",
+`c55bce5` "added immediate plan" (this document), `838bfc1` "Settle the last five
+build-degrading closure artifacts" (phase 4), `315087e` "Recognize
+reference-declaration identity when adopting a cached artifact".
+**205 unit tests pass** (`python3 -m unittest discover -s tests`).
 
 | Item | State | Where |
 |---|---|---|
@@ -25,6 +28,7 @@ Commits since baseline: `11b33f6`/`ac7eec5` (EDIS map+merge),
 | `configuration_notes` in `cda-mapping.json` | **done**, `DEC-011` amended | `compile/mapping.py::_merge_mapping_configuration_notes` |
 | A7 — `--fail-on-degraded` flag + `tests/test_closure.py` | **done** — `fetch --fail-on-degraded` keeps the crawl gate, new `build --fail-on-degraded` gates on `build_degraded`; `tests/test_closure.py` pins the 3-item residue, the message ceiling and `complete: true`; coverage-delta guard wired | `cli.py`, `tests/test_closure.py`, `tests/test_cli.py` |
 | Phase 4 — validator scope, A5 waivers, B1, E2 | **done** — `build_degraded` 5 → 3, validator `complete: true`; `DEC-012` accepted, `DEC-010`/`DEC-019` amended | `compile/artifacts.py`, `conformance.py`, `retrieval/sources.py`, `retrieval/sources.json`, `docs/analyses/2026-09-03-closure-phase-4.md` |
+| Reference-declaration identity on cache adoption | **done**, `DEC-004` amended + arch rule 14 | `retrieval/fetch.py` (`_payload_matches_request`, `_resolved_effective_date`); `fetch --offline` now reports 0 unavailable and is idempotent; build metrics unchanged |
 
 ### Current reference-workspace metrics (after phase 4)
 
@@ -97,7 +101,7 @@ genuinely active AKTIN), **G4** (`1.0.3166.1`), plus **S1**
 (`template:…10.20.1.53@2005-09-07`), **S2** (datasets `…2.6.60.3.1.2` / `.3`),
 **S3** (IHE ValueSet `1.3.6.1.4.1.19376.1.3.11.11`).
 
-After phases 1–3 (see [Progress](#progress-as-of-main--15a52db)): 95/120 mapped;
+After phases 1–3 (see [Progress](#progress-as-of-main--315087e)): 95/120 mapped;
 `build_degraded: 5`; validator `executable: true`, 3 generation messages. The
 G1/G4 reclassification landed; G2 mostly moved to `crawl_degraded` only; the
 remaining 5 are the concrete `build_degraded` list above.
@@ -533,16 +537,26 @@ is labelled with which gate fails and the smallest evidence that would reopen it
 - `semantic_gap: lossy_domain` → C3 ConceptMap candidate;
 - `blocked_upstream` → exact missing upstream construct.
 
+Detailed steps, the concrete label vocabulary and the terminology-status defect
+they depend on are in [Implementation instructions § F1](#f1-impl).
+
 ### F2. Coverage-delta CI
 
-`mapping_field_delta` (`compile/mapping.py:2938`) already computes a delta. Wire
-it into CI against a pinned baseline so any change reports `+n/-n` mapped
-datapoints and fails on an unexplained regression, and regenerate the reference
-workspace as part of the release checklist.
+`mapping_field_delta` (`compile/mapping.py:2958`) already computes a delta, and
+`tests/test_closure.py` already fails on a lost mapping. What is missing is a
+reported comparison and a CI host. The comparison is reported as the **stable
+coverage headline defined in `docs/mapping-documentation-format.md`**, not as a
+separate `+n/-n` line: that headline is the reviewed format for build logs and
+pull-request comparisons, and a second shape for the same numbers would split
+the contract. Regenerating the reference workspace stays part of the release
+checklist. Detailed steps in [Implementation instructions § F2](#f2-impl).
 
 ### F3. Closure-delta CI
 
-As A7: pin degraded-resource and validator-error counts; fail on growth.
+As A7: pin degraded-resource and validator-error counts; fail on growth. Note
+that the generated Schematron hashes are not reproducible across machines yet,
+so they cannot be pinned until the publication transform's absolute `@see` URIs
+are normalized. Detailed steps in [Implementation instructions § F3](#f3-impl).
 
 ---
 
@@ -556,7 +570,7 @@ As A7: pin degraded-resource and validator-error counts; fail on growth.
 | 2 | A2a, A2b-mechanism, A2c | **done**; A2b cluster entries deferred (no owner found) | 0 |
 | 3 | A6 (`DEC-013` amend) | **done**; 65 → 3 validator messages | 0 this round (blocked enums need the phase-4 residue) |
 | 4 | A5 for the 5 `build_degraded` items; S1/B1; E2; A7 finish | **done** — `build_degraded` 5 → 3, validator `complete: true`; B1 opened no medication slots | 0 (quality) |
-| 5 (next) | F1–F3 | not started | 0 (infra) |
+| 5 (next) | F1–F3 | specified — see [Phase 5](#phase-5--gate-labelled-reporting-and-regression-guards-next); A7 already shipped part of the F2/F3 assertions | 0 (infra) |
 | 6 | C1, C6, B3 | not started | opportunistic +n |
 | 7 | C5, D1 | not started | up to +4 medication datapoints |
 | 8 | C3 (`DEC-025`), C4 (`DEC-026`), C2 | not started | +1 (insurance), +1 (X-ray) subject to review |
@@ -861,6 +875,346 @@ Files: `retrieval/fetch.py`, `retrieval/references.py`, `compile/terminology.py`
 8. **`DEC-013`** amend: frozen `$expand` for dynamic bindings is part of the
    compiled terminology contract.
 
+### Phase 5 — gate-labelled reporting and regression guards (next)
+
+Scope: F1, F2, F3. Coverage effect 0; this phase buys honest reporting and a
+guard that keeps phases 6–8 from silently regressing. No ART-DECOR server
+access is required — every question below is decidable from the local archives.
+
+**Already landed, do not redo.** A7 shipped most of the *assertions* that F2/F3
+describe: `tests/test_closure.py` pins `build_degraded ⊆ {3 reviewed items}`,
+the generation-message ceiling, the `complete` claim and mapped-field
+non-regression against `tests/fixtures/reference-mapping-audit.json`; `cli.py`
+carries `--fail-on-degraded` on both `fetch` (line 273) and `build` (line 391).
+
+**Three findings that change what this phase has to do**, all verified against
+`main` @ `315087e` and the reference workspace:
+
+1. **There is no CI.** `.github/` holds only `pull_request_template.md`; there is
+   no `workflows/` directory. F2 and F3 both say "wire it into CI" and there is
+   no host to wire into. Creating one is the first decision of the phase, and it
+   is not a detail — see [§ F3](#f3-impl) step 1.
+2. **`mapping-audit.json` carries no gate labels at all.** `_unresolved_reason`
+   (`compile/mapping.py:950`) is computed and stored on the internal detail dict
+   at line 2221, but `audit_detail` (line 2862) never copies it out. All 120
+   fields persist `unresolved_reason: null`. F1 is therefore "stop dropping the
+   labels that exist, then extend them", not "add labels".
+3. **The documented coverage headline exists only as Markdown prose.** It is
+   composed inline in `reports.py:886-898` and never persisted; the audit
+   `summary` holds `field_coverage`/`executable_fields`, none of them in the
+   documented shape. F2 needs an extraction before it can compare anything.
+
+<a id="f1-impl"></a>
+#### F1. Gate-labelled "no-target" and "semantic-gap" reporting
+
+Files: `compile/transaction.py`, `compile/mapping.py`, `compile/reports.py`,
+`tests/test_core.py`, `docs/decisions.md` (`DEC-011` amend, `DEC-013`/`DEC-004`
+note), `docs/known-issues.md`, `docs/mapping-documentation-format.md`.
+
+##### Step 0 — resolve `dynamic` value-set bindings (do this first)
+
+`compile/transaction.py:738 _resolve_value_set` returns `{}` for any binding
+whose `effective_date` is the literal string `dynamic`:
+
+```python
+exact = value_sets.get(_value_set_key(oid, effective)) if effective else None
+if exact is not None: return exact
+rows = [...]
+if not rows or effective: return {}       # "dynamic" is truthy
+```
+
+`_value_set_key` (line 57) builds `f"{oid}@{effective}"` and the compiled index
+is keyed `id@<frozen date>` only, so `dynamic` is never a key; only a *blank*
+date reaches the newest-revision fallback.
+
+Measured consequence: 8 fields carry `formal_terminology.status: "unresolved"`
+and **7 of them are false negatives**. `vitalparameter.pupillenweite.
+pupillenweite_rechts` binds `1.2.276.0.76.11.49` twice — once
+`@2015-11-17T00:00:00`, once `dynamic`. Members resolve fine from the dated ref
+(four codes present); the `dynamic` ref lands in `missing_value_sets` and flips
+`status` to `unresolved`. The same holds for `…11.44`, `…11.45`, `…11.46`,
+`…11.50` and `…11.61`. Only `1.2.276.0.76.11.53` is genuinely unresolved, and it
+is the one that actually appears in `build_degraded`.
+
+Fix in `_resolve_value_set`:
+
+```python
+frozen = "" if effective.strip().lower() == "dynamic" else effective
+exact = value_sets.get(_value_set_key(oid, frozen)) if frozen else None
+if exact is not None:
+    return exact
+rows = [v for v in value_sets.values() if str(v.get("id") or "") == oid]
+if not rows or frozen:
+    return {}
+rows.sort(key=lambda v: str(v.get("effective_date") or ""))
+return rows[-1]
+```
+
+This is the frozen-dynamic rule A6/`DEC-013` already accepted for `$expand`,
+applied to the compiled terminology index. Apply the same normalization in
+`_formal_values` (line 749) so members and status agree. `DEC-004` is preserved:
+an **explicit** effective date still resolves exactly and never falls back.
+
+Expect `formal_terminology.status` to move `unresolved → bound` for 7 fields
+(`{unbound:74, bound:16→23, logical:11, unconstrained:11, unresolved:8→1}`) and
+the reference workspace to need regeneration. Test in `tests/test_core.py`: a
+field carrying both a dated and a `dynamic` ref to the same OID resolves
+`bound`; a field whose only ref names an absent explicit date stays
+`unresolved`.
+
+##### Step 1 — persist the reasons that already exist
+
+`compile/mapping.py:2862`, in `audit_detail`, alongside the existing conditional
+spreads:
+
+```python
+**({"unresolved_reason": detail["unresolved_reason"]}
+   if detail.get("unresolved_reason") else {}),
+```
+
+##### Step 2 — add the gap classifier
+
+New function in `compile/mapping.py` next to `_unresolved_reason` (line 950):
+
+```python
+def _gap_classification(
+    path: str,
+    detail: Mapping[str, Any],
+    field: Mapping[str, Any],
+    unresolved_templates: list[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+```
+
+Return `None` when `detail["selected"]` is set **and**
+`field["formal_terminology"]["complete"]` is true. Otherwise emit
+`{"gate": …, "kind": …, "reopens_with": [...]}` from inputs that already exist,
+first match wins:
+
+| Condition | `gate` / `kind` | `reopens_with` |
+|---|---|---|
+| `runtime_blocked` starts `SHARED(` or `WEAKER_SHARED_TARGET(` | `semantic` / `shared_target` | competing field paths + the shared target |
+| `runtime_blocked` starts `REQUIRED_COMPANION(` | `semantic` / `missing_companion` | the `required_companions` target names |
+| `formal_terminology.status == "unresolved"` after step 0 | `terminology` / `closure` | the `missing_value_sets` / `unresolved_includes` request keys |
+| context template appears in `cda["unresolved_templates"]` | `physical` / `closure` | the `template:<oid>@<date>` key |
+| `unresolved_reason == "structural_only"`, context template is open | `physical` / `containment` | the context template OID (`DEC-021` attachment candidate) |
+| `unresolved_reason == "structural_only"` otherwise | `physical` / `no_writable_leaf` | the context target name |
+| `unresolved_reason == "ambiguous_value_target"` | `physical` / `ambiguous_target` | the candidate target names |
+| `unresolved_reason == "datatype_component_available"` | `physical` / `datatype_component` | the container target + its compiled components |
+| `unresolved_reason == "incompatible_value_type"` | `semantic` / `lossy_domain` | model type + CDA logical types (C3 candidate) |
+| `unresolved_reason == "no_semantic_evidence"`, context present | `semantic` / `no_association` | the context target name (C1/C2 candidate) |
+| nothing above, no context | `blocked_upstream` / `no_candidate` | `[]` |
+
+Do **not** derive `blocked_upstream` from absence in general: reserve it for the
+"no context, no candidate" case and let the maintainer promote a verdict. The 13
+datapoints catalogued as having no plausible leaf are the ones that should land
+there.
+
+Call it in the loop at `compile/mapping.py:2219` — where `_unresolved_reason` is
+already assigned — so groups and fields both get one, and spread the result into
+`audit_detail`.
+
+Ground truth for the first run: of the 25 currently unmapped fields, expect
+3 × `shared_target` (the medication timestamps, `SHARED(3)`), 1 ×
+`missing_companion` (the EIVL offset), 1 × `shared_target` (secondary ICD-10,
+`WEAKER_SHARED_TARGET`), and 20 × `no_writable_leaf` / `no_association` (all
+context-only with no alternatives).
+
+##### Step 3 — summary rollup
+
+In the audit `summary` dict (`compile/mapping.py:2905`):
+
+```python
+"gaps": Counter(f"{g['gate']}:{g['kind']}" for g in gaps),
+```
+
+##### Step 4 — surface it in the details report
+
+`compile/reports.py:547 _review_reason` already returns good prose; keep it. Add
+one machine-readable line after the existing `**Reason:**` block of each field
+section in `cda-mapping-details.md`:
+
+```markdown
+**Gap:** `physical:no_writable_leaf` — reopens with: `Medikation.substanceAdministration`
+```
+
+One physical line, per the format document's compactness rule. Add the
+vocabulary to `docs/mapping-documentation-format.md` under "Rules and
+reasoning".
+
+##### Step 5 — decision record and tests
+
+Amend **`DEC-011`** (`docs/decisions.md:231`): `mapping-audit.json` carries, for
+every datapoint that is not both selected and terminology-complete, the failing
+gate and the smallest evidence that would reopen it. No new `DEC-*` id is
+needed. Add the frozen-`dynamic` resolution as a note under `DEC-013` with the
+`DEC-004` exactness caveat. Update `docs/known-issues.md` "Remaining
+active-profile mapping boundaries" to cite gap keys rather than restating the
+prose. Tests in `tests/test_core.py`: one synthetic field per `kind`, plus an
+assertion that a fully mapped, terminology-complete field emits no `gap` key.
+
+<a id="f2-impl"></a>
+#### F2. Coverage guard reported as the documented headline
+
+The guard reports the **stable coverage headline already specified in
+`docs/mapping-documentation-format.md`** ("Coverage headline and trees"), which
+that document describes as suitable for build logs, pull-request comparisons and
+chat summaries. It does not introduce a second `+n/-n` summary shape for the
+same numbers.
+
+Files: `compile/reports.py`, `compile/mapping.py`, `cli.py`,
+`tests/fixtures/reference-mapping-audit.json`, `tests/test_closure.py`,
+`Makefile`, `README.md` / `Project-decor2hl7.md`.
+
+1. **Extract the headline.** `reports.py:868-898` computes the five numbers
+   inline inside `render_cda_mapping_markdown`. Lift them out:
+
+   ```python
+   def coverage_headline_counts(model, cda, mapping, audit) -> dict[str, int]:
+       """datapoints, mapped_datapoints, mapped_leaves, suggested_datapoints,
+       suggested_leaves, no_target_datapoints, no_source_leaves"""
+
+   def format_coverage_headline(
+       counts: Mapping[str, int], *, markdown: bool = True,
+   ) -> str:
+   ```
+
+   `render_cda_mapping_markdown` calls both with the bold markers on, so
+   generated `cda-mapping.md` does not change by a byte — assert exactly that in
+   a test. `markdown=False` drops the `**` for log and CI use. Note that
+   `_cda_coverage_tree` currently returns `no_source_count` as a side value, so
+   either thread it through `_cda_mapping_analysis` or recompute it in
+   `coverage_headline_counts` from `_coverage_index` + `_reportable_cda_target`.
+2. **Persist the counts.** Add `"coverage_headline": counts` to the audit
+   `summary` (`compile/mapping.py:2905`). This is what makes the line comparable
+   between runs without parsing Markdown.
+3. **Report baseline against current.** Replace the ad-hoc block at
+   `cli.py:697-706` (`init-cda-mapping`) and add the same after `cli.py:374`
+   (`build`):
+
+   ```text
+   coverage  baseline: Model: 120 datapoints · ✓ mapped 95 dp → 97 leaves · ! suggested 5 dp → 5 leaves · × no target 20 dp · ○ no source 368 leaves
+   coverage  current:  Model: 120 datapoints · ✓ mapped 96 dp → 98 leaves · ! suggested 4 dp → 4 leaves · × no target 20 dp · ○ no source 367 leaves
+   ```
+
+   Two lines in the documented shape and nothing else. Keep the existing
+   `review  <path>` lines that name each regressed field: those are the
+   actionable part, not a competing summary.
+4. **Extend the baseline fixture.** `tests/fixtures/reference-mapping-audit.json`
+   holds only `{"fields": {path: {"selected": true}}}` today; add a sibling
+   `"coverage_headline": {...}` block. In
+   `tests/test_closure.py::test_mapped_fields_do_not_regress_from_committed_baseline`
+   keep `delta["lost"] == []` and add: current `mapped_datapoints >= baseline`
+   and `no_target_datapoints <= baseline`. Assert on the counts, never on the
+   rendered string, so a wording change in the format document does not break
+   the guard.
+5. **Release checklist.** Record in `Project-decor2hl7.md` / `README.md` that
+   regenerating the reference workspace and refreshing both blocks of
+   `tests/fixtures/reference-mapping-audit.json` is a release step. The
+   `Makefile` currently has only `mypy-report`; add `make check`
+   (`python3 -m unittest discover -s tests`) and `make baseline` (refresh the
+   fixture from `test-workplace/`).
+
+<a id="f3-impl"></a>
+#### F3. Closure guard
+
+Files: `.github/workflows/checks.yml` (new), `conformance.py`,
+`tests/test_closure.py`, `docs/decisions.md` (`DEC-019` amend),
+`docs/known-issues.md`.
+
+1. **Decide the CI host.** Add `.github/workflows/checks.yml` running Python
+   3.10 and 3.12 over `python3 -m unittest discover -s tests` plus
+   `python -m mypy src tests`. Be explicit about a consequence:
+   `tests/test_closure.py::setUpClass` raises `SkipTest` when `../test-workplace`
+   is absent, which it will be in a fresh clone — so on CI the closure and
+   coverage guards protect nothing unless the companion workspace is checked out
+   as a second step. Either check it out (it is private; the runner needs a
+   deploy key or PAT) or make the skip visible in the workflow summary. Do not
+   leave it silently green.
+2. **Normalize the Schematron `@see` URIs before pinning any hash.**
+   `validator-manifest.json` carries `schematron_sha256` and `validator_sha256`,
+   and **neither is reproducible across machines**: 225 of the 1032
+   `conformance-validation/include/*.sch` files, and `cda-template.sch` itself,
+   embed an absolute local path plus a run timestamp injected by the DECOR
+   publication transform into `@see`:
+
+   ```text
+   see="http://aktin.art-decor.pub/file:///data/eike/Code/decor2hl7/project/test-workplace/model/…/generated/aktin-html-20260903T201617/tmp-….html"
+   ```
+
+   `assembled_sha256` is clean (no hits in `decor-assembled.xml`) and
+   `cda-template.xsl` is clean. So pin `assembled_sha256` now and pin the other
+   two only after the rewrite. The rewrite is a small addition to the existing
+   repair pass (`conformance.py:737 _repair_generated_stylesheet`, assembly at
+   lines 802-851): rewrite `@see` to a workspace-relative URI and log every
+   rewrite to `validator-compilation-errors.txt` exactly as the namespace
+   repairs already do. Treat this as F3's blocking sub-task; without it a hash
+   pin churns on every machine.
+3. **Widen `tests/test_closure.py`.** Add a `crawl_degraded` ceiling (`<= 56`),
+   an `unavailable_artifacts` ceiling (`<= 20`), `unresolved_templates == 1`, and
+   `assembled_sha256` equality against a constant. Keep `ALLOWED_BUILD_DEGRADED`
+   as a subset assertion and note in the docstring that shrinking it is a
+   deliberate edit.
+4. **Decision record.** Amend `DEC-019` with the `@see` normalization and with
+   which hashes are pinnable and why. No new `DEC-*` id. Note the
+   non-reproducible generated hashes in `docs/known-issues.md`.
+
+<a id="phase5-research"></a>
+#### Phase 5 research
+
+**Offline — all of it decidable in the local archives.**
+
+1. **`dynamic` bindings across the model.** Cross-check every `value_set_refs`
+   entry in `model/2026.1.2/notaufnahmeregister--60/model.json` against the keys
+   of its `value_sets` index before changing `_resolve_value_set`. Seven fields
+   are affected; confirm there is no field whose dated and `dynamic` refs
+   disagree on membership. If one exists, the fallback needs a reviewed rule,
+   not the one-liner above.
+2. **Open-template predicate for the `containment` label.** F1's
+   `physical:containment` verdict needs to know whether the context template is
+   open. Reuse the predicate `cda/extensions.py` and `config/cda-extensions.json`
+   already apply for the `DEC-021` attachments; do not re-derive it.
+3. **Gap-label ground truth.** Run the classifier over the 25 unmapped fields and
+   diff it against the hand-written partitions in
+   `docs/analyses/2026-09-02-residual-mapping-boundaries.md` and the project
+   to-do inventory. Any disagreement is either a classifier defect or an
+   analysis that has drifted; the point of F1 is that this stops being
+   hand-maintained.
+4. **Headline stability.** Regenerate `cda-mapping.md` after the F2 extraction
+   and diff it against the committed copy. A zero diff is the acceptance
+   criterion for F2 step 1.
+5. **`@see` normalization scope.** Count the affected include files and check
+   whether the same URI shape appears in `decor-source.xsl`; that decides whether
+   the rewrite belongs in the assembly step or in how the publication transform
+   is invoked (`conformance.py:827 outputBaseUriPrefix`).
+
+**Online — two questions only.**
+
+1. **Schematron `@see` provenance.** Check the ART-DECOR core release notes and
+   issue tracker for whether a newer core package emits a relative or
+   configurable `@see`. If it does, upgrading the pinned package
+   (`conformance.py:41-90`, four checksum-pinned packages) is cleaner than a
+   local rewrite; if not, the local repair stands and `DEC-019` should say so.
+2. **CI access to the companion workspace.** Confirm whether
+   `randomchars42/decor2hl7-test-workspace` is reachable from a GitHub Actions
+   runner (private repository → deploy key or PAT). This decides whether F3
+   enforces the guards or merely skips them.
+
+<a id="phase5-checklist"></a>
+#### Phase 5 completion checklist
+
+| Item | Change |
+|---|---|
+| `docs/decisions.md` | amend `DEC-011` (gap labels); note frozen-`dynamic` resolution under `DEC-013` with the `DEC-004` caveat; amend `DEC-019` (`@see` normalization, pinnable hashes) |
+| `docs/known-issues.md` | "Remaining active-profile mapping boundaries" cites gap keys; new note on non-reproducible generated Schematron hashes |
+| Tests | `test_core.py` (dynamic resolution, one case per gap `kind`, headline byte-stability); `test_closure.py` (crawl/unavailable/unresolved ceilings, `assembled_sha256`, coverage-headline non-regression) |
+| Generated docs | `docs/mapping-documentation-format.md` gains the `**Gap:**` line vocabulary |
+| Reference workspace | regenerate (step 0 changes `formal_terminology.status` for 7 fields) and refresh `tests/fixtures/reference-mapping-audit.json` |
+
+Suggested split, in order: **(a)** F1 step 0 plus the regenerated workspace —
+smallest diff, largest correctness effect, and F1's labels depend on it;
+**(b)** the rest of F1; **(c)** F2 and F3 together, since both touch the fixture
+and the new workflow.
+
 ### Cross-cutting, specifiable now
 
 <a id="e1-impl"></a>
@@ -876,6 +1230,9 @@ balances a leading `[[` produced by the publication transform for
 
 <a id="a7-impl"></a>
 #### A7 / F3. Closure and coverage regression guards
+
+_Landed. The remaining guard work is specified in
+[Phase 5 § F3](#f3-impl) and [§ F2](#f2-impl)._
 
 - `tests/test_closure.py` (new): load the reference `closure.json`, assert
   `build_degraded ⊆ {expected set}` and `len(generation_messages) <= N`.
