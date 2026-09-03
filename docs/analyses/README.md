@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-03-reviewed-edis-attachments-and-decision-review.md`](2026-09-03-reviewed-edis-attachments-and-decision-review.md)
+  records the exact reviewed DEC-021 attachments for `.10.85`–`.10.87`, the
+  resulting 92→95 mapping gain, the corrected mandatory `value` targets and
+  hour-unit normalization, the no-change DEC-015 re-review, and DEC-020's
+  compound event/offset enforcement boundary.
 - [`2026-09-03-core-package-validation.md`](2026-09-03-core-package-validation.md)
   records the implemented checksum-pinned DECOR-core/full-CDA validation stack,
   the source-versus-compiled execution boundary, reference diagnostics,

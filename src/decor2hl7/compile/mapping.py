@@ -713,6 +713,26 @@ def _principal_target(
     ]
     explicit = [item for item in typed if not item[1].get("datatype_derived")]
     if explicit:
+        required = [
+            item for item in explicit
+            if item[1].get("mandatory") or int(item[1].get("min") or 0) >= 1
+        ]
+        # Template-name evidence locates a template.  When requiredness singles
+        # out one compatible payload, prefer it to an optional narrative or
+        # auxiliary leaf.  Preserve the established nearest-target behavior if
+        # requiredness does not resolve the choice.
+        if required:
+            required_depth = min(
+                str(item[1].get("path") or "").count("/")
+                for item in required
+            )
+            nearest_required = [
+                item for item in required
+                if str(item[1].get("path") or "").count("/")
+                == required_depth
+            ]
+            if len(nearest_required) == 1:
+                return nearest_required[0]
         return min(explicit, key=lambda item: len(str(item[1].get("path") or "")))
     # A wildcard structural class exposes many type-compatible RIM children.
     # Datatype compatibility alone cannot decide that an unconstrained

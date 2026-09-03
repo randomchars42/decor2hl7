@@ -96,6 +96,64 @@ def api_path(url: str) -> str:
 
 
 class CoreTests(unittest.TestCase):
+    def test_template_name_prefers_unique_required_payload(self) -> None:
+        field = {"type": "text"}
+        optional_narrative = {
+            "datatype": "ED",
+            "path": "hl7:observation/hl7:text",
+            "writable": True,
+            "logical_types": ["text"],
+            "value_representation": {"kind": "element_text"},
+            "min": 0,
+        }
+        required_value = {
+            "datatype": "ST",
+            "path": "hl7:observation/hl7:value",
+            "writable": True,
+            "logical_types": ["text"],
+            "value_representation": {"kind": "element_text"},
+            "min": 1,
+        }
+        required_narrative_reference = {
+            "datatype": "TEL",
+            "path": "hl7:observation/hl7:text/hl7:reference",
+            "writable": True,
+            "logical_types": ["text"],
+            "value_representation": {"kind": "url"},
+            "min": 1,
+        }
+
+        self.assertEqual(
+            mapping_compiler._principal_target(
+                "edis",
+                field,
+                {"edis": [
+                    ("edis.text", optional_narrative),
+                    ("edis.reference", required_narrative_reference),
+                    ("edis.value", required_value),
+                ]},
+            ),
+            ("edis.value", required_value),
+        )
+
+    def test_quantity_unit_accepts_german_hour_label_for_ucum_h(self) -> None:
+        field = {"type": "quantity", "unit": "Stunden"}
+        target = {
+            "datatype": "PQ",
+            "path": "hl7:observation/hl7:value",
+            "writable": True,
+            "logical_types": ["quantity", "decimal", "duration"],
+            "value_representation": {
+                "kind": "quantity",
+                "logical_types": ["quantity", "decimal", "duration"],
+                "attributes": ["value", "unit"],
+                "scalar_attribute": "value",
+            },
+            "unit": "h",
+        }
+
+        self.assertEqual(direct_compatibility(field, target), (True, []))
+
     def test_workspace_selection_is_path_independent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
