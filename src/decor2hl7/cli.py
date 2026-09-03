@@ -213,6 +213,7 @@ def cmd_set_transaction(args: argparse.Namespace) -> int:
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
+    from .cda.extensions import load_extensions
     from .retrieval.fetch import fetch_spec
     from .retrieval.sources import load_source_hints
 
@@ -234,6 +235,9 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         progress=_say,
         api_base=api_base,
         source_hints=load_source_hints(root / "config" / "sources.json"),
+        cda_extensions=load_extensions(
+            root / "config" / "cda-extensions.json", transaction
+        ),
         cda_core=True,
         validation_packages=True,
     )
@@ -327,6 +331,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         value_set_paths=[
             *inputs["model_resources"], *inputs["terminology_resources"],
         ],
+        cda_extensions=inputs.get("cda_extensions", []),
     )
     cda_mapping = write_mapping_model(
         inputs["mapping_evidence"], model_dir, model, cda

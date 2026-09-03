@@ -21,6 +21,7 @@ from decor2hl7.compile.structural import (
 )
 from decor2hl7.cda.compile import compile_cda_model
 from decor2hl7.cda.datatypes import value_representation
+from decor2hl7.cda.extensions import load_extensions
 from decor2hl7.compile.reports import (
     _outline_datapoint_lines, render_cda_mapping_markdown,
 )
@@ -35,7 +36,6 @@ from decor2hl7.retrieval.api import REQUIRED_PATHS, artifact_representations
 from decor2hl7.retrieval.sources import apply_source_hint, load_source_hints
 from decor2hl7.semantics import accepted_values, direct_compatibility
 from decor2hl7.transforms import apply_transform
-from decor2hl7.workspace import load_json
 from decor2hl7.workspace import (
     init_workspace, input_dir, load_json, release_spec_dir, set_release, set_transaction,
     transaction_mapping_dir, transaction_key, transaction_model_dir,
@@ -179,6 +179,39 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(resolved["project"], "ch-pharm-")
         self.assertEqual(resolved["effective_date"], "2019-08-27T16:13:43")
         self.assertTrue(resolved["api_base"].endswith("/exist/apps/api"))
+
+    def test_cda_extensions_are_exact_and_transaction_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cda-extensions.json"
+            attachment = {
+                "transaction_id": "tx", "transaction_effective_date": "2026",
+                "document_template_id": "doc", "document_template_effective_date": "2026.1",
+                "parent_template_id": "section", "parent_template_effective_date": "2024",
+                "parent_element_id": "section-root", "element_name": "hl7:entry",
+                "template_id": "entry", "template_effective_date": "2024",
+                "minimum_multiplicity": 0, "maximum_multiplicity": 1,
+                "conformance": "r", "reason": "Reviewed placement",
+            }
+            path.write_text(json.dumps({
+                "format": 1,
+                "attachments": [attachment, {**attachment, "transaction_id": "other"}],
+            }), encoding="utf-8")
+            selected = load_extensions(
+                path, {"id": "tx", "effective_date": "2026"}
+            )
+            self.assertEqual(len(selected), 1)
+            self.assertEqual(selected[0]["conformance"], "R")
+            self.assertEqual(selected[0]["template_id"], "entry")
+            missing_maximum = dict(attachment)
+            missing_maximum.pop("maximum_multiplicity")
+            path.write_text(json.dumps({
+                "format": 1, "attachments": [missing_maximum],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "maximum_multiplicity"):
+                load_extensions(
+                    path,
+                    {"id": "tx", "effective_date": "2026"},
+                )
 
     def test_codesystem_and_concept_context_references_are_typed(self) -> None:
         root = ET.fromstring('''<valueSet id="vs">
@@ -813,6 +846,60 @@ class CoreTests(unittest.TestCase):
             self.assertIn(
                 "template:doc@2026-01-15T00:00:00",
                 result["closure"]["build_resources"],
+            )
+
+    def test_fetch_adds_reviewed_cda_extension_to_build_closure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp) / "spec" / "2026.1.2"
+            tx_dir = release_dir / "transactions" / "tx"
+            calls: list[str] = []
+            attachment = {
+                "transaction_id": "t", "transaction_effective_date": "2026-03-25",
+                "document_template_id": "doc", "document_template_effective_date": "2026",
+                "parent_template_id": "section", "parent_template_effective_date": "2024",
+                "parent_element_id": "section-root", "element_name": "hl7:entry",
+                "template_id": "extra", "template_effective_date": "2024",
+                "minimum_multiplicity": 0, "maximum_multiplicity": 1,
+                "conformance": "R", "reason": "Reviewed placement",
+            }
+
+            def fake_get(url: str, **_: object) -> bytes:
+                calls.append(url)
+                path = api_path(url)
+                if path.endswith("/modules/library/api.json"):
+                    return API_CONTRACT
+                if path.endswith("/project"):
+                    return b"<return/>"
+                if "/transaction/t/" in path:
+                    return b'<transaction id="t"><representingTemplate ref="doc" flexibility="2026"/></transaction>'
+                if path.endswith("/project/aktin-/$extract"):
+                    return b"<project/>"
+                if path.endswith("/project/aktin-"):
+                    return b"<project/>"
+                if "/template/doc/" in path:
+                    return b'<return><template id="doc" effectiveDate="2026" name="Doc"><element name="hl7:ClinicalDocument"/></template></return>'
+                if "/template/extra/" in path:
+                    return b'<return><template id="extra" effectiveDate="2024" name="Extra"><element name="hl7:observation"/></template></return>'
+                raise AssertionError(url)
+
+            transaction = {
+                **TRANSACTION,
+                "id": "t", "effective_date": "2026-03-25", "key": "tx",
+            }
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
+                result = fetch_spec(
+                    release_dir, tx_dir, prefix="aktin-", release=RELEASE,
+                    transaction=transaction, max_requests=30,
+                    cda_extensions=[attachment],
+                )
+            self.assertTrue(any("/template/extra/" in api_path(url) for url in calls))
+            self.assertIn(
+                "template:extra@2024", result["closure"]["build_resources"]
+            )
+            self.assertEqual(result["closure"]["cda_extensions"], [attachment])
+            self.assertEqual(
+                compiler_inputs(release_dir, tx_dir)["cda_extensions"],
+                [attachment],
             )
 
     def test_dynamic_template_is_fetched_and_frozen_not_taken_from_live_evidence(self) -> None:

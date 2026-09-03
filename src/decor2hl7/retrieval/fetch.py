@@ -50,6 +50,7 @@ from .resolution import (
 )
 from ..workspace import load_json, write_json
 from ..cda.core import CORE_FILES, CORE_RAW_BASE, CORE_REVISION
+from ..cda.extensions import normalize_extensions
 from ..conformance import (
     VALIDATION_ARCHIVES, extract_validation_packages, package_archive_path,
     validation_package_problems,
@@ -1421,6 +1422,7 @@ def fetch_spec(
     progress: Progress | None = None,
     api_base: str = DEFAULT_API_BASE,
     source_hints: Mapping[str, Mapping[str, str]] | None = None,
+    cda_extensions: Iterable[Mapping[str, Any]] = (),
     cda_core: bool = False,
     validation_packages: bool = False,
 ) -> dict[str, Any]:
@@ -1453,6 +1455,15 @@ def fetch_spec(
     release_date = release.get("date") or ""
     tx_id = transaction.get("id") or ""
     tx_effective = transaction.get("effective_date") or ""
+    extensions = normalize_extensions(cda_extensions)
+    if any(
+        extension["transaction_id"] != tx_id
+        or extension["transaction_effective_date"] != tx_effective
+        for extension in extensions
+    ):
+        raise ValueError(
+            "CDA extension transaction identity does not match the selected transaction"
+        )
 
     roles: dict[str, set[str]] = {"build": set(), "evidence": set()}
     resource_roles: dict[str, set[str]] = {}
@@ -1553,6 +1564,7 @@ def fetch_spec(
             "format": 2,
             "release": dict(release),
             "transaction": dict(transaction),
+            "cda_extensions": extensions,
             # ``complete`` remains the compatibility spelling for crawl state.
             # It must not be interpreted as permission to compile.
             "complete": crawl_complete,
@@ -1758,6 +1770,14 @@ def fetch_spec(
         if tx_root is not None:
             build_queue.extend(hard_references(tx_root))
             evidence_queue.extend(soft_references(tx_root))
+        for extension in extensions:
+            build_queue.append(Want(
+                kind="template",
+                id=extension["template_id"],
+                effective_date=extension["template_effective_date"],
+                project="",
+                role="structure",
+            ))
 
         # Only count embedded resources as "already available" when the later
         # compiler actually receives the container that holds them.

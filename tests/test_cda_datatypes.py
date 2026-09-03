@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 import xml.etree.ElementTree as ET
 
 from decor2hl7 import cda, validate
@@ -1294,6 +1295,230 @@ class CdaDatatypeTests(unittest.TestCase):
             sources = {item.get("source") for item in postcode["provenance"]}  # type: ignore[union-attr]
             self.assertIn("template", sources)
             self.assertIn("template + datatype", sources)
+
+    def test_closed_template_does_not_materialize_unspecified_core_parts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "POCD_MT000040.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="ClinicalDocument" type="POCD_MT000040.ClinicalDocument"/>
+  <xs:complexType name="POCD_MT000040.ClinicalDocument"><xs:sequence>
+    <xs:element name="title" type="ST" minOccurs="0"/>
+    <xs:element name="effectiveTime" type="TS" minOccurs="0"/>
+  </xs:sequence><xs:attribute name="nullFlavor" type="cs"/></xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            source = root / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document" isClosed="true">
+  <element name="hl7:ClinicalDocument" id="document">
+    <element name="hl7:title" datatype="ST" minimumMultiplicity="0" maximumMultiplicity="1"/>
+  </element>
+</template>''', encoding="utf-8")
+            compiled = compile_cda(
+                [source],
+                {"meta": {"template_id": "doc", "template_effective_date": "2026"}},
+                core_definition_paths=[schema],
+            )
+            document = compiled["document"][0]
+            self.assertTrue(document["is_closed"])
+            self.assertEqual(
+                [node["name"] for node in document["children"]], ["hl7:title"]
+            )
+            self.assertEqual(document["attributes"], [])
+            self.assertFalse(any(
+                target.get("path") == "hl7:ClinicalDocument/hl7:effectiveTime"
+                for target in compiled["targets"].values()
+            ))
+
+            included = root / "included.xml"
+            included.write_text('''<project>
+  <template id="group" effectiveDate="2026" name="Group">
+    <element name="hl7:ClinicalDocument" id="included-document">
+      <element name="hl7:title" datatype="ST" minimumMultiplicity="0" maximumMultiplicity="1"/>
+    </element>
+  </template>
+  <template id="including-doc" effectiveDate="2026" name="IncludingDocument">
+    <include ref="group" flexibility="2026" isClosed="1"/>
+  </template>
+</project>''', encoding="utf-8")
+            included_compiled = compile_cda(
+                [included],
+                {
+                    "meta": {
+                        "template_id": "including-doc",
+                        "template_effective_date": "2026",
+                    }
+                },
+                core_definition_paths=[schema],
+            )
+            included_document = included_compiled["document"][0]["children"][0]
+            self.assertTrue(included_document["is_closed"])
+            self.assertEqual(
+                [node["name"] for node in included_document["children"]],
+                ["hl7:title"],
+            )
+
+    def test_reviewed_extension_attaches_exact_template_to_open_core_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "POCD_MT000040.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="ClinicalDocument" type="POCD_MT000040.ClinicalDocument"/>
+  <xs:complexType name="POCD_MT000040.ClinicalDocument"><xs:sequence>
+    <xs:element name="component" type="POCD_MT000040.Component3"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Component3"><xs:sequence>
+    <xs:element name="section" type="POCD_MT000040.Section"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Section"><xs:sequence>
+    <xs:element name="entry" type="POCD_MT000040.Entry" minOccurs="0" maxOccurs="unbounded"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Entry"><xs:choice>
+    <xs:element name="observation" type="POCD_MT000040.Observation"/>
+    <xs:element name="act" type="POCD_MT000040.Act"/>
+  </xs:choice></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Observation"><xs:sequence>
+    <xs:element name="value" type="ANY" minOccurs="0"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Act"><xs:sequence/></xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            source = root / "project.xml"
+            source.write_text('''<project>
+  <template id="old" effectiveDate="2024" name="OldObservation">
+    <element name="hl7:observation" id="old-observation">
+      <element name="hl7:value" id="old-value" datatype="TS" minimumMultiplicity="1" maximumMultiplicity="1"/>
+    </element>
+  </template>
+  <template id="new" effectiveDate="2024" name="NewObservation">
+    <element name="hl7:observation" id="new-observation">
+      <element name="hl7:value" id="new-value" datatype="ST" minimumMultiplicity="1" maximumMultiplicity="1"/>
+    </element>
+  </template>
+  <template id="section" effectiveDate="2024" name="OpenSection" isClosed="false">
+    <element name="hl7:section" id="section-root">
+      <element name="hl7:entry" contains="old" flexibility="2024" minimumMultiplicity="0" maximumMultiplicity="1"/>
+    </element>
+  </template>
+  <template id="doc" effectiveDate="2026" name="Document">
+    <element name="hl7:ClinicalDocument" id="document">
+      <element name="hl7:component" contains="section" flexibility="2024" minimumMultiplicity="1" maximumMultiplicity="1"/>
+    </element>
+  </template>
+</project>''', encoding="utf-8")
+            extension = {
+                "transaction_id": "tx", "transaction_effective_date": "2026",
+                "document_template_id": "doc", "document_template_effective_date": "2026",
+                "parent_template_id": "section", "parent_template_effective_date": "2024",
+                "parent_element_id": "section-root", "element_name": "hl7:entry",
+                "template_id": "new", "template_effective_date": "2024",
+                "minimum_multiplicity": 0, "maximum_multiplicity": 1,
+                "conformance": "R", "reason": "Reviewed extension fixture",
+            }
+            model = {"meta": {
+                "transaction_id": "tx", "transaction_effective_date": "2026",
+                "template_id": "doc", "template_effective_date": "2026",
+            }}
+            compiled = compile_cda(
+                [source], model, core_definition_paths=[schema],
+                cda_extensions=[extension],
+            )
+            self.assertEqual(compiled["stats"]["reachable_templates"], 4)
+            self.assertEqual(compiled["stats"]["reviewed_extensions"], 1)
+            sections: list[dict[str, Any]] = []
+            def collect(nodes: list[dict[str, Any]]) -> None:
+                for node in nodes:
+                    if node.get("name") == "hl7:section":
+                        sections.append(node)
+                    collect(list(node.get("children", [])))
+            collect(compiled["document"])
+            entries = [
+                node for node in sections[0]["children"]
+                if node.get("name") == "hl7:entry"
+            ]
+            self.assertEqual([node.get("contains") for node in entries], ["old", "new"])
+            self.assertTrue(entries[1]["reviewed_extension"])
+            self.assertFalse(any(
+                child.get("name") == "hl7:act"
+                for child in entries[1]["children"]
+            ))
+            new_value = next(
+                target for target in compiled["targets"].values()
+                if target.get("element_id") == "new-value"
+            )
+            self.assertTrue(new_value["writable"])
+            self.assertEqual(len(new_value["locations"]), 1)
+            self.assertEqual(compiled["reviewed_extensions"], [extension])
+
+            closed_source = root / "closed.xml"
+            closed_source.write_text(
+                source.read_text(encoding="utf-8").replace(
+                    'name="OpenSection" isClosed="false"',
+                    'name="OpenSection" isClosed="true"',
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "below closed element"):
+                compile_cda(
+                    [closed_source], model, core_definition_paths=[schema],
+                    cda_extensions=[extension],
+                )
+
+            closed_document_source = root / "closed-document.xml"
+            closed_document_source.write_text(
+                source.read_text(encoding="utf-8").replace(
+                    'name="Document">', 'name="Document" isClosed="1">',
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "below closed element"):
+                compile_cda(
+                    [closed_document_source], model,
+                    core_definition_paths=[schema], cda_extensions=[extension],
+                )
+
+            with self.assertRaisesRegex(ValueError, "does not match a CDA core child"):
+                compile_cda(
+                    [source], model, core_definition_paths=[schema],
+                    cda_extensions=[{**extension, "element_name": "hl7:component"}],
+                )
+
+            with self.assertRaisesRegex(ValueError, "already explicitly contained"):
+                compile_cda(
+                    [source], model, core_definition_paths=[schema],
+                    cda_extensions=[{**extension, "template_id": "old"}],
+                )
+
+            with self.assertRaisesRegex(ValueError, "not fetched exactly"):
+                compile_cda(
+                    [source], model, core_definition_paths=[schema],
+                    cda_extensions=[{**extension, "template_id": "missing"}],
+                )
+
+            bounded_schema = root / "bounded.xsd"
+            bounded_schema.write_text(
+                schema.read_text(encoding="utf-8").replace(
+                    'name="entry" type="POCD_MT000040.Entry" '
+                    'minOccurs="0" maxOccurs="unbounded"',
+                    'name="entry" type="POCD_MT000040.Entry" '
+                    'minOccurs="0" maxOccurs="1"',
+                ),
+                encoding="utf-8",
+            )
+            extension_only_source = root / "extension-only.xml"
+            extension_only_source.write_text(
+                source.read_text(encoding="utf-8").replace(
+                    '      <element name="hl7:entry" contains="old" '
+                    'flexibility="2024" minimumMultiplicity="0" '
+                    'maximumMultiplicity="1"/>\n',
+                    "",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "multiplicity exceeds"):
+                compile_cda(
+                    [extension_only_source], model,
+                    core_definition_paths=[bounded_schema],
+                    cda_extensions=[{**extension, "maximum_multiplicity": 2}],
+                )
 
     def test_unknown_datatype_fails_with_identity_and_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

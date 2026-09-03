@@ -182,7 +182,8 @@ WORKSPACE/
 ├── aktin.json
 │
 ├── config/                         acquisition-wide configuration
-│   └── sources.json                optional repository/source hints
+│   ├── sources.json                optional repository/source hints
+│   └── cda-extensions.json         reviewed exact open-template attachments
 │
 ├── spec/                           downloaded specification cache
 │   └── <release>/
@@ -260,6 +261,12 @@ ART-DECOR access uses IPv4 by default because the observed IPv6 route is substan
 ### Closure behavior
 
 Retrieval recursively follows the selected transaction as far as required and sensible, including datasets, templates, ValueSets, CodeSystems, concepts, `include`, `contains`, and template derivation/reference relationships.
+
+A reviewed CDA extension attachment may add one exact template dependency to
+an explicitly reachable open parent. It must be transaction-, document-,
+parent-, element- and revision-specific, include a review reason, and pass CDA
+core slot validation during compilation. Open-template status or generic
+`context="**"` metadata alone never creates a dependency.
 
 Already cached successful artifacts are not fetched again. Settled missing artifacts are remembered so they are not repeatedly probed unless explicitly requested.
 
