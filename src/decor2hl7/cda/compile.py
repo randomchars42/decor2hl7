@@ -25,6 +25,7 @@ from ..assertions import schematron
 from ..compile.structural import value_set_members
 from ..workspace import write_json
 from .datatypes import (
+    POLYMORPHIC_COMPLEX_ROOTS,
     base_datatype,
     classify_datatype,
     datatype_inventory,
@@ -1401,6 +1402,90 @@ def _expand_datatype_structure(
         )
 
 
+def _materialize_polymorphic_structure(
+    nodes: list[dict[str, Any]], definitions: Mapping[str, Any],
+) -> None:
+    """Expose reviewed complex datatype choices below one physical element.
+
+    The wrapper is transparent XML structure. Its children remain ordinary
+    compiled datatype nodes, while the renderer consumes the wrapper's generic
+    ``xsi_type`` metadata on the already-created parent element.
+    """
+    subtypes = getattr(definitions, "subtypes", {})
+    abstract_types = getattr(definitions, "abstract_types", set())
+
+    def visit(items: list[dict[str, Any]]) -> None:
+        for node in items:
+            existing_children = list(node.get("children", []))
+            visit(existing_children)
+            if node.get("kind") != "element":
+                continue
+            declared = str(node.get("datatype") or "").upper()
+            if declared not in POLYMORPHIC_COMPLEX_ROOTS:
+                continue
+            origin = node.get("origin", {})
+            path = str(origin.get("path") or node.get("name") or "")
+            if node.get("datatype_derived") and "@xsi:type" not in path:
+                continue
+            for subtype in sorted(subtypes.get(declared, set())):
+                if subtype in abstract_types or subtype not in definitions:
+                    continue
+                definition = resolve_definition(definitions, subtype)
+                branch_path = path + f"_as_{_ascii_name(subtype)}"
+                branch_source = {
+                    **_model_source(
+                        {**node, "datatype": declared}, branch_path, subtype,
+                        source="hl7-datatype-choice",
+                    ),
+                    "datatype": declared,
+                    "datatype_part": subtype,
+                }
+                branch_parent = {
+                    **node,
+                    "datatype": subtype,
+                    "origin": {**dict(origin), "path": branch_path},
+                    "model_derived": True,
+                    "provenance": list(node.get("provenance", []))
+                    + [branch_source],
+                }
+                children = [
+                    _datatype_child(
+                        branch_parent, part.name, part.datatype,
+                        part.minimum, part.maximum,
+                        branch_path + "/" + part.name,
+                    )
+                    for part in definition.parts
+                ]
+                if str(node.get("conformance") or "").upper() == "NP":
+                    for child in children:
+                        child["conformance"] = "NP"
+                _expand_datatype_structure(children, definitions, (subtype,))
+                policy = expand_datatype(subtype)
+                node.setdefault("children", []).append({
+                    "kind": "datatype_choice",
+                    "datatype": subtype,
+                    "declared_datatype": declared,
+                    "xsi_type": subtype,
+                    "min": 0,
+                    "max": 1,
+                    "mandatory": False,
+                    "conformance": node.get("conformance"),
+                    "children": children,
+                    "origin": branch_source,
+                    "sources": [branch_source],
+                    "provenance": [branch_source],
+                    "targets": [],
+                    "asserts": [],
+                    "lets": {},
+                    "requirement_owner": branch_path,
+                    "non_null_required_parts": list(
+                        policy.non_null_required_parts
+                    ),
+                })
+
+    visit(nodes)
+
+
 def _transparent_element_children(
     nodes: Iterable[dict[str, Any]],
 ) -> Iterable[dict[str, Any]]:
@@ -1926,7 +2011,7 @@ def _annotate_non_null_requirements(
     Requirement = tuple[str, str, bool]
 
     def target_name(node: Mapping[str, Any]) -> str:
-        return str(node.get("target") or "")
+        return str(node.get("target") or node.get("requirement_owner") or "")
 
     def visit_node(
         node: dict[str, Any], inherited: tuple[Requirement, ...],
@@ -2195,6 +2280,8 @@ def compile_cda(
             + ", ".join(inventory["unsupported"])
         )
     _expand_datatype_structure(document, definitions)
+    if definitions:
+        _materialize_polymorphic_structure(document, definitions)
     _apply_neutral_example_defaults(
         document,
         _neutral_coded_examples(reachable),

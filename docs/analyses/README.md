@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-03-phase-6-structural-evidence.md`](2026-09-03-phase-6-structural-evidence.md)
+  records the structural-container gap correction, the scoped `SXCM_TS`
+  subtype expansion, generated-Schematron supporting evidence, the corrected
+  CEDIS interval finding, and C6's zero-coverage terminology-association audit.
 - [`2026-09-03-reviewed-edis-attachments-and-decision-review.md`](2026-09-03-reviewed-edis-attachments-and-decision-review.md)
   records the exact reviewed DEC-021 attachments for `.10.85`–`.10.87`, the
   resulting 92→95 mapping gain, the corrected mandatory `value` targets and

@@ -33,6 +33,7 @@ reference-declaration identity when adopting a cached artifact", `ab85473`/`4473
 | F1 — machine-readable `gap` per unresolved datapoint | **done**, `DEC-011` amended; frozen-`dynamic` terminology index, `DEC-013`/`DEC-004` noted | `compile/mapping.py::_gap_classification`, `compile/transaction.py::_resolve_value_set`, `compile/reports.py`, `cda/compile.py` (`is_closed` on targets), `docs/mapping-documentation-format.md` |
 | F2 — coverage guard on the documented headline | **done** — counts persisted as `summary.coverage_headline`; baseline/current reported in the documented line, no `+n/-n` shape | `compile/reports.py::coverage_headline_counts`/`format_coverage_headline`, `cli.py`, `tests/fixtures/reference-mapping-audit.json`, `scripts/update_reference_baseline.py`, `Makefile` (`check`, `baseline`) |
 | F3 — closure guard + reproducible validator hashes | **done**, `DEC-019` amended; **no CI workflow — deliberately out of scope** | `conformance.py` (`@see` normalization, 14 053 rewrites logged), `tests/test_closure.py` (all three hashes pinned, crawl/unavailable ceilings) |
+| Phase 6 — B0, B3, C1, C6 | **done**; C6 deliberately analysis-only | structural reopening evidence, scoped `SXCM_TS` branches, `DEC-023` Schematron support, `docs/analyses/2026-09-03-phase-6-structural-evidence.md` |
 
 ### Current reference-workspace metrics (after phase 5)
 
@@ -592,7 +593,7 @@ are normalized. Detailed steps in [Implementation instructions § F3](#f3-impl).
 | 3 | A6 (`DEC-013` amend) | **done**; 65 → 3 validator messages | 0 this round (blocked enums need the phase-4 residue) |
 | 4 | A5 for the 5 `build_degraded` items; S1/B1; E2; A7 finish | **done** — `build_degraded` 5 → 3, validator `complete: true`; B1 opened no medication slots | 0 (quality) |
 | 5 | F1–F3 | **done** (`4473eca`) — `gap` labels, `coverage_headline`, reproducible pinned hashes; CI workflow deliberately omitted | 0 (infra) |
-| 6 (next) | B0, B3, C1, C6 (in that order) | specified, **research complete** — see [Phase 6](#phase-6--semantic-evidence-and-expansion-completeness-next); B3 scoped to a reviewed union list, C6 collapsed to an analysis with zero coverage effect | +0 direct; B3 unblocks phase 7 |
+| 6 | B0, B3, C1, C6 (in that order) | **done** — B3 scoped to a reviewed union list, C1 supporting-only, C6 analysis-only with zero coverage effect | +0 direct; B3 unblocks phase 7 |
 | 7 | C5, D1 | not started | up to +4 medication datapoints |
 | 8 | C3 (`DEC-025`), C4 (`DEC-026`), C2 | not started | +1 (insurance), +1 (X-ray) subject to review |
 
@@ -1258,13 +1259,19 @@ smallest diff, largest correctness effect, and F1's labels depend on it;
 **(b)** the rest of F1; **(c)** F2 and F3 together, since both touch the fixture
 and the new workflow.
 
-### Phase 6 — semantic evidence and expansion completeness (next)
+### Phase 6 — semantic evidence and expansion completeness (complete)
 
-Scope: B3, C6, C1, **in that order**, plus one small follow-up
-([§ B0](#b0-impl)) that phase 5's own output exposed. Coverage effect:
-opportunistic. The offline research recorded below is **already done**; what
-remains is the reviewed rule for each item and its code. No ART-DECOR server
-access is required.
+Implemented on 2026-09-03. The durable result and the one corrected premise
+(CEDIS `IVL_TS` already retains inherited children) are recorded in
+[`docs/analyses/2026-09-03-phase-6-structural-evidence.md`](docs/analyses/2026-09-03-phase-6-structural-evidence.md)
+and `DEC-013`, `DEC-014`, and `DEC-023`. C6 remained analysis-only because its
+optional compiler change had zero field-coverage effect. No CI workflow was
+added.
+
+Implemented scope: B0, B3, C1, and C6, in that order. Coverage effect: zero
+direct gains; B3 supplies the physical leaves required by phase 7. The offline
+research recorded below drove the reviewed rules and required no ART-DECOR
+server access.
 
 #### Status after phase 5
 

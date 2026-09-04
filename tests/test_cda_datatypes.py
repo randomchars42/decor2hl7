@@ -14,6 +14,7 @@ from decor2hl7.cda.datatypes import (
     expand_datatype,
 )
 from decor2hl7.cda.compile import compile_cda
+from decor2hl7.cda.core import index_definitions
 from decor2hl7.build.mapping import cda_mapping_audit, cda_mapping_proposal
 from decor2hl7.bindings import non_null_requirement_problems
 from decor2hl7.compile.structural import value_set_members
@@ -45,6 +46,23 @@ def write_datatype_schema(root: Path) -> Path:
     <xs:element name="high" type="PQ" minOccurs="0"/>
   </xs:sequence></xs:complexType>
   <xs:complexType name="PQ"><xs:attribute name="value" type="xs:string"/><xs:attribute name="unit" type="xs:string"/></xs:complexType>
+  <xs:complexType name="TS"><xs:attribute name="value" type="xs:string"/></xs:complexType>
+  <xs:complexType name="SXCM_TS"><xs:complexContent><xs:extension base="TS"/></xs:complexContent></xs:complexType>
+  <xs:complexType name="ABSTRACT_SXCM_TS" abstract="true"><xs:complexContent><xs:extension base="SXCM_TS"/></xs:complexContent></xs:complexType>
+  <xs:complexType name="IVL_TS"><xs:complexContent><xs:extension base="SXCM_TS"><xs:sequence>
+    <xs:element name="low" type="TS" minOccurs="0"/><xs:element name="width" type="PQ" minOccurs="0"/>
+    <xs:element name="high" type="TS" minOccurs="0"/><xs:element name="center" type="TS" minOccurs="0"/>
+  </xs:sequence></xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="PIVL_TS"><xs:complexContent><xs:extension base="SXCM_TS"><xs:sequence>
+    <xs:element name="phase" type="IVL_TS" minOccurs="0"/><xs:element name="period" type="PQ" minOccurs="0"/>
+  </xs:sequence></xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="EIVL_TS"><xs:complexContent><xs:extension base="SXCM_TS"><xs:sequence>
+    <xs:element name="event" type="CE" minOccurs="0"/><xs:element name="offset" type="PQ" minOccurs="0"/>
+  </xs:sequence></xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="SXPR_TS"><xs:complexContent><xs:extension base="SXCM_TS"><xs:sequence>
+    <xs:element name="comp" type="SXCM_TS" minOccurs="2" maxOccurs="unbounded"/>
+  </xs:sequence></xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="TEL"><xs:sequence><xs:element name="useablePeriod" type="SXCM_TS" minOccurs="0" maxOccurs="unbounded"/></xs:sequence></xs:complexType>
 </xs:schema>''', encoding="utf-8")
     return schema
 
@@ -62,6 +80,122 @@ def target_at(compiled: dict[str, object], suffix: str) -> tuple[str, dict[str, 
 
 
 class CdaDatatypeTests(unittest.TestCase):
+    def test_reviewed_sxcm_ts_root_exposes_only_concrete_interval_branches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = write_datatype_schema(root)
+            definitions = index_definitions([schema])
+            self.assertEqual(
+                definitions.subtypes["SXCM_TS"],
+                {
+                    "ABSTRACT_SXCM_TS", "IVL_TS", "PIVL_TS", "EIVL_TS",
+                    "SXPR_TS",
+                },
+            )
+            self.assertIn("ABSTRACT_SXCM_TS", definitions.abstract_types)
+            source = root / "project.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:substanceAdministration" minimumMultiplicity="0" maximumMultiplicity="1">
+      <element name="hl7:effectiveTime[@xsi:type='SXPR_TS']" datatype="SXPR_TS"
+               minimumMultiplicity="0" maximumMultiplicity="1">
+        <element name="hl7:comp" datatype="SXCM_TS"
+                 minimumMultiplicity="0" maximumMultiplicity="*"/>
+      </element>
+    </element>
+    <element name="hl7:telecom" datatype="TEL"
+             minimumMultiplicity="0" maximumMultiplicity="1"/>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {},
+                "fields": {"timing.start": {
+                    "name": "Start", "concept": "start", "type": "datetime",
+                    "repeat_chain": [], "value_sets": [], "codes": [],
+                }},
+            }
+            compiled = compile_cda(
+                [source], model,
+                core_definition_paths=[schema],
+            )
+            low_name, low = target_at(
+                compiled, "/hl7:comp_as_IVL_TS/hl7:low"
+            )
+            _, high = target_at(compiled, "/hl7:comp_as_IVL_TS/hl7:high")
+            period_name, period = target_at(
+                compiled, "/hl7:comp_as_PIVL_TS/hl7:period"
+            )
+            event_name, _ = target_at(
+                compiled, "/hl7:comp_as_EIVL_TS/hl7:event"
+            )
+            _, offset = target_at(
+                compiled, "/hl7:comp_as_EIVL_TS/hl7:offset"
+            )
+            self.assertEqual(low["datatype"], "TS")
+            self.assertEqual(high["datatype"], "TS")
+            self.assertEqual(period["datatype"], "PQ")
+            self.assertEqual(offset["non_null_requires"], [event_name])
+            self.assertFalse(any(
+                "useablePeriod_as_" in str(target.get("path") or "")
+                for target in compiled["targets"].values()
+            ))
+
+            choices: list[dict[str, Any]] = []
+
+            def collect(nodes: list[dict[str, Any]]) -> None:
+                for node in nodes:
+                    if node.get("kind") == "datatype_choice":
+                        choices.append(node)
+                    collect(node.get("children", []))
+
+            collect(compiled["document"])
+            self.assertEqual(
+                {choice["xsi_type"] for choice in choices},
+                {"IVL_TS", "PIVL_TS", "EIVL_TS", "SXPR_TS"},
+            )
+            self.assertTrue(all(choice["max"] == 1 for choice in choices))
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P1", "instances": {},
+                    "values": {"timing.start": "2026-09-03T10:15:00Z"},
+                },
+                model, compiled, {"fields": {"timing.start": low_name}}, {},
+            )
+            self.assertEqual(problems, [])
+            document = ET.fromstring(payload)
+            comp = document.find(f".//{{{HL7}}}comp")
+            self.assertIsNotNone(comp)
+            assert comp is not None
+            self.assertEqual(
+                comp.get("{http://www.w3.org/2001/XMLSchema-instance}type"),
+                "IVL_TS",
+            )
+            self.assertEqual(comp.find(f"{{{HL7}}}low").get("value"), "20260903101500+0000")
+
+            conflict_model = {**model, "fields": {
+                **model["fields"],
+                "timing.period": {
+                    "name": "Period", "concept": "period", "type": "duration",
+                    "repeat_chain": [], "value_sets": [], "codes": [],
+                },
+            }}
+            with self.assertRaisesRegex(ValueError, "conflicting compiled datatype choices"):
+                cda.emit(
+                    {
+                        "key": "P1", "instances": {},
+                        "values": {
+                            "timing.start": "2026-09-03T10:15:00Z",
+                            "timing.period": {"value": "8", "unit": "h"},
+                        },
+                    },
+                    conflict_model, compiled, {"fields": {
+                        "timing.start": low_name,
+                        "timing.period": period_name,
+                    }}, {},
+                )
+
     def test_eivl_offset_requires_event_companion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "project.xml"

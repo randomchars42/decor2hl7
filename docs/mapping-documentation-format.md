@@ -439,6 +439,9 @@ Where available, unresolved rows should also state the compiled cause:
 
 - `datatype_component_available` — evidence reaches a complex datatype and a
   value-bearing component must be chosen;
+- `structural_container_available` — evidence reaches a structural CDA
+  container and the nearest compatible writable descendants are reopening
+  evidence, not mapping candidates;
 - `structural_only` — evidence reaches a container with no identified writable
   descendant;
 - `ambiguous_value_target` — more than one physical value target remains;
@@ -470,7 +473,7 @@ The gate vocabulary is deliberately small:
 - `blocked_upstream`: neither a context nor candidate exists yet.
 
 Kinds are stable machine keys: `closure`, `containment`, `no_writable_leaf`,
-`ambiguous_target`, `datatype_component`, `lossy_domain`, `no_association`,
+`ambiguous_target`, `datatype_component`, `structural_container`, `lossy_domain`, `no_association`,
 `shared_target`, `missing_companion`, and `no_candidate`. `reopens_with` contains
 only the smallest concrete request keys, targets/components, or competing field
 paths needed to reconsider the result.

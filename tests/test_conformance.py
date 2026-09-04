@@ -12,6 +12,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from decor2hl7.cda.core import CORE_FILES, CORE_REVISION, core_paths
+from decor2hl7.compile.schematron import (
+    attach_constraints, read_constraints, split_xpath,
+)
 from decor2hl7.conformance import (
     _complete_schematron_namespaces,
     _generation_message_scope,
@@ -31,6 +34,76 @@ from decor2hl7.retrieval.fetch import _fetch_direct
 
 
 class ConformanceTests(unittest.TestCase):
+    def test_generated_template_constraints_are_parsed_and_cross_referenced(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            include = Path(temporary)
+            pattern = include / "1.2.3-2026-01-01T000000.sch"
+            pattern.write_text('''<pattern xmlns="http://purl.oclc.org/dsdl/schematron"
+    id="template-1.2.3-2026-01-01T000000">
+  <rule context="*[hl7:observation[hl7:templateId[@root='1.2.3']]]/hl7:observation">
+    <assert see="file:///must/not/be/read" test="string(@classCode) = ('OBS')">fixed</assert>
+    <assert test="@moodCode">required attribute</assert>
+    <assert test="count(hl7:value[concat(@code,@codeSystem) = doc('include/voc-9.8.7-DYNAMIC.xml')//concept/concat(@code,@codeSystem)]) &gt;= 1">required value</assert>
+    <assert test="count(hl7:value[@xsi:type='CD']) &lt;= 1">typed choice</assert>
+  </rule>
+</pattern>''', encoding="utf-8")
+            (include / "DTr1_TS.sch").write_text(
+                '<pattern xmlns="http://purl.oclc.org/dsdl/schematron" '
+                'id="template-7.7.7-2026"><rule context="hl7:value">'
+                '<assert test="@value">ignored</assert></rule></pattern>',
+                encoding="utf-8",
+            )
+            constraints = read_constraints(include.glob("*.sch"))
+            self.assertEqual(
+                {item["kind"] for item in constraints},
+                {
+                    "attribute_required", "fixed_value", "max_occurs",
+                    "required", "value_set", "xsi_type",
+                },
+            )
+            self.assertTrue(any(
+                item.get("value_set") == "9.8.7" for item in constraints
+            ))
+            self.assertEqual(
+                split_xpath(
+                    "hl7:value[doc('include/voc-9.8.7-DYNAMIC.xml')]/hl7:originalText"
+                ),
+                [
+                    "hl7:value[doc('include/voc-9.8.7-DYNAMIC.xml')]",
+                    "hl7:originalText",
+                ],
+            )
+
+            cda_model = {"targets": {
+                "Observation.value": {
+                    "template_id": "1.2.3",
+                    "template_effective_date": "2026-01-01",
+                    "path": "hl7:observation/hl7:value",
+                },
+                "Observation.classCode": {
+                    "template_id": "1.2.3",
+                    "template_effective_date": "2026-01-01",
+                    "path": "hl7:observation/@classCode",
+                },
+                "Other.value": {
+                    "template_id": "4.5.6",
+                    "template_effective_date": "2026-01-01",
+                    "path": "hl7:observation/hl7:value",
+                },
+            }}
+            summary = attach_constraints(cda_model, include)
+            self.assertGreaterEqual(summary["matched"], 4)
+            value_constraints = cda_model["targets"]["Observation.value"][
+                "schematron_constraints"
+            ]
+            self.assertEqual(
+                {item["kind"] for item in value_constraints},
+                {"max_occurs", "required", "value_set", "xsi_type"},
+            )
+            self.assertNotIn(
+                "schematron_constraints", cda_model["targets"]["Other.value"]
+            )
+
     def test_generated_see_uris_are_workspace_relative_and_reproducible(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

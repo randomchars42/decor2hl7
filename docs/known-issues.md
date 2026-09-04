@@ -84,6 +84,13 @@ equally compatible quantities. They remain unmapped instead of being resolved
 by German/English path vocabulary or positional guessing. See
 [`analyses/2026-09-02-residual-mapping-boundaries.md`](analyses/2026-09-02-residual-mapping-boundaries.md).
 
+The subordinate `SXPR_TS/comp` now exposes its XSD-defined `IVL_TS`, `PIVL_TS`,
+`EIVL_TS`, and recursive `SXPR_TS` choices. This closes the missing-physical-leaf
+part of the interval/frequency boundary but does not choose a source-to-branch
+mapping or satisfy the compound occurrence semantics; that remains a reviewed
+structural-rule task. The prohibited outer Medikation `effectiveTime` remains
+unavailable.
+
 ## Transform vocabulary
 
 `cda-mapping.json` version 6 accepts direct target names, small declarative
@@ -99,6 +106,9 @@ Structural `for_each`, `repeat_by_discriminator`, and
 `coalesce` behavior is implemented in the generic binding layer and is generated
 only from formal repeat/discriminator evidence. Legacy reviewed `fan_out`
 configuration remains executable for compatibility.
+
+The selected CEDIS ValueSet is a presenting-complaint taxonomy, not an ordered
+scale. Its hierarchy therefore does not justify an `ordinal` transform.
 
 A future concept whose ART-DECOR representation needs a different structural or
 computed transformation remains evidence-linked but non-executable until an
@@ -159,7 +169,7 @@ The generated `mapping-audit.json` is authoritative for the current boundary:
 each unselected field carries a gate key and minimal reopening evidence rather
 than relying on this hand-maintained prose. The current field partition is
 `semantic:shared_target` (four), `semantic:missing_companion` (one),
-`physical:datatype_component` (nineteen), and
+`physical:structural_container` (nineteen), and
 `physical:no_writable_leaf` (one). One selected field additionally remains
 `terminology:closure` because ValueSet `1.2.276.0.76.11.53` is genuinely
 unresolved. The dated analyses below explain the clinical history; their
@@ -195,6 +205,18 @@ field-by-field investigation in
 [`analyses/2026-09-02-seven-active-profile-gaps.md`](analyses/2026-09-02-seven-active-profile-gaps.md)
 and the earlier snapshot in
 [`analyses/2026-09-02-residual-mapping-boundaries.md`](analyses/2026-09-02-residual-mapping-boundaries.md).
+
+The active CEDIS problem-observation interval is open. Its explicitly required
+`width` therefore coexists with inherited XSD `low`, `high`, and `center`
+targets; declaring one child does not close the others. `IVL_TS` also legally
+inherits the scalar `TS/@value` shorthand, and the pinned CDA model contains no
+constraint forbidding that shorthand alongside `width`. These legal choices do
+not establish which one carries the dataset's Ereigniseintritt.
+
+The active MRI statement has no region-bearing `targetSiteCode`,
+`approachSiteCode`, or equivalent particle. Its region datapoint remains blocked
+upstream until the selected template supplies such a target; generic CDA model
+permissiveness does not invent one.
 
 ## ART-DECOR assertion expression coverage
 

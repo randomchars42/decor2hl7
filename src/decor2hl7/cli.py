@@ -347,13 +347,28 @@ def cmd_build(args: argparse.Namespace) -> int:
         ],
         cda_extensions=inputs.get("cda_extensions", []),
     )
-    cda_mapping = write_mapping_model(
-        inputs["mapping_evidence"], model_dir, model, cda
-    )
     from .conformance import build_conformance_artifacts
     conformance = build_conformance_artifacts(
         release_spec_dir(root, release), model_dir, inputs, release, transaction,
         selected_closure_templates(cda),
+    )
+    from .compile.schematron import attach_constraints
+    if any(
+        stage.get("phase") == "template-schematron-generation"
+        and stage.get("status") == "passed"
+        for stage in conformance.get("stages", [])
+    ):
+        attach_constraints(cda, model_dir / "conformance-validation" / "include")
+    else:
+        cda["schematron_evidence"] = {
+            "source": "generated-template-schematron",
+            "constraints": 0,
+            "matched": 0,
+            "kinds": {},
+            "status": "unavailable",
+        }
+    cda_mapping = write_mapping_model(
+        inputs["mapping_evidence"], model_dir, model, cda
     )
     diagnostics = write_build_diagnostics(model_dir, inputs, cda, model)
     model["meta"]["artifact_closure"].update({

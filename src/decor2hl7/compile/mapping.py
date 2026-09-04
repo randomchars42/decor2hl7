@@ -18,6 +18,7 @@ from ..semantics import (
     transformed_compatibility, type_match,
 )
 from ..transforms import cda_target_name, mapping_rules
+from ..cda.datatypes import classify_datatype
 from ..cda.model import ValueRepresentationKind
 from ..bindings import non_null_requirement_satisfied
 from .structural import (
@@ -931,6 +932,59 @@ def _vocabulary_candidates(
     return result
 
 
+def _schematron_constraint_candidates(
+    field: Mapping[str, Any],
+    candidates: Iterable[Mapping[str, Any]],
+    cda: Mapping[str, Any],
+    occurrence_mapping: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Strengthen an existing bridge with generated structural evidence.
+
+    A Schematron constraint is never a semantic bridge by itself.  It may only
+    confirm that an already identified leaf is required or governed by an
+    explicit ValueSet, and direct compatibility must still hold.
+    """
+    result: list[dict[str, Any]] = []
+    for candidate in candidates:
+        confidence = str(candidate.get("confidence") or "")
+        if confidence not in {"WEAK", "MEDIUM"}:
+            continue
+        target = candidate.get("node", {})
+        if not isinstance(target, Mapping):
+            continue
+        supporting = sorted({
+            str(item.get("kind") or "")
+            for item in target.get("schematron_constraints", [])
+            if isinstance(item, Mapping)
+            and item.get("kind") in {"required", "value_set"}
+        })
+        if not supporting:
+            continue
+        compatible, warnings = _direct(
+            field, target, cda=cda, occurrence_mapping=occurrence_mapping,
+            transform=(
+                candidate.get("mapping", {}).get("transform")
+                if isinstance(candidate.get("mapping"), Mapping) else None
+            ),
+        )
+        strengthened = dict(candidate)
+        strengthened.update({
+            "chain": list(candidate.get("chain", [])) + [
+                "SCHEMATRON_CONSTRAINT(" + ",".join(supporting) + ")"
+            ],
+            "confidence": "MEDIUM" if confidence == "WEAK" else "STRONG",
+            "score": int(candidate.get("score") or 0) + 5,
+            "kind": "SCHEMATRON_CONSTRAINT",
+            "actionable": bool(candidate.get("actionable") or compatible),
+            "warnings": list(dict.fromkeys(
+                list(candidate.get("warnings", []))
+                + ([] if candidate.get("actionable") else warnings)
+            )),
+        })
+        result.append(strengthened)
+    return result
+
+
 def _deduplicate(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unique: dict[tuple[str, tuple[str, ...], str], dict[str, Any]] = {}
     for row in candidates:
@@ -964,11 +1018,13 @@ def _unresolved_reason(
         return "incompatible_value_type"
     contextual = context.get("node", {}) if isinstance(context, Mapping) else {}
     if contextual and not contextual.get("writable"):
-        return (
-            "datatype_component_available"
-            if contextual.get("datatype") and contextual.get("has_children")
-            else "structural_only"
-        )
+        if contextual.get("datatype") and contextual.get("has_children"):
+            return (
+                "structural_container_available"
+                if classify_datatype(contextual.get("datatype")) == "structural"
+                else "datatype_component_available"
+            )
+        return "structural_only"
     if nodes and all(not node.get("writable") for node in nodes):
         return "structural_only"
     return "no_semantic_evidence"
@@ -1122,33 +1178,63 @@ def _gap_classification(
             "gate": "physical", "kind": "ambiguous_target",
             "reopens_with": candidate_targets,
         }
-    if reason == "datatype_component_available":
+    if reason in {"datatype_component_available", "structural_container_available"}:
         components: list[str] = []
         if cda is not None and isinstance(context_node, Mapping):
+            rows: list[tuple[str, Mapping[str, Any], int]] = []
             context_locations = [
                 str(value) for value in context_node.get("locations", [])
             ]
             if len(context_locations) == 1:
                 root = context_locations[0]
-                components = [
-                    str(name) for name, target in cda.get("targets", {}).items()
+                rows = [
+                    (
+                        str(name), target,
+                        len(locations[0].split(".")) - len(root.split(".")),
+                    )
+                    for name, target in cda.get("targets", {}).items()
                     for locations in [[str(value) for value in target.get("locations", [])]]
                     if target.get("writable")
                     and len(locations) == 1
                     and locations[0].startswith(root + ".")
-                    and len(locations[0].split(".")) == len(root.split(".")) + 1
+                    and (
+                        reason == "structural_container_available"
+                        or len(locations[0].split(".")) == len(root.split(".")) + 1
+                    )
                 ]
             else:
                 root_path = str(context_node.get("path") or "").rstrip("/")
-                components = [
-                    str(name) for name, target in cda.get("targets", {}).items()
+                rows = [
+                    (
+                        str(name), target,
+                        str(target.get("path") or "").count("/")
+                        - root_path.count("/"),
+                    )
+                    for name, target in cda.get("targets", {}).items()
                     if target.get("writable")
                     and str(target.get("path") or "").startswith(root_path + "/")
-                    and str(target.get("path") or "").count("/")
-                    == root_path.count("/") + 1
+                    and (
+                        reason == "structural_container_available"
+                        or str(target.get("path") or "").count("/")
+                        == root_path.count("/") + 1
+                    )
                 ]
+            if reason == "structural_container_available":
+                rows.sort(key=lambda row: (
+                    not _is_payload(str(field.get("type") or ""), row[1]),
+                    bool(row[1].get("datatype_derived")), row[2], row[0],
+                ))
+                rows = rows[:20]
+            else:
+                rows.sort(key=lambda row: (row[2], row[0]))
+            components = [name for name, _, _ in rows]
         return {
-            "gate": "physical", "kind": "datatype_component",
+            "gate": "physical",
+            "kind": (
+                "structural_container"
+                if reason == "structural_container_available"
+                else "datatype_component"
+            ),
             "reopens_with": list(dict.fromkeys(
                 ([context_target] if context_target else []) + components
             )),
@@ -1473,6 +1559,9 @@ def _candidates(
     result.extend(_name_candidates(path, field, cda, by_template, name_index))
     result.extend(_description_candidates(field, cda))
     result.extend(_vocabulary_candidates(field, by_vs, by_code, by_template))
+    result.extend(_schematron_constraint_candidates(
+        field, list(result), cda, occurrence_mapping,
+    ))
     result.extend(_semantic_transform_candidates(field, list(result), cda))
     result.extend(_unbridged_writable_candidates(
         field, context, cda, occurrence_mapping,
@@ -1821,9 +1910,19 @@ def _choice_branch_candidates(
             )
             if compatible:
                 descendants[str(name)] = target
-    if len(descendants) != 1:
+    if not descendants:
         return []
-    name, target = next(iter(descendants.items()))
+    nearest_depth = min(
+        str(target.get("path") or "").count("/")
+        for target in descendants.values()
+    )
+    nearest = [
+        (name, target) for name, target in descendants.items()
+        if str(target.get("path") or "").count("/") == nearest_depth
+    ]
+    if len(nearest) != 1:
+        return []
+    name, target = nearest[0]
     return [_candidate(
         name, target,
         list(context.get("chain", [])) + [
@@ -1921,7 +2020,9 @@ def _context_descendant_candidates(
     evidence.append((concept_id, 0, " ".join(
         str(field.get(key) or "") for key in ("name", "short_name", "description")
     )))
-    candidates: list[tuple[int, int, str, Mapping[str, Any], str]] = []
+    candidates: list[
+        tuple[int, int, int, str, Mapping[str, Any], str]
+    ] = []
     for name, target in cda.get("targets", {}).items():
         if (
             not target.get("writable")
@@ -1948,14 +2049,17 @@ def _context_descendant_candidates(
         if not matches:
             continue
         overlap, depth, label = max(matches, key=lambda row: (row[0], -row[1]))
-        candidates.append((overlap, -depth, str(name), target, label))
-    candidates.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        target_depth = str(target.get("path") or "").count("/")
+        candidates.append((
+            overlap, -depth, -target_depth, str(name), target, label,
+        ))
+    candidates.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)
     if not candidates:
         return []
-    best = candidates[0][:2]
-    if sum(row[:2] == best for row in candidates) != 1:
+    best = candidates[0][:3]
+    if sum(row[:3] == best for row in candidates) != 1:
         return []
-    _, negative_depth, name, target, label = candidates[0]
+    _, negative_depth, _, name, target, label = candidates[0]
     return [_candidate(
         name, target,
         list(context.get("chain", [])) + [

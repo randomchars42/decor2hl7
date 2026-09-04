@@ -12,6 +12,13 @@ from typing import Any, Iterable, Mapping
 from .model import DatatypeDefinition, DatatypeKind, ValueRepresentation, ValueRepresentationKind
 
 
+# A type enters this set only after review shows that its declared scalar
+# representation hides concrete, mapping-relevant XSD branches.  The reverse
+# XSD extension index decides which branches exist; it does not decide which
+# roots should be expanded throughout a document.
+POLYMORPHIC_COMPLEX_ROOTS = frozenset({"SXCM_TS"})
+
+
 def _text(*logical: str) -> ValueRepresentation:
     return ValueRepresentation(ValueRepresentationKind.ELEMENT_TEXT, logical or ("text",))
 

@@ -128,6 +128,14 @@ def members_for_target(
             binding["effective_date"] = resolved_versions.pop()
         return members, binding
     oids = [str(oid) for oid in target.get("value_sets", [])]
+    if not oids:
+        oids = sorted({
+            str(item.get("value_set") or "")
+            for item in target.get("schematron_constraints", [])
+            if isinstance(item, Mapping)
+            and item.get("kind") == "value_set"
+            and item.get("value_set")
+        })
     if len(oids) != 1:
         return [], None
     members = [dict(item) for item in value_sets.get(oids[0], [])]
@@ -533,7 +541,44 @@ def _schematron_unique_codes(
                 r"@code\s*=\s*(['\"])([^'\"]+)\1", test
             )
         )
+    for constraint in discriminator_target.get("schematron_constraints", []):
+        if (
+            isinstance(constraint, Mapping)
+            and constraint.get("kind") == "fixed_value"
+            and str(constraint.get("path") or "").endswith("/@code")
+            and constraint.get("value")
+        ):
+            result.add(str(constraint["value"]))
     return result
+
+
+def _schematron_cardinality(
+    target: Mapping[str, Any], kind: str, *, unpredicated: bool = False,
+) -> list[int]:
+    return [
+        int(item["value"])
+        for item in target.get("schematron_constraints", [])
+        if isinstance(item, Mapping)
+        and item.get("kind") == kind
+        and isinstance(item.get("value"), int)
+        and (not unpredicated or "[" not in str(item.get("path") or ""))
+    ]
+
+
+def _repeat_upper_bound(
+    cda: Mapping[str, Any], location: str,
+) -> int | None:
+    bounds: list[int] = []
+    for target in cda.get("targets", {}).values():
+        if location not in {str(item) for item in target.get("locations", [])}:
+            continue
+        maximum = target.get("max")
+        if isinstance(maximum, int):
+            bounds.append(maximum)
+        bounds.extend(_schematron_cardinality(
+            target, "max_occurs", unpredicated=True,
+        ))
+    return min(bounds) if bounds else None
 
 
 def repeat_by_discriminator_rule(
@@ -548,6 +593,10 @@ def repeat_by_discriminator_rule(
     depths = {len(fields.get(path, {}).get("repeat_chain", [])) for path in paths}
     if len(depths) != 1 or len(target.get("repeat_ancestors", [])) != next(iter(depths)) + 1:
         return None
+    repeated_location = str(target.get("repeat_ancestors", [])[-1])
+    upper_bound = _repeat_upper_bound(cda, repeated_location)
+    if upper_bound is not None and len(paths) > upper_bound:
+        return None
     parent_path = str(target.get("path") or "").rsplit("/", 1)[0]
     discriminator: tuple[
         str, dict[str, str], dict[str, dict[str, Any]],
@@ -559,7 +608,14 @@ def repeat_by_discriminator_rule(
             continue
         if str(candidate.get("path") or "").rsplit("/", 1)[0] != parent_path:
             continue
-        if int(candidate.get("min") or 0) < 1 or candidate.get("max") != 1:
+        required = int(candidate.get("min") or 0) >= 1 or bool(
+            _schematron_cardinality(candidate, "required")
+        )
+        maximum_one = candidate.get("max") == 1 or any(
+            value <= 1
+            for value in _schematron_cardinality(candidate, "max_occurs")
+        )
+        if not required or not maximum_one:
             continue
         members, binding = members_for_target(candidate, value_sets)
         assignments = _facet_assignments(paths, fields, members)

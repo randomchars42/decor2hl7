@@ -256,6 +256,13 @@ retain distinct identities but overlay one underlying XSD particle. Abstract
 representations; mapping chooses a branch only when datatype and context leave
 one legal endpoint.
 
+The XSD index also retains reverse extension relationships. A reviewed set of
+polymorphic complex roots, currently only `SXCM_TS`, may expose concrete subtype
+parts below one physical element. Those branches are transparent compiled
+nodes: activating a descendant sets the branch's `xsi:type` on its parent, and
+conflicting types in one occurrence fail. Generic datatype-derived
+`useablePeriod` nodes are not expanded this way.
+
 Compiler-assigned runtime roles belong to concrete compiled nodes, not to
 clinical path logic in the renderer. When a reusable include gives one logical
 target several physical locations, that target remains non-writable. A role
@@ -350,6 +357,8 @@ Evidence includes:
 - unique choice branch or datatype descendant inside a mapped container
 - nearest compatible value at an already-derived `for_each` occurrence boundary
 - contextual (`CTX`) placement
+- generated template Schematron constraints (`SCHEMATRON_CONSTRAINT`) as
+  supporting-only evidence on an existing bridge
 
 Evidence strength and executability are separate. A formal link may remain in the
 report even when datatype/unit/cardinality/payload rules show that it needs a
@@ -461,11 +470,20 @@ context, and whether any of them holds a document location — and reports
 kept and `generation_messages_outside_selected_closure` counts the rest, so
 nothing is dropped; an unparseable context is treated as in-closure.
 
+Mapping analysis follows that generation step. `compile/schematron.py` extracts
+required and maximum occurrences, fixed values, ValueSet references, required
+attributes, and concrete `xsi:type` choices from the template pattern files. It
+matches them to compiled targets by pattern owner and predicate-aware XPath
+suffix. The evidence can corroborate an existing bridge or discriminator rule,
+but cannot create a candidate; if generation did not complete, mapping records
+it as unavailable rather than reading an earlier build's files.
+
 `validate-cda` is the independent, fail-closed output gate. It validates CDA
 against the complete SDTC schema entry point and then executes the generated
 transaction/datatype Schematron. It verifies validator and package provenance
-before use and treats incomplete Schematron generation as failure. Conformance
-results neither create mapping candidates nor alter mapping coverage.
+before use and treats incomplete Schematron generation as failure. Validation
+results do not select mappings; only the supporting constraint evidence above
+may strengthen an already existing bridge.
 
 Completion rules do not activate optional branches. They cannot nullify
 attributes, optional targets, complex elements, or mandatory constraints that

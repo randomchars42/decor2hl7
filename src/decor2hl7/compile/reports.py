@@ -649,6 +649,11 @@ def _review_reason(
             "The evidence reaches a complex datatype container. Choose one of its "
             "compiled value-bearing datatype components."
         )
+    if reason == "structural_container_available":
+        return (
+            "The evidence reaches a CDA structural container. Review the nearest "
+            "compatible writable descendants listed as reopening evidence."
+        )
     if reason == "structural_only":
         return (
             "The evidence identifies a CDA container, but not a writable "

@@ -743,6 +743,42 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(point[0]["target"], "Time.point")
         self.assertEqual(duration[0]["target"], "Time.width")
 
+    def test_context_descendant_prefers_existing_outer_leaf_over_polymorphic_leaf(self) -> None:
+        context = {"chain": ["CTX[timing]"], "node": {
+            "locations": ["0"], "path": "hl7:substanceAdministration",
+            "repeat_ancestors": [],
+        }}
+        common = {
+            "kind": "element", "writable": True, "prohibited": False,
+            "datatype": "PQ", "logical_types": ["quantity"],
+            "repeat_ancestors": [], "value_representation": {
+                "kind": "quantity", "logical_types": ["quantity"],
+                "attributes": ["value", "unit"], "scalar_attribute": "value",
+            },
+        }
+        targets = {
+            "Timing.offset": {
+                **common, "locations": ["0.0"],
+                "path": "hl7:substanceAdministration/hl7:effectiveTime/hl7:offset",
+            },
+            "Timing.comp_as_EIVL_TS.offset": {
+                **common, "datatype_derived": True, "locations": ["0.1.0"],
+                "path": (
+                    "hl7:substanceAdministration/hl7:effectiveTime/"
+                    "hl7:comp_as_EIVL_TS/hl7:offset"
+                ),
+            },
+        }
+        candidates = mapping_compiler._context_descendant_candidates(
+            {
+                "name": "Offset", "short_name": "offset", "concept": "offset",
+                "type": "quantity", "repeat_chain": [],
+            },
+            context, {"targets": targets}, {"offset": {"Offset"}}, {},
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["target"], "Timing.offset")
+
     def test_cda_guide_merges_xml_context_and_explains_candidates(self) -> None:
         def element(name: str, children: list[dict] | None = None, **values: object) -> dict:
             return {
@@ -1599,7 +1635,18 @@ class CoreTests(unittest.TestCase):
                 "template_id": "section-template",
                 "template_effective_date": "2026",
                 "is_closed": False,
+                "datatype": "IVL_PQ",
                 "locations": ["0.1"],
+            },
+        }
+        structural_context = {
+            "target": "Medication.substanceAdministration",
+            "node": {
+                "template_id": "medication-template",
+                "template_effective_date": "2026",
+                "is_closed": False,
+                "datatype": "POCD_MT000040.SubstanceAdministration",
+                "locations": ["0.2"],
             },
         }
         candidate = {
@@ -1697,6 +1744,27 @@ class CoreTests(unittest.TestCase):
                 }},
             ),
             (
+                "physical:structural_container",
+                {
+                    "selected": None, "context": structural_context,
+                    "unresolved_reason": "structural_container_available",
+                },
+                {"type": "datetime", "repeat_chain": []}, [], {"targets": {
+                    "Medication.routeCode": {
+                        "writable": True, "locations": ["0.2.0"],
+                        "logical_types": ["code"], "repeat_ancestors": [],
+                    },
+                    "Medication.deepTime": {
+                        "writable": True, "locations": ["0.2.0.0.0"],
+                        "logical_types": ["datetime"], "repeat_ancestors": [],
+                    },
+                    "Medication.deepText": {
+                        "writable": True, "locations": ["0.2.0.0"],
+                        "logical_types": ["text"], "repeat_ancestors": [],
+                    },
+                }},
+            ),
+            (
                 "semantic:lossy_domain",
                 {
                     "selected": None,
@@ -1731,6 +1799,16 @@ class CoreTests(unittest.TestCase):
                         gap["reopens_with"],
                         ["Section.entry", "Section.code"],
                     )
+                if expected == "physical:structural_container":
+                    self.assertEqual(
+                        gap["reopens_with"],
+                        [
+                            "Medication.substanceAdministration",
+                            "Medication.deepTime",
+                            "Medication.routeCode",
+                            "Medication.deepText",
+                        ],
+                    )
 
         self.assertIsNone(classify(
             "case.complete",
@@ -1738,6 +1816,33 @@ class CoreTests(unittest.TestCase):
             {"formal_terminology": {"status": "bound", "complete": True}},
             [],
         ))
+
+    def test_schematron_constraints_only_strengthen_an_existing_candidate(self) -> None:
+        target = {
+            "writable": True,
+            "datatype": "TS",
+            "path": "hl7:observation/hl7:effectiveTime",
+            "logical_types": ["datetime", "date"],
+            "repeat_ancestors": [],
+            "schematron_constraints": [{
+                "kind": "required", "path": "hl7:effectiveTime", "value": 1,
+            }],
+        }
+        field = {"type": "datetime", "repeat_chain": []}
+        strengthen = mapping_compiler._schematron_constraint_candidates
+        self.assertEqual(strengthen(field, [], {"targets": {}}, None), [])
+        original = mapping_compiler._candidate(
+            "Observation.effectiveTime", target, ["NAME"], "WEAK", 60,
+            kind="NAME", actionable=False,
+        )
+        rows = strengthen(
+            field, [original], {"targets": {"Observation.effectiveTime": target}},
+            None,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["actionable"])
+        self.assertEqual(rows[0]["kind"], "SCHEMATRON_CONSTRAINT")
+        self.assertIn("SCHEMATRON_CONSTRAINT(required)", rows[0]["chain"])
 
     def test_semantic_negation_transform_beats_unrelated_named_code_slot(self) -> None:
         model = {"groups": {}, "fields": {"measures.isolation": {

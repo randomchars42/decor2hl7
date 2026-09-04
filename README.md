@@ -374,9 +374,10 @@ headline build status.
   the explicit status of native compiled-project validation. Source findings
   do not make `build` fail and do not change mapping coverage.
 - `cda.json`: reachable CDA template constraints plus XSD-derived CDA/RIM and
-  datatype structure, the automatic model inventory, explicit writable value
-  representations, formal ART-DECOR assertions, and readable target names such
-  as `PatientIdentifier.id` or `ersteinschatzung.effectiveTime`.
+  datatype structure, reviewed polymorphic datatype branches, the automatic
+  model inventory, explicit writable value representations, formal ART-DECOR
+  assertions, generated-Schematron supporting constraints, and readable target
+  names such as `PatientIdentifier.id` or `ersteinschatzung.effectiveTime`.
 - `cda-assertions.sch`: ISO Schematron containing the original effective
   ART-DECOR `<assert>` expressions and `<let>` variables.
 - `mapping-audit.json`: structured candidates, evidence, confidence, conflicts
@@ -408,6 +409,11 @@ ART-DECOR `<choice>` branches are compiled as transparent alternatives of their
 underlying CDA/RIM particle. Abstract `ANY` values expose concrete typed scalar
 targets carrying their compiled `xsi:type`; the renderer remains unaware of the
 clinical class or datatype choice.
+
+The reviewed polymorphic complex root `SXCM_TS` similarly exposes concrete XSD
+subtype parts beneath an explicitly typed branch while retaining one physical
+element. Mapping a descendant selects its compiled `xsi:type`; generic
+datatype-derived `useablePeriod` plumbing is excluded.
 
 The compiler can also retain exact, terminology-validated construction
 fallbacks from neutral template examples and compiled companion-content roles.

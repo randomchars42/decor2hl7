@@ -436,6 +436,16 @@ def _render_transparent(
     )
     if not required and not active:
         return []
+    xsi_type = node.get("xsi_type")
+    if xsi_type and parent is not None:
+        key = f"{{{XSI}}}type"
+        existing = parent.get(key)
+        if existing and existing != str(xsi_type):
+            raise ValueError(
+                f"conflicting compiled datatype choices {existing!r} and "
+                f"{xsi_type!r} on {parent.tag}"
+            )
+        parent.set(key, str(xsi_type))
     maximum = node.get("max")
     repeats_here = maximum is None or (isinstance(maximum, int) and maximum > 1)
     occurrences = [occurrence]
@@ -472,7 +482,7 @@ def _render_node(
     ] | None = None,
 ) -> list[ET.Element]:
     physical_values = physical_values or {}
-    if node.get("kind") in {"include", "template"}:
+    if node.get("kind") in {"include", "template", "datatype_choice"}:
         return _render_transparent(
             node, parent, assignments, target_defaults, active_locations, cda, location,
             null_flavor, problems, assertion_contexts, occurrence,

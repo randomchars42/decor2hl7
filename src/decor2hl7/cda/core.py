@@ -54,6 +54,8 @@ class DefinitionIndex(dict[str, ModelDefinition]):
         super().__init__()
         self.global_elements: dict[str, str] = {}
         self.element_types: dict[str, set[str]] = {}
+        self.subtypes: dict[str, set[str]] = {}
+        self.abstract_types: set[str] = set()
 
 
 def _local_type(value: str | None) -> str:
@@ -134,6 +136,8 @@ def index_definitions(paths: Iterable[Path]) -> DefinitionIndex:
             name = node.get("name")
             if not name:
                 continue
+            if node.get("abstract") == "true":
+                result.abstract_types.add(name)
             derivation = None
             for expression in (
                 f"./{XSD}complexContent/{XSD}extension",
@@ -180,6 +184,14 @@ def index_definitions(paths: Iterable[Path]) -> DefinitionIndex:
                 ),
                 source=path.name,
             )
+            if (
+                derivation is not None
+                and derivation.tag == f"{XSD}extension"
+                and derivation.get("base")
+            ):
+                result.subtypes.setdefault(
+                    _local_type(derivation.get("base")), set()
+                ).add(name)
     # The CDA schema contains a few restricted datatype flavours (notably
     # InfrastructureRoot.typeId) beside the RIM classes.  Classify by resolved
     # inheritance, not merely by which XSD file happened to declare the type.

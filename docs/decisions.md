@@ -37,6 +37,7 @@ is not necessarily an accepted clinical policy.
 | DEC-020 | Compound-datatype companion requirements | accepted | verified |
 | DEC-021 | Open templates and reviewed CDA extension attachments | accepted | verified |
 | DEC-022 | Reviewed malformed artifact-identity aliases | accepted | verified |
+| DEC-023 | Generated Schematron as supporting mapping evidence | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -374,6 +375,16 @@ conformance, fixed values and datatype refinements. Optional legal datatype
 parts are instantiated only when assigned, required, fixed or needed as an
 ancestor.
 
+The XSD index also records reverse extension relationships. Polymorphic complex
+expansion is deliberately enabled only for reviewed roots, currently
+`SXCM_TS`, rather than inferred for every type with extensions. A located
+`SXCM_TS` reached through an explicit `xsi:type` branch exposes the four
+concrete XSD alternatives (`IVL_TS`, `PIVL_TS`, `EIVL_TS`, `SXPR_TS`) through
+transparent compiled choice metadata. Datatype-derived `useablePeriod`
+plumbing is excluded. Assigning a descendant sets the compiled `xsi:type` on
+the existing physical element, while conflicting choices in one occurrence are
+rejected.
+
 CDA-specific compilation, datatype modelling and rendering live in
 `decor2hl7.cda`. Generated `cda.json`, mappings and documentation are rebuilt;
 no compatibility adapter for the former generated representation is retained.
@@ -419,6 +430,13 @@ definitions by name, follows extension inheritance, resolves structural element
 names procedurally, overlays ART-DECOR constraints, and then runs datatype/value
 representation expansion. Generated nodes retain `cda-rim`, `datatype`, or
 combined template provenance. Mapping and rendering contain no per-class rules.
+
+Naming one datatype child in an open ART-DECOR constraint refines that child;
+it does not prohibit omitted legal siblings. The datatype pass therefore still
+materializes inherited XSD parts unless closedness or an explicit prohibition
+removes them. This is observable in the active CEDIS `IVL_TS`: its declared
+required `width` coexists with inherited legal `low`, `high`, and `center`
+targets.
 
 Template `include` and `contains` nodes are provenance/occurrence wrappers, not
 XML elements. Structural matching descends through those wrappers before
@@ -808,6 +826,37 @@ Evidence: `src/decor2hl7/retrieval/sources.py`,
 `src/decor2hl7/retrieval/fetch.py`,
 `src/decor2hl7/retrieval/artifacts.py`,
 `tests/test_external_sources.py`.
+
+## DEC-023 — Generated Schematron as supporting mapping evidence
+
+**Decision:** accepted
+**Implementation:** verified
+
+`build` may parse the exact template-pattern Schematron it has just generated
+for the selected closure and attach a bounded structural subset to compiled CDA
+targets: required and maximum occurrences, fixed values, ValueSet references,
+required attributes, and concrete `xsi:type` choices. Matching uses the pattern
+owner template plus predicate-aware XPath steps; `@see` is ignored and datatype
+and vocabulary support files are excluded.
+
+This evidence is supporting-only. It never creates a mapping candidate or a
+clinical association. It may strengthen an existing weak or medium candidate
+only after the ordinary datatype, payload, location, and occurrence checks pass.
+Discriminator construction may also use corroborating ValueSet, fixed-code, and
+unpredicated upper-bound evidence. Predicate-specific cardinalities are not
+misread as aggregate repeat bounds.
+
+The conformance generator therefore runs before mapping analysis in one build.
+If its template-pattern stage does not complete, mapping proceeds without this
+optional evidence and records that state in `cda.json`; no artifact from an
+earlier build is consumed. Validator success/failure remains an independent
+conformance result and does not by itself select or reject a mapping.
+
+Evidence: `src/decor2hl7/compile/schematron.py`,
+`src/decor2hl7/compile/mapping.py`,
+`src/decor2hl7/compile/structural.py`, `src/decor2hl7/cli.py`,
+`tests/test_conformance.py`, `tests/test_core.py`,
+`docs/analyses/2026-09-03-phase-6-structural-evidence.md`.
 
 ## Maintenance rule
 
