@@ -20,7 +20,7 @@ import urllib.error
 import xml.etree.ElementTree as ET
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, cast
 
 from .api import (
     artifact_representations,
@@ -94,7 +94,7 @@ def _digest(payload: bytes) -> str:
 
 
 def _identity(
-    want: Mapping[str, str],
+    want: Mapping[str, object],
     *,
     project: str = "",
     effective_date: str = "",
@@ -102,33 +102,35 @@ def _identity(
 ) -> dict[str, str]:
     """Return the complete retrieval identity recorded with cached artifacts."""
     return {
-        "type": want.get("kind", ""),
-        "id": want.get("id", ""),
-        "effective_date": effective_date or want.get("effective_date", "") or "dynamic",
-        "project": project or want.get("project", ""),
-        "api_base": api_base or want.get("api_base", "") or DEFAULT_API_BASE,
-        **({"context_id": want["dataset"]} if want.get("dataset") else {}),
+        "type": str(want.get("kind") or ""),
+        "id": str(want.get("id") or ""),
+        "effective_date": effective_date
+        or str(want.get("effective_date") or "dynamic"),
+        "project": project or str(want.get("project") or ""),
+        "api_base": api_base
+        or str(want.get("api_base") or DEFAULT_API_BASE),
+        **({"context_id": str(want["dataset"])} if want.get("dataset") else {}),
         **(
-            {"context_effective_date": want["dataset_effective_date"]}
+            {"context_effective_date": str(want["dataset_effective_date"])}
             if want.get("dataset_effective_date") else {}
         ),
     }
 
 
-def _key(want: Mapping[str, str]) -> str:
-    effective = want.get("effective_date") or ""
+def _key(want: Mapping[str, object]) -> str:
+    effective = str(want.get("effective_date") or "")
     suffix = f"@{effective}" if effective else ""
     key = f"{want['kind']}:{want['id']}{suffix}"
-    dataset = want.get("dataset") or ""
+    dataset = str(want.get("dataset") or "")
     if dataset:
-        dataset_date = want.get("dataset_effective_date") or ""
+        dataset_date = str(want.get("dataset_effective_date") or "")
         key += f"|context={dataset}{('@' + dataset_date) if dataset_date else ''}"
     return key
 
 
-def _filename(want: Mapping[str, str], form: str = "analysis") -> str:
-    stamp = _safe(want.get("effective_date") or "")
-    name = _safe(want["id"])
+def _filename(want: Mapping[str, object], form: str = "analysis") -> str:
+    stamp = _safe(str(want.get("effective_date") or ""))
+    name = _safe(str(want["id"]))
     if stamp:
         name += f"_{stamp}"
     directory = {
@@ -137,7 +139,7 @@ def _filename(want: Mapping[str, str], form: str = "analysis") -> str:
         "valueset": "valuesets",
         "codesystem": "codesystems",
         "concept": "concepts",
-    }[want["kind"]]
+    }[str(want["kind"])]
     suffix = "" if form == "analysis" else f".{form}"
     return f"{directory}/{name}{suffix}.xml"
 
@@ -237,15 +239,19 @@ def _inventory(root: ET.Element | None) -> set[tuple[str, str, str]]:
     return result
 
 
-def _satisfied(want: Mapping[str, str], have: set[tuple[str, str, str]]) -> bool:
-    kind, ident, effective = want["kind"], want["id"], want.get("effective_date") or ""
+def _satisfied(
+    want: Mapping[str, object], have: set[tuple[str, str, str]],
+) -> bool:
+    kind = str(want["kind"])
+    ident = str(want["id"])
+    effective = str(want.get("effective_date") or "")
     if effective:
         return (kind, ident, effective) in have
     return any(k == kind and i == ident for k, i, _ in have)
 
 def _matching_embedded(
     roots: Iterable[ET.Element | None],
-    want: Mapping[str, str],
+    want: Mapping[str, object],
     *,
     not_after: str = "",
 ) -> list[ET.Element]:
@@ -264,7 +270,7 @@ def _matching_embedded(
         "valueset": "valueSet",
         "codesystem": "codeSystem",
     }
-    wanted_tag = tag_for.get(want.get("kind", ""))
+    wanted_tag = tag_for.get(str(want.get("kind") or ""))
     if not wanted_tag:
         return []
     rows: list[ET.Element] = []
@@ -330,7 +336,7 @@ ARTIFACT_TAG_FOR_KIND = {
 
 
 def _artifact_identity_nodes(
-    root: ET.Element, want: Mapping[str, str]
+    root: ET.Element, want: Mapping[str, object]
 ) -> list[ET.Element]:
     """Return the nodes in a payload that declare the requested identity.
 
@@ -342,8 +348,8 @@ def _artifact_identity_nodes(
     even though it enumerates no concepts, so a cached reference declaration is
     a genuine cache hit for its own identity.
     """
-    wanted_tag = ARTIFACT_TAG_FOR_KIND.get(want.get("kind", ""))
-    wanted_id = want.get("id") or ""
+    wanted_tag = ARTIFACT_TAG_FOR_KIND.get(str(want.get("kind") or ""))
+    wanted_id = str(want.get("id") or "")
     if not wanted_tag or not wanted_id:
         return []
     return [
@@ -353,7 +359,7 @@ def _artifact_identity_nodes(
     ]
 
 
-def _resolved_effective_date(payload: bytes, want: Mapping[str, str]) -> str:
+def _resolved_effective_date(payload: bytes, want: Mapping[str, object]) -> str:
     try:
         root, _ = parse_text(payload.decode("utf-8", "replace"))
     except (ET.ParseError, ValueError):
@@ -464,7 +470,7 @@ def _seed_manifest_artifact_owners(
 
 
 def _requests(
-    want: Mapping[str, str],
+    want: Mapping[str, object],
     project: str,
     *,
     main_project: str,
@@ -472,11 +478,20 @@ def _requests(
     language: str,
     default_api_base: str,
 ) -> list[dict[str, str]]:
-    resolved = dict(want)
+    resolved = {
+        str(key): str(value)
+        for key, value in want.items()
+        if value not in (None, "")
+    }
     resolved["project"] = project
-    base_url = want.get("api_base") or default_api_base
+    base_url = str(want.get("api_base") or default_api_base)
     return [
-        {"project": project, "api_base": base_url, **item}
+        {
+            "project": project,
+            "api_base": base_url,
+            "form": item["form"],
+            "url": item["url"],
+        }
         for item in artifact_representations(
             resolved,
             project=project,
@@ -535,11 +550,14 @@ def _external_manifest_fields(want: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def _source_hint_fields(want: Mapping[str, str]) -> dict[str, str]:
+def _source_hint_fields(want: Mapping[str, object]) -> dict[str, str]:
     return {
-        **({"source_hint": want["source_hint"]} if want.get("source_hint") else {}),
         **(
-            {"source_hint_origin": want["source_hint_origin"]}
+            {"source_hint": str(want["source_hint"])}
+            if want.get("source_hint") else {}
+        ),
+        **(
+            {"source_hint_origin": str(want["source_hint_origin"])}
             if want.get("source_hint_origin") else {}
         ),
     }
@@ -977,7 +995,7 @@ def _fetch_openapi(
 def _fetch_want(
     release_dir: Path,
     manifest: dict[str, Any],
-    want: Want,
+    want: Mapping[str, object],
     *,
     owners: Mapping[str, str],
     repositories: Iterable[str],
@@ -996,7 +1014,7 @@ def _fetch_want(
     artifact_owners: dict[str, str] | None = None,
     save_artifact_owners: Callable[[], None] | None = None,
 ) -> Path | None:
-    requested_want = dict(want)
+    requested_want = cast(Want, dict(want))
     resolved_want = resolve_alias(want, source_hints or {})
     requested_key = _key(requested_want)
     key = _key(resolved_want)
@@ -1176,7 +1194,7 @@ def _fetch_want(
         _emit(progress, f"fetch: {display}: known missing")
         return finish(None)
 
-    request_want: Want = dict(resolved_want)
+    request_want = cast(Want, dict(resolved_want))
     if not request_want.get("effective_date") and old.get("resolved_effective_date"):
         request_want["effective_date"] = str(old["resolved_effective_date"])
 
@@ -1479,7 +1497,7 @@ def _fetch_want(
                 artifact_owners, request_want, project, replace=True
             )
             if resolved_date:
-                exact_want = dict(request_want)
+                exact_want = cast(Want, dict(request_want))
                 exact_want["effective_date"] = resolved_date
                 changed = _remember_artifact_owner(
                     artifact_owners, exact_want, project, replace=True
@@ -1721,6 +1739,14 @@ def fetch_spec(
 
     def checkpoint(*, complete: bool, interrupted: bool = False) -> dict[str, Any]:
         current_keys = roles["build"] | roles["evidence"]
+        raw_resources = manifest.get("resources", {})
+        manifest_resources = (
+            raw_resources if isinstance(raw_resources, Mapping) else {}
+        )
+        manifest_rows = [
+            row for row in manifest_resources.values()
+            if isinstance(row, Mapping)
+        ]
 
         def resolved_entry(key: str) -> Mapping[str, Any]:
             resources = manifest.get("resources", {})
@@ -1762,7 +1788,8 @@ def fetch_spec(
         )
         current_aliases = sorted(
             key for key in current_keys
-            if manifest.get("resources", {}).get(key, {}).get("status") == "alias"
+            if isinstance(manifest_resources.get(key), Mapping)
+            and manifest_resources[key].get("status") == "alias"
         )
         build_pending = pending_keys("build")
         evidence_pending = pending_keys("evidence")
@@ -1873,14 +1900,26 @@ def fetch_spec(
             "truncated": budget_exhausted,
         }
         manifest["summary"] = {
-            "resources": len(manifest.get("resources", {})),
-            "ok": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "ok"),
-            "missing": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "missing"),
-            "unavailable": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "unavailable"),
-            "waived": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "waived"),
-            "partial": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "partial"),
-            "alias": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "alias"),
-            "error": sum(1 for row in manifest.get("resources", {}).values() if row.get("status") == "error"),
+            "resources": len(manifest_resources),
+            "ok": sum(row.get("status") == "ok" for row in manifest_rows),
+            "missing": sum(
+                row.get("status") == "missing" for row in manifest_rows
+            ),
+            "unavailable": sum(
+                row.get("status") == "unavailable" for row in manifest_rows
+            ),
+            "waived": sum(
+                row.get("status") == "waived" for row in manifest_rows
+            ),
+            "partial": sum(
+                row.get("status") == "partial" for row in manifest_rows
+            ),
+            "alias": sum(
+                row.get("status") == "alias" for row in manifest_rows
+            ),
+            "error": sum(
+                row.get("status") == "error" for row in manifest_rows
+            ),
         }
         write_json(manifest_path, manifest)
         write_json(closure_path, closure)
@@ -2065,7 +2104,7 @@ def fetch_spec(
             _emit(progress, f"fetch: resolving build dependency closure ({len(queue)} initial reference(s))")
             while queue and not budget_exhausted:
                 rows = [
-                    Want(**apply_source_hint(item, source_hints or {}))
+                    cast(Want, apply_source_hint(item, source_hints or {}))
                     for item in queue
                 ]
                 queue.clear()
@@ -2134,7 +2173,7 @@ def fetch_spec(
             nonlocal resources_considered, budget_exhausted, phase
             phase = "evidence"
             rows = [
-                Want(**apply_source_hint(item, source_hints or {}))
+                cast(Want, apply_source_hint(item, source_hints or {}))
                 for item in queue
             ]
             queue.clear()

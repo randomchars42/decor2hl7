@@ -8,6 +8,7 @@ this client; global socket resolution is never monkey-patched.
 from __future__ import annotations
 
 import http.client
+import ssl
 import os
 import socket
 import time
@@ -84,6 +85,8 @@ class _IPv4HTTPHandler(urllib.request.HTTPHandler):
 
 
 class _IPv4HTTPSHandler(urllib.request.HTTPSHandler):
+    _context: ssl.SSLContext | None
+
     def https_open(self, req: urllib.request.Request) -> Any:
         return self.do_open(_IPv4HTTPSConnection, req, context=self._context)
 

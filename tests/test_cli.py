@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from decor2hl7.cli import (
@@ -59,8 +60,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["--root", str(root), "init"]), 0)
             set_release(root, RELEASES[0])
             set_transaction(root, TRANSACTIONS[0])
-            model = {"meta": {}, "fields": {}, "groups": {}}
-            diagnostics = {
+            model: dict[str, Any] = {"meta": {}, "fields": {}, "groups": {}}
+            diagnostics: dict[str, Any] = {
                 "status": "complete", "build_degraded": [],
                 "summary": {
                     "build_degraded": 0, "crawl_degraded": 4,
@@ -433,7 +434,7 @@ class CliTests(unittest.TestCase):
             set_transaction(root, TRANSACTIONS[0])
             model_dir = transaction_model_dir(root)
             model_dir.mkdir(parents=True)
-            model = {
+            model: dict[str, Any] = {
                 "meta": {"transaction_id": TRANSACTIONS[0]["id"]},
                 "groups": {},
                 "fields": {"case.note": {"name": "Note", "type": "text", "repeat_chain": []}},
@@ -490,7 +491,7 @@ class CliTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "fixture"
-            model = {
+            model: dict[str, Any] = {
                 "groups": {"diagnoses": {"repeating": True}},
                 "fields": {
                     "diagnoses.certainty": {

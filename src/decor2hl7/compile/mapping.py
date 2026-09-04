@@ -468,7 +468,7 @@ def _projected_association_targets(
 def _lineage(
     start: str, graph: Mapping[str, set[tuple[str, str]]], depth: int = 8
 ) -> list[tuple[str, list[tuple[str, str]]]]:
-    result = [(start, [])]
+    result: list[tuple[str, list[tuple[str, str]]]] = [(start, [])]
     queue: deque[tuple[str, list[tuple[str, str]]]] = deque([(start, [])])
     best_depth = {start: 0}
     while queue:
@@ -1519,8 +1519,13 @@ def _semantic_transform_candidates(
             if len(numeric) != 1:
                 continue
             name, target = numeric[0]
-            rule = {"target": name, "transform": {"type": "ordinal", "map": ordinal_map}}
-            compatible, reasons = transformed_compatibility(field, target, rule["transform"])
+            ordinal_transform: dict[str, Any] = {
+                "type": "ordinal", "map": ordinal_map,
+            }
+            rule = {"target": name, "transform": ordinal_transform}
+            compatible, reasons = transformed_compatibility(
+                field, target, ordinal_transform
+            )
             if compatible:
                 result.append(_candidate(
                     name, target,
@@ -1621,7 +1626,7 @@ def _unbridged_writable_candidates(
     name, target = matches[0]
     return [_candidate(
         name, target,
-        list(context.get("chain", [])) + [f"ARTDECOR_ROLE({source_name})"],
+        _context_chain(context) + [f"ARTDECOR_ROLE({source_name})"],
         "MEDIUM", 74,
         kind="ARTDECOR_ROLE", actionable=True,
         warnings=[
@@ -1696,7 +1701,7 @@ def _context_description_candidates(
     name, (target, anchor_name, projected) = next(iter(selected.items()))
     return [_candidate(
         name, target,
-        list(context.get("chain", [])) + [
+        _context_chain(context) + [
             f"ARTDECOR_DESC({anchor_name})",
             *( ["CDA_DESCENDANT"] if projected else [] ),
         ],
@@ -1744,7 +1749,7 @@ def _section_narrative_candidates(
     name, target = matches[0]
     return [_candidate(
         name, target,
-        list(context.get("chain", [])) + ["CDA_ROLE(section_narrative)"],
+        _context_chain(context) + ["CDA_ROLE(section_narrative)"],
         "MEDIUM", 82, kind="SECTION_NARRATIVE", actionable=True,
         warnings=["selected from the compiled CDA section narrative role"],
     )]
@@ -1773,6 +1778,10 @@ def _context_for_node(
                 }
         parent = groups.get(str(parent), {}).get("parent")
     return None
+
+
+def _context_chain(context: Mapping[str, Any] | None) -> list[Any]:
+    return list(context.get("chain", [])) if context is not None else []
 
 
 def _semantic_words(value: str) -> set[str]:
@@ -1890,7 +1899,7 @@ def _choice_branch_candidates(
         name, target = direct[0]
         return [_candidate(
             name, target,
-            list(context.get("chain", [])) + ["ARTDECOR_CHOICE(atomic)"],
+            _context_chain(context) + ["ARTDECOR_CHOICE(atomic)"],
             "STRONG", 95, kind="ARTDECOR_CHOICE", actionable=True,
         )]
 
@@ -1925,7 +1934,7 @@ def _choice_branch_candidates(
     name, target = nearest[0]
     return [_candidate(
         name, target,
-        list(context.get("chain", [])) + [
+        _context_chain(context) + [
             "ARTDECOR_CHOICE(complex)", "HL7_DATATYPE_DESCENDANT",
         ],
         "STRONG", 94, kind="ARTDECOR_CHOICE", actionable=True,
@@ -1993,7 +2002,7 @@ def _repeat_scope_candidates(
     name, target = winners[0]
     return [_candidate(
         name, target,
-        list(context.get("chain", [])) + [
+        _context_chain(context) + [
             f"FOR_EACH({repeat_chain[-1]})", "NEAREST_WRITABLE_DESCENDANT",
         ],
         "STRONG", 94, kind="REPEAT_SCOPE", actionable=True,
@@ -2062,7 +2071,7 @@ def _context_descendant_candidates(
     _, negative_depth, _, name, target, label = candidates[0]
     return [_candidate(
         name, target,
-        list(context.get("chain", [])) + [
+        _context_chain(context) + [
             f"RELATED_LABEL({label})", "CDA_DESCENDANT",
         ],
         "STRONG" if negative_depth == 0 else "MEDIUM",
@@ -2169,7 +2178,7 @@ def _open_coded_domain_candidates(
     effective = str(binding.get("effective_date") or "latest")
     return [_candidate(
         name, target,
-        list(context.get("chain", [])) + [
+        _context_chain(context) + [
             f"OPEN_CODED_DOMAIN({domain_id})",
             f"VS({binding['id']}@{effective}:OTH)",
             f"CODED_ORIGINAL_TEXT({original_text_name})",
@@ -2241,16 +2250,23 @@ def _certainty_mapping(
     path: str,
     field: Mapping[str, Any],
     cda: Mapping[str, Any],
-    value_sets: Mapping[str, list[dict[str, str]]],
+    value_sets: Mapping[
+        str | tuple[str, str], list[dict[str, Any]]
+    ],
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Recognize a V/A/Z/G diagnosis-certainty field and its CDA qualifier."""
     aliases: dict[str, str] = {}
     for label, info in accepted_values(field).items():
         detail = info if isinstance(info, Mapping) else {}
-        candidates = [str(label)] + [str(value) for value in detail.get("synonyms", [])]
-        code = next((value.upper() for value in candidates if value.upper() in {"V", "A", "Z", "G"}), None)
+        aliases_for_label = [str(label)] + [
+            str(value) for value in detail.get("synonyms", [])
+        ]
+        code = next((
+            value.upper() for value in aliases_for_label
+            if value.upper() in {"V", "A", "Z", "G"}
+        ), None)
         if code:
-            for value in candidates:
+            for value in aliases_for_label:
                 aliases[value] = code
     if set(aliases.values()) != {"V", "A", "Z", "G"}:
         return None
@@ -2271,7 +2287,7 @@ def _certainty_mapping(
                 candidates.append((str(name), target, str(oid), by_code))
     if len(candidates) != 1:
         return None
-    target_name, target, value_set_oid, members = candidates[0]
+    target_name, target, value_set_oid, selected_members = candidates[0]
     repeat_ancestors = target.get("repeat_ancestors", [])
     template_words = _words(
         " ".join(str(field.get(key) or "") for key in ("name", "description", "implementation"))
@@ -2294,7 +2310,9 @@ def _certainty_mapping(
         rows.sort(reverse=True)
         return rows[0][1] if rows and (len(rows) == 1 or rows[0][0] > rows[1][0]) else None
 
-    enum_map = {alias: members[code] for alias, code in aliases.items()}
+    enum_map = {
+        alias: selected_members[code] for alias, code in aliases.items()
+    }
     rules: list[dict[str, Any]] = [{
         "target": target_name,
         "transform": {"type": "enum", "select": "raw", "map": enum_map},
@@ -2743,7 +2761,7 @@ def _cda_mapping_analysis(
         else:
             detail.pop("gap", None)
 
-    proposal = {
+    proposal: dict[str, Any] = {
         "version": 6,
         "model": {
             "dataset_id": model.get("meta", {}).get("dataset_id"),
@@ -3050,7 +3068,7 @@ def _cda_mapping_analysis(
     group_coverage = Counter(coverage(detail) for detail in group_results.values())
     required_paths = [path for path, field in model_fields.items() if field.get("required")]
     required_coverage = Counter(coverage(details[path]) for path in required_paths)
-    qualifications = Counter()
+    qualifications: Counter[str] = Counter()
     location_ambiguities = 0
     for detail in all_details.values():
         primary = detail.get("primary")
@@ -3236,7 +3254,7 @@ def _cda_mapping_analysis(
             ),
         }
 
-    audit = {
+    audit: dict[str, Any] = {
         "version": 1,
         "model": dict(proposal["model"]),
         "target": dict(proposal["target"]),
@@ -3634,6 +3652,7 @@ def codes_mapping_proposal(model: Mapping[str, Any], csv_mapping: Mapping[str, A
         field = model.get("fields", {}).get(path, {})
         values = accepted_values(field)
         locator = csv_mapping.get("fields", {}).get(path)
+        locator_text: str | None
         if isinstance(locator, Mapping) and locator.get("source") and locator.get("column"):
             locator_text = f"{locator['source']}:{locator['column']}"
         else:
@@ -3674,8 +3693,12 @@ def codes_mapping_proposal(model: Mapping[str, Any], csv_mapping: Mapping[str, A
                 "| Input value | Dataset value |",
                 "|---|---|",
             ]
-            for raw, canonical in shown:
-                destination = f"`{canonical}`" if canonical else "**UNMAPPED → nullFlavor OTH**"
+            for raw, destination_value in shown:
+                destination = (
+                    f"`{destination_value}`"
+                    if destination_value
+                    else "**UNMAPPED → nullFlavor OTH**"
+                )
                 lines.append(f"| `{raw}` | {destination} |")
         else:
             lines.append("No aliases require configuration.")

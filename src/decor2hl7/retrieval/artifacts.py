@@ -90,7 +90,24 @@ def _resolved_identity(entry: Mapping[str, Any]) -> ArtifactIdentity:
     identity = dict(raw) if isinstance(raw, Mapping) else {}
     if entry.get("resolved_effective_date"):
         identity["effective_date"] = entry["resolved_effective_date"]
-    return {str(key): str(value) for key, value in identity.items() if value is not None}
+    result: ArtifactIdentity = {}
+    if identity.get("type") is not None:
+        result["type"] = str(identity["type"])
+    if identity.get("id") is not None:
+        result["id"] = str(identity["id"])
+    if identity.get("effective_date") is not None:
+        result["effective_date"] = str(identity["effective_date"])
+    if identity.get("project") is not None:
+        result["project"] = str(identity["project"])
+    if identity.get("api_base") is not None:
+        result["api_base"] = str(identity["api_base"])
+    if identity.get("context_id") is not None:
+        result["context_id"] = str(identity["context_id"])
+    if identity.get("context_effective_date") is not None:
+        result["context_effective_date"] = str(
+            identity["context_effective_date"]
+        )
+    return result
 
 
 def _form(

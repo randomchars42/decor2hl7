@@ -466,8 +466,8 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
                     compiled_by_source[source_key].append(node)
             structural(list(node.get("children", [])))
     structural(list(cda.get("document", [])))
-    for key, source_lets in source_assertions.items():
-        source_key = key[:4]
+    for assertion_key, source_lets in source_assertions.items():
+        source_key = assertion_key[:4]
         compiled_nodes = compiled_by_source.get(source_key, [])
         if not compiled_nodes:
             # The source element itself is not part of the effective specialized
@@ -477,21 +477,24 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
         match = next((
             node for node in compiled_nodes
             if any(
-                str(item.get("test") or "") == key[4]
-                and str(item.get("role") or "error") == key[5]
+                str(item.get("test") or "") == assertion_key[4]
+                and str(item.get("role") or "error") == assertion_key[5]
                 for item in node.get("asserts", [])
             )
         ), None)
         if match is None:
             errors.append(
-                f"source verification: lost ART-DECOR assert {key[4]!r} from {key[0]}@{key[1]}:{key[2]}"
+                "source verification: lost ART-DECOR assert "
+                f"{assertion_key[4]!r} from {assertion_key[0]}@"
+                f"{assertion_key[1]}:{assertion_key[2]}"
             )
             continue
         compiled_lets = match.get("lets", {}) if isinstance(match.get("lets"), Mapping) else {}
         for let_name, let_value in source_lets.items():
             if str(compiled_lets.get(let_name) or "") != let_value:
                 errors.append(
-                    f"source verification: ART-DECOR assert {key[4]!r} lost let ${let_name}={let_value!r}"
+                    "source verification: ART-DECOR assert "
+                    f"{assertion_key[4]!r} lost let ${let_name}={let_value!r}"
                 )
     return errors
 

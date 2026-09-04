@@ -454,6 +454,13 @@ removes them. This is observable in the active CEDIS `IVL_TS`: its declared
 required `width` coexists with inherited legal `low`, `high`, and `center`
 targets.
 
+An explicit `NP` constraint governs the complete physical subtree. CDA/RIM and
+datatype expansion may retain synthesized descendants as provenance, but the
+compiler normalizes their effective cardinality to zero and marks every target
+below the prohibited particle non-writable. Required children from the generic
+XSD cannot contradict the prohibition or become destinations that the renderer
+would silently suppress.
+
 Template `include` and `contains` nodes are provenance/occurrence wrappers, not
 XML elements. Structural matching descends through those wrappers before
 materializing an omitted CDA/RIM particle. A wrapped explicit child is overlaid

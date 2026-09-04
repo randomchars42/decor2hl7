@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from email.message import Message
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
@@ -66,7 +68,7 @@ class ExternalSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
             key = "codesystem:1.2.3@2019-12-30T00:00:00"
-            manifest: dict[str, object] = {"resources": {key: {
+            manifest: dict[str, Any] = {"resources": {key: {
                 "status": "missing",
                 "settled": True,
                 "projects_considered": ["aktin-", "hl7de-"],
@@ -347,7 +349,7 @@ class ExternalSourceTests(unittest.TestCase):
 
             def fake_get(url: str, **_: object) -> bytes:
                 if "project=first-" in url:
-                    raise HTTPError(url, 404, "missing", {}, None)
+                    raise HTTPError(url, 404, "missing", Message(), None)
                 return payload
 
             with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):

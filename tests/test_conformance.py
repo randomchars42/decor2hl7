@@ -9,6 +9,7 @@ import unittest
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from decor2hl7.cda.core import CORE_FILES, CORE_REVISION, core_paths
@@ -74,7 +75,7 @@ class ConformanceTests(unittest.TestCase):
                 ],
             )
 
-            cda_model = {"targets": {
+            cda_model: dict[str, Any] = {"targets": {
                 "Observation.value": {
                     "template_id": "1.2.3",
                     "template_effective_date": "2026-01-01",
@@ -213,6 +214,7 @@ class ConformanceTests(unittest.TestCase):
                 "{http://purl.oclc.org/dsdl/schematron}ns"
             )
             self.assertIsNotNone(namespace)
+            assert namespace is not None
             self.assertEqual(namespace.get("prefix"), "pharm")
             self.assertEqual(namespace.get("uri"), "urn:example:pharm")
 

@@ -122,6 +122,8 @@ def _scalar(value: Any, transform: Mapping[str, Any]) -> Any:
         key = _selected_value(value, transform)
         found, raw = _table_value(table, key) if isinstance(table, Mapping) else (False, None)
         if found:
+            if raw is None:
+                return OMIT
             return int(raw) if str(raw).lstrip("+-").isdigit() else float(raw)
         if isinstance(value, (int, float)):
             return value
@@ -141,17 +143,17 @@ def _scalar(value: Any, transform: Mapping[str, Any]) -> Any:
             code = value.get("code")
         if code in (None, ""):
             return OMIT
-        result: dict[str, Any] = {
+        coded_result: dict[str, Any] = {
             "code": str(code),
             "codeSystem": code_system,
         }
         if isinstance(value, Mapping):
             display = value.get("displayName") or value.get("display_name")
             if display:
-                result["displayName"] = display
+                coded_result["displayName"] = display
             if value.get("raw") is not None:
-                result["raw"] = value.get("raw")
-        return result
+                coded_result["raw"] = value.get("raw")
+        return coded_result
     if kind == "coded_fallback":
         configured_allowed = transform.get("allowed", [])
         allowed = [

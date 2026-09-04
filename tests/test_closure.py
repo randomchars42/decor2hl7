@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from typing import Any
 
 from decor2hl7.compile.mapping import mapping_field_delta
 
@@ -29,6 +30,9 @@ VALIDATOR_SHA256 = "e85facc96502027591b3b9c6240513f38e286ea4926a043a446985c85ebb
 
 class ReferenceClosureTests(unittest.TestCase):
     """Regression guards for the optional local companion reference workspace."""
+
+    workspace: Path
+    model_dir: Path
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -60,7 +64,7 @@ class ReferenceClosureTests(unittest.TestCase):
             )
 
     @staticmethod
-    def _load(path: Path) -> dict:
+    def _load(path: Path) -> dict[str, Any]:
         with path.open(encoding="utf-8") as handle:
             return json.load(handle)
 

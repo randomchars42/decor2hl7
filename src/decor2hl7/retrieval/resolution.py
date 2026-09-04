@@ -60,17 +60,17 @@ def artifact_owner_key(
 
 
 def indexed_artifact_owner(
-    artifact_owners: Mapping[str, str], want: Mapping[str, str],
+    artifact_owners: Mapping[str, str], want: Mapping[str, object],
 ) -> str:
     return artifact_owners.get(artifact_owner_key(
-        want.get("kind", ""), want.get("id", ""),
-        want.get("effective_date", ""),
+        str(want.get("kind") or ""), str(want.get("id") or ""),
+        str(want.get("effective_date") or ""),
     ), "")
 
 
 def remember_artifact_owner(
     artifact_owners: dict[str, str],
-    want: Mapping[str, str],
+    want: Mapping[str, object],
     project: str,
     *,
     replace: bool = False,
@@ -78,8 +78,8 @@ def remember_artifact_owner(
     if not project:
         return False
     key = artifact_owner_key(
-        want.get("kind", ""), want.get("id", ""),
-        want.get("effective_date", ""),
+        str(want.get("kind") or ""), str(want.get("id") or ""),
+        str(want.get("effective_date") or ""),
     )
     current = artifact_owners.get(key) or ""
     if key == ":" or current == project or (current and not replace):
@@ -88,13 +88,13 @@ def remember_artifact_owner(
     return True
 
 
-def payload_artifact_owner(payload: bytes, want: Mapping[str, str]) -> str:
+def payload_artifact_owner(payload: bytes, want: Mapping[str, object]) -> str:
     """Read repository context from an API response/reference stub."""
     try:
         root, _ = parse_text(payload.decode("utf-8", "replace"))
     except (ET.ParseError, ValueError):
         return ""
-    identifier = want.get("id") or ""
+    identifier = str(want.get("id") or "")
     names = {
         "id", "ref", "template", "valueSet", "codeSystem", "datasetId",
         "sourceDataset",
@@ -126,16 +126,17 @@ def write_artifact_owners(path: Path, artifact_owners: Mapping[str, str]) -> Non
 
 
 def candidate_projects(
-    want: Mapping[str, str],
+    want: Mapping[str, object],
     oid_owners: Mapping[str, str],
     repositories: Iterable[str],
     artifact_owners: Mapping[str, str] | None = None,
     configured_oid_owners: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Order repository candidates without widening authoritative scope."""
-    owner = project_owner(want["id"], oid_owners)
-    configured_owner = project_owner(want["id"], configured_oid_owners or {})
-    declared = want.get("project") or ""
+    identifier = str(want["id"])
+    owner = project_owner(identifier, oid_owners)
+    configured_owner = project_owner(identifier, configured_oid_owners or {})
+    declared = str(want.get("project") or "")
     indexed = indexed_artifact_owner(artifact_owners or {}, want)
     result: list[str] = []
     if owner:

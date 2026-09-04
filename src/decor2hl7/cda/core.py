@@ -114,11 +114,16 @@ def _merge_parts(parts: Iterable[ModelPart]) -> tuple[ModelPart, ...]:
         if len(datatypes) != 1:
             continue
         maxima = [part.maximum for part in alternatives]
+        bounded_maxima = [value for value in maxima if value is not None]
         result.append(ModelPart(
             name=name,
             datatype=alternatives[0].datatype,
             minimum=min(part.minimum for part in alternatives),
-            maximum=None if any(value is None for value in maxima) else max(maxima),
+            maximum=(
+                None
+                if len(bounded_maxima) != len(maxima)
+                else max(bounded_maxima)
+            ),
         ))
     return tuple(result)
 

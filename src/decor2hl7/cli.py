@@ -459,6 +459,8 @@ def cmd_propose_input(args: argparse.Namespace) -> int:
     model_dir = transaction_model_dir(root, release, transaction)
     model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build` first"))
     source_root = input_dir(root, args.input, required=True)
+    if source_root is None:
+        raise ValueError("input directory is required")
     proposal_dir, _, _, _ = _site_paths(
         root, release, transaction, getattr(args, "site_config", None)
     )
@@ -843,8 +845,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         errors.extend(
             validate.verify_compiled_against_artdecor(cda, inputs["templates"])
         )
-    except ValueError as error:
-        errors.append(str(error))
+    except ValueError as verification_error:
+        errors.append(str(verification_error))
     print(f"model datapoints: {len(model.get('fields', {}))}")
     print(f"CSV mapped: {sum(value is not None for value in csv_mapping.get('fields', {}).values())}")
     print(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
@@ -861,8 +863,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(f"build warning: {len(unavailable)} unavailable dependency artifacts")
     if errors:
         print("configuration errors:")
-        for error in errors:
-            print(f"  - {error}")
+        for message in errors:
+            print(f"  - {message}")
         return 1
     print("configuration: OK")
     return 0
@@ -920,8 +922,8 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
     print(f"mapping: {mapping_path}")
     if errors:
         print("CDA mapping errors:")
-        for error in errors:
-            print(f"  - {error}")
+        for message in errors:
+            print(f"  - {message}")
         return 1
     print("CDA mapping: OK")
     return 0

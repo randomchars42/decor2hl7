@@ -146,8 +146,12 @@ def _eval(expr: str, context: ET.Element, root: ET.Element, variables: Mapping[s
         seen: set[tuple[str, str]] = set()
         for node in nodes:
             if not isinstance(node, ET.Element): continue
-            key = ("code", node.get("code")) if node.get("code") is not None else ("nullFlavor", node.get("nullFlavor"))
-            if key[1] is None: continue
+            value = node.get("code")
+            name = "code"
+            if value is None:
+                name, value = "nullFlavor", node.get("nullFlavor")
+            if value is None: continue
+            key = (name, value)
             if key in seen: return False
             seen.add(key)
         return True

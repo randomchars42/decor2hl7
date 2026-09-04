@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 import xml.etree.ElementTree as ET
 
 from decor2hl7 import cda, validate
@@ -22,6 +22,13 @@ from decor2hl7.compile.reports import render_cda_mapping_markdown
 
 
 HL7 = "urn:hl7-org:v3"
+
+
+def find_required(parent: ET.Element[str], path: str) -> ET.Element[str]:
+    found = parent.find(path)
+    if found is None:
+        raise AssertionError(f"expected XML element at {path!r}")
+    return found
 
 
 def write_datatype_schema(root: Path) -> Path:
@@ -67,10 +74,10 @@ def write_datatype_schema(root: Path) -> Path:
     return schema
 
 
-def target_at(compiled: dict[str, object], suffix: str) -> tuple[str, dict[str, object]]:
+def target_at(compiled: Mapping[str, Any], suffix: str) -> tuple[str, dict[str, Any]]:
     matches = [
         (str(name), target)
-        for name, target in compiled["targets"].items()  # type: ignore[union-attr]
+        for name, target in compiled["targets"].items()
         if str(target.get("path") or "").endswith(suffix)
         and target.get("writable")
     ]
@@ -90,7 +97,7 @@ class CdaDatatypeTests(unittest.TestCase):
                          minimumMultiplicity="0" maximumMultiplicity="*"/>
               </element>
             </template>''', encoding="utf-8")
-            model = {
+            model: dict[str, Any] = {
                 "meta": {"template_id": "doc", "template_effective_date": "2026"},
                 "groups": {},
                 "fields": {"dose": {
@@ -160,7 +167,7 @@ class CdaDatatypeTests(unittest.TestCase):
              minimumMultiplicity="0" maximumMultiplicity="1"/>
   </element>
 </template>''', encoding="utf-8")
-            model = {
+            model: dict[str, Any] = {
                 "meta": {"template_id": "doc", "template_effective_date": "2026"},
                 "groups": {},
                 "fields": {"timing.start": {
@@ -225,7 +232,10 @@ class CdaDatatypeTests(unittest.TestCase):
                 comp.get("{http://www.w3.org/2001/XMLSchema-instance}type"),
                 "IVL_TS",
             )
-            self.assertEqual(comp.find(f"{{{HL7}}}low").get("value"), "20260903101500+0000")
+            self.assertEqual(
+                find_required(comp, f"{{{HL7}}}low").get("value"),
+                "20260903101500+0000",
+            )
 
             conflict_model = {**model, "fields": {
                 **model["fields"],
@@ -372,8 +382,8 @@ class CdaDatatypeTests(unittest.TestCase):
             )
             self.assertEqual(problems, [])
             document = ET.fromstring(payload)
-            self.assertEqual(document.find(f".//{{{HL7}}}event").get("code"), "ACM")
-            self.assertEqual(document.find(f".//{{{HL7}}}offset").get("unit"), "min")
+            self.assertEqual(find_required(document, f".//{{{HL7}}}event").get("code"), "ACM")
+            self.assertEqual(find_required(document, f".//{{{HL7}}}offset").get("unit"), "min")
 
             occurrence_problems = non_null_requirement_problems(
                 compiled,
@@ -396,6 +406,34 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertTrue(non_null_requirement_problems(
                 compiled, {offset_name: {"nullFlavor": "NI"}}
             ))
+
+    def test_prohibited_datatype_subtree_has_no_writable_descendants(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "project.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+              <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+                <element name="hl7:effectiveTime" datatype="SXPR_TS"
+                         conformance="NP" minimumMultiplicity="0" maximumMultiplicity="1"/>
+              </element>
+            </template>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {}, "fields": {},
+            }
+            compiled = compile_cda(
+                [source], model,
+                core_definition_paths=[write_datatype_schema(root)],
+            )
+
+            timing_targets = [
+                target for target in compiled["targets"].values()
+                if "/hl7:effectiveTime" in str(target.get("path") or "")
+            ]
+            self.assertTrue(timing_targets)
+            self.assertTrue(all(target["prohibited"] for target in timing_targets))
+            self.assertFalse(any(target["writable"] for target in timing_targets))
+            self.assertEqual(validate.verify_compiled_cda(compiled), [])
 
     def test_single_element_vocabulary_code_without_system_is_rendered(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -424,7 +462,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 model, compiled, {"fields": {}}, {},
             )
             self.assertEqual(problems, [])
-            status = ET.fromstring(payload).find(f"{{{HL7}}}statusCode")
+            status = find_required(ET.fromstring(payload), f"{{{HL7}}}statusCode")
             self.assertEqual(status.get("code"), "completed")
             self.assertNotIn("codeSystem", status.attrib)
 
@@ -476,7 +514,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 model, compiled, {"fields": {}}, {},
             )
             self.assertEqual(problems, [])
-            status = ET.fromstring(payload).find(f".//{{{HL7}}}statusCode")
+            status = find_required(ET.fromstring(payload), f".//{{{HL7}}}statusCode")
             self.assertEqual(
                 (status.get("code"), status.get("codeSystem")),
                 ("active", "1.2.3"),
@@ -491,7 +529,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 model, compiled, {"fields": {"status": target_name}}, {},
             )
             self.assertEqual(problems, [])
-            status = ET.fromstring(payload).find(f".//{{{HL7}}}statusCode")
+            status = find_required(ET.fromstring(payload), f".//{{{HL7}}}statusCode")
             self.assertEqual(status.get("code"), "completed")
 
     def test_neutral_example_outside_allowed_set_is_not_a_default(self) -> None:
@@ -550,7 +588,7 @@ class CdaDatatypeTests(unittest.TestCase):
             )
             self.assertEqual(text_target["content_role"], "coded_original_text")
 
-            record = {
+            record: dict[str, Any] = {
                 "key": "P1",
                 "values": {
                     "coded": {
@@ -568,6 +606,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 f".//{{{HL7}}}value/{{{HL7}}}originalText"
             )
             self.assertIsNotNone(original)
+            assert original is not None
             self.assertEqual(original.text, "Original wording")
 
             record["values"]["wording"] = "Reviewed wording"
@@ -578,6 +617,7 @@ class CdaDatatypeTests(unittest.TestCase):
             original = ET.fromstring(payload).find(
                 f".//{{{HL7}}}value/{{{HL7}}}originalText"
             )
+            assert original is not None
             self.assertEqual(original.text, "Reviewed wording")
 
     def test_artdecor_path_predicates_do_not_leak_into_xml_qnames(self) -> None:
@@ -638,7 +678,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 model, compiled, {"fields": {}}, {},
             )
             self.assertEqual(problems, [])
-            status = ET.fromstring(payload).find(f".//{{{HL7}}}statusCode")
+            status = find_required(ET.fromstring(payload), f".//{{{HL7}}}statusCode")
             self.assertEqual(status.get("code"), "active")
 
     def test_xsd_default_completes_explicit_artdecor_attribute(self) -> None:
@@ -670,7 +710,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 model, compiled, {"fields": {}}, {},
             )
             self.assertEqual(problems, [])
-            entry = ET.fromstring(payload).find(f"{{{HL7}}}entry")
+            entry = find_required(ET.fromstring(payload), f"{{{HL7}}}entry")
             self.assertEqual(entry.get("typeCode"), "COMP")
 
     def test_generated_identifiers_complete_only_active_repeat_occurrences(self) -> None:
@@ -757,6 +797,7 @@ class CdaDatatypeTests(unittest.TestCase):
             )
             self.assertEqual(problems, [])
             observation = ET.fromstring(payload).find(f".//{{{HL7}}}observation")
+            assert observation is not None
             self.assertNotIn("nullFlavor", observation.attrib)
 
             payload, problems = cda.emit(
@@ -764,7 +805,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 model, compiled, mapping, {},
             )
             self.assertEqual(problems, [])
-            observation = ET.fromstring(payload).find(f".//{{{HL7}}}observation")
+            observation = find_required(ET.fromstring(payload), f".//{{{HL7}}}observation")
             self.assertEqual(observation.get("nullFlavor"), "NI")
 
             with self.assertRaisesRegex(ValueError, "fixed to 'NI'"):
@@ -807,9 +848,10 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(problems, [])
             root = ET.fromstring(payload)
             values = [
-                root.find(f"{{{HL7}}}effectiveTime").get("value"),
-                root.find(f"{{{HL7}}}author/{{{HL7}}}time").get("value"),
+                find_required(root, f"{{{HL7}}}effectiveTime").get("value"),
+                find_required(root, f"{{{HL7}}}author/{{{HL7}}}time").get("value"),
             ]
+            assert values[0] is not None
             self.assertRegex(values[0], r"^\d{14}\+0000$")
             self.assertEqual(values[0], values[1])
 
@@ -836,7 +878,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 model, compiled, {"fields": {}}, {},
             )
             self.assertEqual(problems, [])
-            name = ET.fromstring(payload).find(f"{{{HL7}}}name")
+            name = find_required(ET.fromstring(payload), f"{{{HL7}}}name")
             self.assertEqual(name.get("nullFlavor"), "NI")
 
             compiled["document"][0]["children"][0]["attributes"] = []
@@ -877,8 +919,9 @@ class CdaDatatypeTests(unittest.TestCase):
                 f"{{{HL7}}}custodian/{{{HL7}}}assignedCustodian/"
                 f"{{{HL7}}}representedCustodianOrganization"
             )
-            self.assertEqual(org.find(f"{{{HL7}}}id").get("root"), "1.2.3.4")
-            self.assertEqual(org.find(f"{{{HL7}}}name").text, "Example ED")
+            assert org is not None
+            self.assertEqual(find_required(org, f"{{{HL7}}}id").get("root"), "1.2.3.4")
+            self.assertEqual(find_required(org, f"{{{HL7}}}name").text, "Example ED")
 
     def test_custodian_roles_address_one_physical_reused_include(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -929,8 +972,9 @@ class CdaDatatypeTests(unittest.TestCase):
                 f"{{{HL7}}}custodian/{{{HL7}}}assignedCustodian/"
                 f"{{{HL7}}}representedCustodianOrganization"
             )
-            self.assertEqual(org.find(f"{{{HL7}}}id").get("root"), "1.2.3.4")
-            self.assertEqual(org.find(f"{{{HL7}}}name").text, "Example ED")
+            assert org is not None
+            self.assertEqual(find_required(org, f"{{{HL7}}}id").get("root"), "1.2.3.4")
+            self.assertEqual(find_required(org, f"{{{HL7}}}name").text, "Example ED")
 
     def test_active_section_title_and_narrative_follow_compiled_roles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -966,9 +1010,9 @@ class CdaDatatypeTests(unittest.TestCase):
                 model, compiled, {"fields": {"fact": value_target}}, {},
             )
             self.assertEqual(problems, [])
-            section = ET.fromstring(payload).find(f".//{{{HL7}}}section")
-            self.assertEqual(section.find(f"{{{HL7}}}title").text, "Clinical facts")
-            self.assertEqual(section.find(f"{{{HL7}}}text").text, "mapped fact")
+            section = find_required(ET.fromstring(payload), f".//{{{HL7}}}section")
+            self.assertEqual(find_required(section, f"{{{HL7}}}title").text, "Clinical facts")
+            self.assertEqual(find_required(section, f"{{{HL7}}}text").text, "mapped fact")
 
     def test_single_vocabulary_code_fixes_required_attribute(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -996,7 +1040,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 model, compiled, {"fields": {}}, {},
             )
             self.assertEqual(problems, [])
-            node = ET.fromstring(payload).find(f"{{{HL7}}}realmCode")
+            node = find_required(ET.fromstring(payload), f"{{{HL7}}}realmCode")
             self.assertEqual(node.get("code"), "DE")
 
     def test_reused_artdecor_ids_keep_path_specific_fixed_constraints(self) -> None:
@@ -1085,7 +1129,7 @@ class CdaDatatypeTests(unittest.TestCase):
                     model, compiled, {"fields": {field_path: target_name}}, {},
                 )
                 self.assertEqual(problems, [])
-                value = ET.fromstring(payload).find(f".//{{{HL7}}}value")
+                value = find_required(ET.fromstring(payload), f".//{{{HL7}}}value")
                 self.assertEqual((value.get("value"), value.get("unit")), (str(scalar), unit))
 
     def test_cda_structural_classes_expand_through_datatypes(self) -> None:
@@ -1240,13 +1284,13 @@ class CdaDatatypeTests(unittest.TestCase):
                 core_definition_paths=[schema],
             )
 
-            sections: list[dict[str, object]] = []
+            sections: list[dict[str, Any]] = []
 
-            def collect(nodes: list[dict[str, object]]) -> None:
+            def collect(nodes: list[dict[str, Any]]) -> None:
                 for node in nodes:
                     if node.get("name") == "hl7:section":
                         sections.append(node)
-                    collect(list(node.get("children", [])))
+                    collect(node.get("children", []))
 
             collect(compiled["document"])
             self.assertEqual(len(sections), 1)
@@ -1280,11 +1324,11 @@ class CdaDatatypeTests(unittest.TestCase):
             rendered_sections = rendered.findall(f".//{{{HL7}}}section")
             self.assertEqual(len(rendered_sections), 1)
             self.assertEqual(
-                rendered_sections[0].find(f"{{{HL7}}}title").text,
+                find_required(rendered_sections[0], f"{{{HL7}}}title").text,
                 "Special section",
             )
             self.assertEqual(
-                rendered_sections[0].find(f"{{{HL7}}}text").text,
+                find_required(rendered_sections[0], f"{{{HL7}}}text").text,
                 "Rendered once",
             )
 
@@ -1305,6 +1349,7 @@ class CdaDatatypeTests(unittest.TestCase):
     def test_url_uses_the_cda_value_attribute(self) -> None:
         representation = expand_datatype("URL").value_representation
         self.assertIsNotNone(representation)
+        assert representation is not None
         self.assertEqual(representation.kind.value, "attribute")
         self.assertEqual(representation.attribute, "value")
 
@@ -1340,7 +1385,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 model, compiled, {"fields": {"result": name}}, {},
             )
             self.assertEqual(problems, [])
-            value = ET.fromstring(payload).find(f".//{{{HL7}}}value")
+            value = find_required(ET.fromstring(payload), f".//{{{HL7}}}value")
             self.assertEqual(value.text, "free text")
             self.assertEqual(
                 value.get("{http://www.w3.org/2001/XMLSchema-instance}type"),
@@ -1451,8 +1496,8 @@ class CdaDatatypeTests(unittest.TestCase):
             payload, problems = cda.emit(record, model, compiled, proposal, {})
             self.assertEqual(problems, [])
             root = ET.fromstring(payload)
-            self.assertEqual(root.find(f".//{{{HL7}}}postalCode").text, "10115")
-            self.assertEqual(root.find(f".//{{{HL7}}}given").text, "Ada")
+            self.assertEqual(find_required(root, f".//{{{HL7}}}postalCode").text, "10115")
+            self.assertEqual(find_required(root, f".//{{{HL7}}}given").text, "Ada")
 
     def test_art_decor_constraints_overlay_generic_parts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

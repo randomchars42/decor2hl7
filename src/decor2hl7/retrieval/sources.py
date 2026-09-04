@@ -171,11 +171,15 @@ def load_source_hints(override: Path | None = None) -> SourceHints:
 
 
 def apply_source_hint(
-    artifact: Mapping[str, str],
+    artifact: Mapping[str, object],
     hints: Mapping[str, Mapping[str, str]],
 ) -> dict[str, str]:
     """Fill missing resolution properties without replacing explicit XML data."""
-    result = dict(artifact)
+    result = {
+        str(key): str(value)
+        for key, value in artifact.items()
+        if value not in (None, "")
+    }
     base = f"{artifact.get('kind', '')}:{artifact.get('id', '')}"
     effective = artifact.get("effective_date") or ""
     hint = hints.get(f"{base}@{effective}") if effective else None
@@ -192,15 +196,18 @@ def apply_source_hint(
             result[name] = str(hint[name])
     if hint:
         result["source_hint"] = f"{base}@{effective}" if effective and f"{base}@{effective}" in hints else base
-        configured = getattr(hints, "configured_artifacts", frozenset())
+        configured: object = getattr(hints, "configured_artifacts", frozenset())
         result["source_hint_origin"] = (
-            "configured" if result["source_hint"] in configured else "bundled"
+            "configured"
+            if isinstance(configured, (set, frozenset))
+            and result["source_hint"] in configured
+            else "bundled"
         )
     return result
 
 
 def resolve_alias(
-    artifact: Mapping[str, str],
+    artifact: Mapping[str, object],
     hints: Mapping[str, Mapping[str, str]],
 ) -> dict[str, str]:
     """Resolve one reviewed identity correction while retaining its provenance."""

@@ -307,12 +307,14 @@ structural node with the same ART-DECOR element ID replaces an inherited
 emitted together.
 
 Fixed text/attributes are executable constraints rather than writable data
-targets. `NP` nodes are prohibited. A target is writable only when its datatype
-defines a value representation and it resolves to exactly one unfixed,
-non-prohibited physical node. Ambiguity and structural-only targets remain as
-provenance/evidence but are configuration/runtime errors when selected as scalar
-destinations. `validate.verify_compiled_cda()` checks these invariants before
-transformation.
+targets. `NP` nodes prohibit their complete physical subtree; synthesized
+CDA/RIM or datatype descendants retain provenance but have effective
+cardinality zero and cannot be writable. A target is writable only when its
+datatype defines a value representation and it resolves to exactly one
+unfixed, non-prohibited physical node. Ambiguity and structural-only targets
+remain as provenance/evidence but are configuration/runtime errors when
+selected as scalar destinations. `validate.verify_compiled_cda()` checks these
+invariants before transformation.
 
 Required coded construction values may be compiled from neutral ART-DECOR
 examples only after exact template/path scoping and unique validation against

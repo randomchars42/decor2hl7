@@ -66,7 +66,8 @@ def validate_openapi(payload: bytes) -> dict[str, Any]:
     missing = sorted(REQUIRED_PATHS - set(paths))
     if missing:
         raise ValueError("API is missing required operations: " + ", ".join(missing))
-    info = value.get("info") if isinstance(value.get("info"), dict) else {}
+    raw_info = value.get("info")
+    info = raw_info if isinstance(raw_info, dict) else {}
     return {
         "title": str(info.get("title") or ""),
         "version": str(info.get("version") or ""),
@@ -173,7 +174,7 @@ def _artifact_path(kind: str, ident: str, effective_date: str, *, extract: bool)
 
 
 def artifact_representations(
-    artifact: Mapping[str, str],
+    artifact: Mapping[str, object],
     *,
     project: str,
     main_project: str,
@@ -187,9 +188,13 @@ def artifact_representations(
     External exact revisions are intentionally requested without the selected
     main-project release.
     """
-    kind = artifact["kind"]
-    ident = artifact["id"]
-    effective = artifact.get("effective_date") or ""
+    kind = str(artifact["kind"])
+    ident = str(artifact["id"])
+    effective = str(artifact.get("effective_date") or "")
+    dataset = str(artifact.get("dataset") or "") or None
+    dataset_effective = (
+        str(artifact.get("dataset_effective_date") or "") or None
+    )
     context_release = release if main_project == project else ""
     common = {
         "language": language,
@@ -212,9 +217,9 @@ def artifact_representations(
         source_path,
         base_url=base_url,
         prefix=project,
-        transactionId=artifact.get("dataset") if kind == "concept" else None,
+        transactionId=dataset if kind == "concept" else None,
         transactionEffectiveDate=(
-            artifact.get("dataset_effective_date") if kind == "concept" else None
+            dataset_effective if kind == "concept" else None
         ),
         associations="true" if kind == "concept" else None,
         **common,
@@ -233,10 +238,10 @@ def artifact_representations(
         base_url=base_url,
         project=project,
         datasetOrTransactionId=(
-            artifact.get("dataset") if kind == "concept" else None
+            dataset if kind == "concept" else None
         ),
         datasetOrTransactionEd=(
-            artifact.get("dataset_effective_date") if kind == "concept" else None
+            dataset_effective if kind == "concept" else None
         ),
         format="xml" if kind != "template" else None,
         **common,

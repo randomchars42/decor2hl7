@@ -28,6 +28,7 @@ class CompilerInputs(TypedDict):
     mapping_evidence: list[Path]
     cda_extensions: list[CdaExtension]
     unavailable_artifacts: list[dict[str, Any]]
+    crawl_degraded_artifacts: list[dict[str, Any]]
     warnings: list[str]
 
 

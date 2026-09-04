@@ -596,42 +596,54 @@ def ingest(
             problems.extend(source_data.get("problems", {}).get(key, []))
         for field_path, field in model.get("fields", {}).items():
             locator = mapping_locator(csv_mapping.get("fields", {}).get(field_path))
-            source = column = None
-            rows: list[dict[str, str]] = []
+            mapped_source: str | None = None
+            mapped_column: str | None = None
+            mapped_rows: list[dict[str, str]] = []
             cardinality = "1:1"
             if locator is not None:
-                source, column = str(locator["source"]), str(locator["column"])
-                source_data = source_rows.get(source, {})
-                rows = list(source_data.get("rows", {}).get(key, []))
+                mapped_source = str(locator["source"])
+                mapped_column = str(locator["column"])
+                source_data = source_rows.get(mapped_source, {})
+                mapped_rows = list(source_data.get("rows", {}).get(key, []))
                 cardinality = str(source_data.get("cardinality") or "1:1")
             translations = codes_mapping.get("fields", {}).get(field_path, {})
             chain = list(field.get("repeat_chain") or ([] if not field.get("repeat") else [field.get("repeat")]))
 
-            if chain and source is not None and column is not None:
-                occurrence_rows = rows if cardinality == "1:n" else rows[:1]
-                keys_cfg = source_rows.get(source, {}).get("occurrence_keys", {})
+            if chain and mapped_source is not None and mapped_column is not None:
+                occurrence_rows = (
+                    mapped_rows if cardinality == "1:n" else mapped_rows[:1]
+                )
+                keys_cfg = source_rows.get(mapped_source, {}).get(
+                    "occurrence_keys", {}
+                )
                 for index, row in enumerate(occurrence_rows):
                     row_number = int(row.get("__decor2hl7_row__") or 0)
-                    occurrence_keys: list[str] = []
+                    occurrence_ids: list[str] = []
                     for depth, repeat in enumerate(chain):
                         column_name = keys_cfg.get(str(repeat))
                         if column_name:
                             occurrence_key = str(row.get(column_name) or "").strip()
                             if not occurrence_key:
                                 raise ValueError(
-                                    f"source {source!r} has empty occurrence key {column_name!r} "
+                                    f"source {mapped_source!r} has empty occurrence key {column_name!r} "
                                     f"for repeat {repeat!r} on row {row_number}"
                                 )
                         elif len(chain) == 1 and len(repeat_sources.get(str(repeat), set())) == 1:
                             occurrence_key = f"#{index}"
                         else:
                             raise ValueError(
-                                f"source {source!r} requires occurrence_keys[{repeat!r}] for {field_path!r}"
+                                f"source {mapped_source!r} requires occurrence_keys[{repeat!r}] for {field_path!r}"
                             )
-                        occurrence_keys.append(occurrence_key)
-                    leaf_key = tuple(occurrence_keys)
-                    occurrence = _ensure_occurrence(instances, [str(item) for item in chain], occurrence_keys, source, row_number)
-                    raw = row.get(column)
+                        occurrence_ids.append(occurrence_key)
+                    leaf_key = tuple(occurrence_ids)
+                    occurrence = _ensure_occurrence(
+                        instances,
+                        [str(item) for item in chain],
+                        occurrence_ids,
+                        mapped_source,
+                        row_number,
+                    )
+                    raw = row.get(mapped_column)
                     try:
                         normalized = normalize_input_value(raw, field, translations, site, locator)
                     except (ValueError, TypeError) as error:
@@ -646,15 +658,23 @@ def ingest(
                     existing = occurrence["values"].get(field_path, _MISSING)
                     if existing is not _MISSING and existing != normalized:
                         raise ValueError(
-                            f"source {source!r} gives conflicting values for occurrence {leaf_key!r} "
+                            f"source {mapped_source!r} gives conflicting values for occurrence {leaf_key!r} "
                             f"and field {field_path!r}: {existing!r} vs {normalized!r}"
                         )
                     occurrence["values"][field_path] = normalized
                 continue
 
-            raw = rows[0].get(column) if rows and column is not None else None
+            raw = (
+                mapped_rows[0].get(mapped_column)
+                if mapped_rows and mapped_column is not None
+                else None
+            )
             try:
-                normalized = normalize_input_value(raw, field, translations, site, locator) if source is not None else None
+                normalized = (
+                    normalize_input_value(raw, field, translations, site, locator)
+                    if mapped_source is not None
+                    else None
+                )
             except (ValueError, TypeError) as error:
                 problems.append({"severity": "error", "path": field_path, "message": str(error)})
                 normalized = None

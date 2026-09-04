@@ -55,7 +55,7 @@ def presence_target_complete(
             return True
         codes = list(node.get("codes", []))
         fixed = dict(node.get("fixed", {}))
-        representation = next((
+        representation: Mapping[str, Any] = next((
             targets.get(str(name), {}).get("value_representation")
             for name in node.get("targets", [])
             if targets.get(str(name), {}).get("value_representation")
@@ -614,7 +614,7 @@ def _fan_out(
     """Add one branch occurrence below ``depth`` existing source repeats."""
     if depth == 0:
         active = [(value, constants) for value, constants in values if _present(value)]
-        payload = [value for value, _ in active]
+        active_payload = [value for value, _ in active]
         constant_names = {
             str(name) for _, constants in active for name in constants
         }
@@ -622,13 +622,13 @@ def _fan_out(
             name: [constants.get(name) for _, constants in active]
             for name in sorted(constant_names)
         }
-        return payload, constants_out
+        return active_payload, constants_out
 
     count = max(
         (len(value) if isinstance(value, list) else (1 if _present(value) else 0))
         for value, _ in values
     ) if values else 0
-    payload: list[Any] = []
+    nested_payload: list[Any] = []
     constants_by_name: dict[str, list[Any]] = {}
     for index in range(count):
         nested: list[tuple[Any, Mapping[str, Any]]] = []
@@ -639,10 +639,10 @@ def _fan_out(
                 child = value if index == 0 else None
             nested.append((child, constants))
         child_payload, child_constants = _fan_out(nested, depth - 1)
-        payload.append(child_payload)
+        nested_payload.append(child_payload)
         for name in set(constants_by_name) | set(child_constants):
             constants_by_name.setdefault(name, []).append(child_constants.get(name))
-    return payload, constants_by_name
+    return nested_payload, constants_by_name
 
 
 def _discriminator_identity(value: Any) -> tuple[str, ...]:
@@ -1083,13 +1083,13 @@ def validate_structures(
                             f"{prefix} existing source {path!r} does not map to "
                             f"discriminator {discriminator_target!r}"
                         )
-        depths: set[int] = set()
+        branch_depths: set[int] = set()
         for branch in branches:
             path = str(branch.get("source") or "")
             if path not in fields:
                 errors.append(f"{prefix} references unknown source field {path!r}")
                 continue
-            depths.add(len(fields[path].get("repeat_chain", [])))
+            branch_depths.add(len(fields[path].get("repeat_chain", [])))
             for reason in validate_transform(branch.get("transform")):
                 errors.append(f"{prefix} branch {path!r}: {reason}")
             constants = branch.get("constants", {})
@@ -1125,9 +1125,11 @@ def validate_structures(
                             )
         if not target or not target.get("writable") or len(target.get("locations", [])) != 1:
             errors.append(f"{prefix} references non-renderable target {target_name!r}")
-        elif len(depths) == 1 and len(target.get("repeat_ancestors", [])) != next(iter(depths)) + 1:
+        elif len(branch_depths) == 1 and len(
+            target.get("repeat_ancestors", [])
+        ) != next(iter(branch_depths)) + 1:
             errors.append(f"{prefix} must add exactly one target occurrence level")
-        elif len(depths) > 1:
+        elif len(branch_depths) > 1:
             errors.append(f"{prefix} sources have different repeat depths")
 
     return errors

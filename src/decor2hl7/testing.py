@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from .compile.mapping import code_mapping_defaults
 from .data import field_value, ingest
@@ -78,10 +78,14 @@ def synthetic_value(path: str, field: Mapping[str, Any], occurrence: int = 0) ->
     if kind in {"quantity", "decimal", "duration"}:
         low = field.get("min_value")
         high = field.get("max_value")
-        number = float(low) if low is not None else 1.0
+        decimal_number = float(low) if low is not None else 1.0
         if high is not None:
-            number = min(number, float(high))
-        return str(int(number) if number.is_integer() else number)
+            decimal_number = min(decimal_number, float(high))
+        return str(
+            int(decimal_number)
+            if decimal_number.is_integer()
+            else decimal_number
+        )
     if kind == "code":
         # An unbound code remains visible as OTH during normalization.  This is
         # preferable to inventing terminology that is absent from the model.
@@ -90,7 +94,9 @@ def synthetic_value(path: str, field: Mapping[str, Any], occurrence: int = 0) ->
     return _bounded_text(field, f"{prefix}-{hashlib.sha1(path.encode()).hexdigest()[:10]}")
 
 
-def _write_csv(path: Path, headers: list[str], rows: list[Mapping[str, str]]) -> None:
+def _write_csv(
+    path: Path, headers: list[str], rows: Iterable[Mapping[str, str]],
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=headers)

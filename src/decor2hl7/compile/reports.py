@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence, cast
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape, quoteattr
 
@@ -14,7 +14,10 @@ from ..transforms import cda_target_name, mapping_rules
 
 
 def _comment(value: str) -> ET.Element:
-    return ET.Comment(" ".join(value.replace("--", "—").split()))
+    return cast(
+        "ET.Element[str]",
+        ET.Comment(" ".join(value.replace("--", "—").split())),
+    )
 
 
 def _audit_targets(audit: Mapping[str, Any]) -> dict[str, list[str]]:
@@ -606,7 +609,7 @@ def _review_required(
 
 
 def _review_reason(
-    detail: Mapping[str, Any], candidates: list[Mapping[str, Any]],
+    detail: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]],
 ) -> str:
     blocked = str(detail.get("runtime_blocked") or "")
     if blocked.startswith("REQUIRED_COMPANION("):
@@ -844,7 +847,9 @@ def _contextual_xml(
 
 
 def _candidate_sections(
-    review_rows: list[Mapping[str, Any]], view: Mapping[str, Any], cda: Mapping[str, Any],
+    review_rows: Sequence[Mapping[str, Any]],
+    view: Mapping[str, Any],
+    cda: Mapping[str, Any],
 ) -> dict[tuple[int, ...] | None, set[str]]:
     result: dict[tuple[int, ...] | None, set[str]] = defaultdict(set)
     for review in review_rows:

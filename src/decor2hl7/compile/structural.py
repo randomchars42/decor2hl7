@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 import re
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 import xml.etree.ElementTree as ET
 
 from ..retrieval.xml import child_text, local, parse_file
@@ -71,7 +71,9 @@ def value_set_members(
                 }
                 if row not in exact[(oid, effective)]:
                     exact[(oid, effective)].append(row)
-    result: dict[ValueSetKey, list[dict[str, Any]]] = dict(exact)
+    result: dict[ValueSetKey, list[dict[str, Any]]] = {}
+    for key, values in exact.items():
+        result[key] = list(values)
     by_oid: dict[str, list[str]] = defaultdict(list)
     for oid, effective in exact:
         by_oid[oid].append(effective)
@@ -159,7 +161,7 @@ def _facet_assignments(
     }
     common = set.intersection(*source_tokens.values()) if source_tokens else set()
     facets = {path: tokens - common for path, tokens in source_tokens.items()}
-    candidates: dict[str, list[dict[str, Any]]] = {}
+    candidates: dict[str, dict[str, Any]] = {}
     for path, tokens in facets.items():
         ranked = [
             (len(tokens & _member_tokens(member)), member)
@@ -175,7 +177,7 @@ def _facet_assignments(
     return candidates
 
 
-def _branch_labels(members: list[Mapping[str, Any]]) -> list[str]:
+def _branch_labels(members: Sequence[Mapping[str, Any]]) -> list[str]:
     english_tokens: list[set[str]] = []
     for member in members:
         english = [

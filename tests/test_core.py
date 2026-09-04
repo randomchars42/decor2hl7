@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 import json
 from pathlib import Path
 from typing import Any, Mapping
+from email.message import Message
 from urllib.parse import urlsplit
 from unittest.mock import patch
 
@@ -40,7 +41,7 @@ from decor2hl7.retrieval.fetch import (
 from decor2hl7.retrieval.api import REQUIRED_PATHS, artifact_representations
 from decor2hl7.retrieval.sources import apply_source_hint, load_source_hints
 from decor2hl7.semantics import accepted_values, direct_compatibility
-from decor2hl7.transforms import apply_transform
+from decor2hl7.transforms import OMIT, apply_transform
 from decor2hl7.workspace import (
     init_workspace, input_dir, load_json, release_spec_dir, set_release, set_transaction,
     transaction_mapping_dir, transaction_key, transaction_model_dir,
@@ -66,20 +67,27 @@ API_CONTRACT = json.dumps({
 }).encode()
 
 
-def complete_fixture_value_targets(cda_model: dict[str, object]) -> None:
+def find_required(parent: ET.Element[str], path: str) -> ET.Element[str]:
+    found = parent.find(path)
+    if found is None:
+        raise AssertionError(f"expected XML element at {path!r}")
+    return found
+
+
+def complete_fixture_value_targets(cda_model: Mapping[str, Any]) -> None:
     """Apply the compiler's value-target pass to intentionally small fixtures."""
     locations: dict[str, dict[str, object]] = {}
 
-    def walk(nodes: list[dict[str, object]], prefix: tuple[int, ...] = ()) -> None:
+    def walk(nodes: list[dict[str, Any]], prefix: tuple[int, ...] = ()) -> None:
         for index, node in enumerate(nodes):
             here = prefix + (index,)
             locations[".".join(map(str, here))] = node
-            for attr_index, attribute in enumerate(node.get("attributes", [])):  # type: ignore[union-attr]
+            for attr_index, attribute in enumerate(node.get("attributes", [])):
                 locations[".".join(map(str, here + (100000 + attr_index,)))] = attribute
-            walk(node.get("children", []), here)  # type: ignore[arg-type,union-attr]
+            walk(node.get("children", []), here)
 
-    walk(cda_model.get("document", []))  # type: ignore[arg-type,union-attr]
-    for target in cda_model.get("targets", {}).values():  # type: ignore[union-attr]
+    walk(cda_model.get("document", []))
+    for target in cda_model.get("targets", {}).values():
         location = str((target.get("locations") or [""])[0])
         physical = locations.get(location, {})
         datatype = target.get("datatype") or physical.get("datatype")
@@ -933,11 +941,11 @@ class CoreTests(unittest.TestCase):
 </project>''', encoding="utf-8")
             compiled = compile_cda([project], {"meta": {"template_id": "doc", "template_effective_date": "2026-01-01"}, "groups": {}, "fields": {}})
             contains: list[str] = []
-            def walk(nodes: list[dict[str, object]]) -> None:
+            def walk(nodes: list[dict[str, Any]]) -> None:
                 for node in nodes:
                     if node.get("contains"):
                         contains.append(str(node["contains"]))
-                    walk(list(node.get("children", [])))
+                    walk(node.get("children", []))
             walk(compiled["document"])
             self.assertIn("new-section", contains)
             self.assertNotIn("old-section", contains)
@@ -1246,12 +1254,12 @@ class CoreTests(unittest.TestCase):
 
     def test_recursive_request_budget_counts_actual_http_attempts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            manifest = {"resources": {}}
+            manifest: dict[str, Any] = {"resources": {}}
             want = {"kind": "template", "id": "1.2.3", "effective_date": "", "project": "first-"}
             budget = {"made": 0, "max": 1}
             def missing(_url: str, **_: object) -> bytes:
                 from urllib.error import HTTPError
-                raise HTTPError(_url, 404, "missing", None, None)
+                raise HTTPError(_url, 404, "missing", Message(), None)
             with patch("decor2hl7.retrieval.fetch.get", side_effect=missing):
                 with self.assertRaises(RequestBudgetExceeded):
                     _fetch_want(
@@ -1291,7 +1299,7 @@ class CoreTests(unittest.TestCase):
                 "P1,true,S82.1,Tibiakopffraktur\n",
                 encoding="utf-8",
             )
-            model = {
+            model: dict[str, Any] = {
                 "groups": {"diagnoses": {"repeating": True}},
                 "fields": {
                     "diagnoses.sequence": {
@@ -1491,6 +1499,7 @@ class CoreTests(unittest.TestCase):
             ]},
         )
         self.assertIsNotNone(inferred)
+        assert inferred is not None
         _, fanout = inferred
         self.assertEqual(fanout["type"], "repeat_by_discriminator")
         self.assertEqual(
@@ -1541,6 +1550,7 @@ class CoreTests(unittest.TestCase):
             ]},
         )
         self.assertIsNotNone(certainty)
+        assert certainty is not None
         selection, metadata = certainty
         self.assertIn("VS(certainty-vs)", selection["primary"]["chain"])
         self.assertFalse(any(rule.get("mode") == "fallback" for rule in selection["mapping"]))
@@ -1568,6 +1578,7 @@ class CoreTests(unittest.TestCase):
             }},
             {"targets": {"Encounter.low": {"repeat_ancestors": []}}},
         )
+        assert coalesced is not None
         self.assertEqual(coalesced[1]["policy"], "equal_or_error")
 
     def test_exact_bound_value_set_enum_and_field_delta(self) -> None:
@@ -1859,7 +1870,7 @@ class CoreTests(unittest.TestCase):
             "writable": True, "locations": ["0.0"], "repeat_ancestors": [],
             "datatype_derived": False,
         }
-        cda_model = {"targets": {
+        cda_model: dict[str, Any] = {"targets": {
             "isolation.statusCode": {
                 **common, "path": "hl7:observation/hl7:statusCode", "datatype": "CS",
                 "value_representation": {"kind": "coded"}, "logical_types": ["code"],
@@ -1937,7 +1948,7 @@ class CoreTests(unittest.TestCase):
                 "scalar_attribute": "code",
             },
         }
-        cda_model = {"targets": {
+        cda_model: dict[str, Any] = {"targets": {
                 "direct_contact.observation": root,
                 "direct_contact.code": code,
             }, "document": [{
@@ -2075,7 +2086,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(false_root), 0)
 
     def test_compiler_infers_shared_section_entry_occurrences(self) -> None:
-        model = {
+        model: dict[str, Any] = {
             "groups": {
                 "therapy": {
                     "parent": None, "repeating": True, "min": 0, "max": None,
@@ -2090,7 +2101,7 @@ class CoreTests(unittest.TestCase):
                 },
             },
         }
-        cda_model = {"targets": {
+        cda_model: dict[str, Any] = {"targets": {
             "MedicationSection.section": {
                 "path": "hl7:section", "renderable": True,
                 "locations": ["0.0"], "repeatable": True,
@@ -2191,6 +2202,7 @@ class CoreTests(unittest.TestCase):
             ]},
         )
         self.assertIsNotNone(selected)
+        assert selected is not None
         self.assertEqual(selected[0], "Medication.substanceAdministration")
 
     def test_for_each_can_bind_source_repeat_below_shared_cda_container(self) -> None:
@@ -2291,7 +2303,8 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(entries), 2)
         self.assertEqual(
             [
-                entry.find(
+                find_required(
+                    entry,
                     "{urn:hl7-org:v3}substanceAdministration/{urn:hl7-org:v3}code"
                 ).get("code")
                 for entry in entries
@@ -2450,6 +2463,8 @@ class CoreTests(unittest.TestCase):
             root = ET.fromstring(payload)
             code = root.find("{urn:hl7-org:v3}code")
             name = root.find("{urn:hl7-org:v3}name")
+            assert code is not None
+            assert name is not None
             self.assertEqual(code.get("code"), "01234567")
             self.assertEqual(code.get("codeSystem"), "1.2.3.4")
             self.assertEqual(name.text, "Example drug")
@@ -2964,7 +2979,7 @@ class CoreTests(unittest.TestCase):
                 '<return><template id="1.2.3" effectiveDate="2025-05-01" name="T"><element name="hl7:observation"/></template></return>',
                 encoding="utf-8",
             )
-            manifest = {"resources": {}}
+            manifest: dict[str, Any] = {"resources": {}}
             want = {"kind": "template", "id": "1.2.3", "effective_date": "2025-05-01", "project": "aktin-"}
             progress: list[str] = []
             with patch(
@@ -3003,7 +3018,7 @@ class CoreTests(unittest.TestCase):
             source = release_dir / "codesystems" / "cs_resource.source.xml"
             source.write_text('<codeSystem ref="2.16.840.1.113883.6.96" name="Snomedct" external="true" effectiveDate="2025-04-30T00:00:00" ident="hl7de-"><issueAssociation count="0"/></codeSystem>', encoding="utf-8")
             key = "codesystem:2.16.840.1.113883.6.96"
-            manifest = {"resources": {key: {
+            manifest: dict[str, Any] = {"resources": {key: {
                 "status": "ok",
                 "file": "codesystems/cs_resource.xml",
                 "project": "hl7de-",
@@ -3073,7 +3088,7 @@ class CoreTests(unittest.TestCase):
                 '<return><template id="1.2.3" effectiveDate="2025-05-01" name="Changed"/></return>',
                 encoding="utf-8",
             )
-            manifest = {"resources": {
+            manifest: dict[str, Any] = {"resources": {
                 "template:1.2.3@2025-05-01": {
                     "status": "ok",
                     "file": "templates/1.2.3_2025-05-01.xml",
@@ -3094,7 +3109,7 @@ class CoreTests(unittest.TestCase):
     def test_dynamic_fetch_records_and_reuses_resolved_effective_date(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
-            manifest = {"resources": {}}
+            manifest: dict[str, Any] = {"resources": {}}
             want = {"kind": "template", "id": "1.2.3", "effective_date": "", "project": "aktin-"}
             calls: list[str] = []
             def fake_get(url: str, **_: object) -> bytes:
@@ -3626,9 +3641,11 @@ class CoreTests(unittest.TestCase):
                 ".//{urn:hl7-org:v3}playingEntity/{urn:hl7-org:v3}code"
             )
             self.assertIsNotNone(code)
+            assert code is not None
             self.assertEqual(code.get("nullFlavor"), "OTH")
             self.assertIsNone(code.get("code"))
             original_text = code.find("{urn:hl7-org:v3}originalText")
+            assert original_text is not None
             self.assertEqual(original_text.text, "Latex")
 
             known = apply_transform({
@@ -3921,7 +3938,7 @@ class CoreTests(unittest.TestCase):
     def test_source_reference_redirects_before_wrong_project_analysis(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
-            manifest = {"resources": {}}
+            manifest: dict[str, Any] = {"resources": {}}
             owners: dict[str, str] = {}
             calls: list[str] = []
             want = {
@@ -3967,7 +3984,7 @@ class CoreTests(unittest.TestCase):
     def test_source_link_does_not_redirect_known_oid_owner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
-            manifest = {"resources": {}}
+            manifest: dict[str, Any] = {"resources": {}}
             owner_index: dict[str, str] = {}
             calls: list[str] = []
             want = {
@@ -4049,13 +4066,13 @@ class CoreTests(unittest.TestCase):
     def test_fetch_progress_does_not_claim_nonexistent_next_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
-            manifest = {"resources": {}}
+            manifest: dict[str, Any] = {"resources": {}}
             want = {"kind": "concept", "id": "1.2.3.4", "effective_date": "2020-01-01", "project": "pmp-"}
             progress: list[str] = []
 
             def missing(url: str, **_: object) -> bytes:
                 from urllib.error import HTTPError
-                raise HTTPError(url, 404, "missing", None, None)
+                raise HTTPError(url, 404, "missing", Message(), None)
 
             with patch("decor2hl7.retrieval.fetch.get", side_effect=missing):
                 self.assertIsNone(_fetch_want(
@@ -4069,14 +4086,14 @@ class CoreTests(unittest.TestCase):
     def test_settled_missing_is_persisted_and_reused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp)
-            manifest = {"resources": {}}
+            manifest: dict[str, Any] = {"resources": {}}
             want = {"kind": "dataset", "id": "1.2.3.4", "effective_date": "2020-01-01", "project": "aktin-"}
             persisted: list[dict[str, object]] = []
             def save() -> None:
                 persisted.append(dict(manifest["resources"]["dataset:1.2.3.4@2020-01-01"]))
             def missing(url: str, **_: object) -> bytes:
                 from urllib.error import HTTPError
-                raise HTTPError(url, 404, "missing", None, None)
+                raise HTTPError(url, 404, "missing", Message(), None)
             with patch("decor2hl7.retrieval.fetch.get", side_effect=missing) as mocked:
                 self.assertIsNone(_fetch_want(
                     release_dir, manifest, want, owners={"1.2.3": "aktin-"}, repositories=["aktin-", "pmp-"],
@@ -4367,6 +4384,15 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(data.normalize_value("1 keine", field, {}, {}), 1)
         self.assertEqual(data.normalize_value("raw-two", field, {"raw-two": "2 Schmerzreiz"}, {}), 2)
 
+    def test_ordinal_transform_can_explicitly_omit_a_value(self) -> None:
+        self.assertIs(
+            apply_transform(
+                {"canonical": "not applicable"},
+                {"type": "ordinal", "map": {"not applicable": None}},
+            ),
+            OMIT,
+        )
+
     def test_compiler_keeps_only_injective_explicit_ordinal_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transaction = Path(tmp) / "transaction.xml"
@@ -4536,6 +4562,8 @@ class CoreTests(unittest.TestCase):
         root = ET.fromstring('''<ClinicalDocument xmlns="urn:hl7-org:v3"><act><code code="FAMDEP"/><associatedPerson/></act><observation negationInd="false"><value><qualifier><name code="FSTAT"/></qualifier></value></observation><component><observation><templateId root="1.2.276.0.76.10.4046"/><targetSiteCode code="L"/></observation></component></ClinicalDocument>''')
         act = root.find('{urn:hl7-org:v3}act')
         observation = root.find('{urn:hl7-org:v3}observation')
+        assert act is not None
+        assert observation is not None
         self.assertIs(assertions.evaluate("not(hl7:code[@code='FAMDEP']) or hl7:associatedPerson", act, root), True)
         self.assertIs(assertions.evaluate("not(@negationInd='true' and hl7:value/hl7:qualifier/hl7:name/@code='FSTAT')", observation, root), True)
         self.assertIs(assertions.evaluate("count(hl7:component/hl7:observation[hl7:targetSiteCode/@code='L'])<=1", root, root), True)

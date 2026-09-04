@@ -559,7 +559,7 @@ def _render_node_once(
     if node.get("fixed_text") is not None:
         element.text = str(node.get("fixed_text"))
 
-    node_representation = next(
+    node_representation: Mapping[str, Any] = next(
         (
             cda.get("targets", {}).get(str(name), {}).get("value_representation")
             for name in node.get("targets", [])
@@ -825,7 +825,7 @@ def emit(
             role = str(node.get("system_value") or "")
             value = system_values.get(role)
             if node.get("kind") == "element" and role and value is not None:
-                representation_target = next(
+                representation_target: Mapping[str, Any] = next(
                     (
                         targets.get(str(name), {})
                         for name in node.get("targets", [])

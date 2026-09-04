@@ -75,9 +75,9 @@ def _parse_value_sets(root: ET.Element) -> dict[str, dict[str, Any]]:
         })
         for child in node:
             if local(child.tag) == "sourceCodeSystem" and child.get("id"):
-                system = child.get("id") or ""
-                if system not in entry["code_systems"]:
-                    entry["code_systems"].append(system)
+                source_system = child.get("id") or ""
+                if source_system not in entry["code_systems"]:
+                    entry["code_systems"].append(source_system)
         for child in node.iter():
             kind = local(child.tag)
             if kind == "include":
@@ -93,12 +93,13 @@ def _parse_value_sets(root: ET.Element) -> dict[str, dict[str, Any]]:
                 continue
             if kind not in {"concept", "exception"}:
                 continue
-            code, system = child.get("code"), child.get("codeSystem")
-            if not code or not system:
+            code = child.get("code")
+            code_system = child.get("codeSystem")
+            if not code or not code_system:
                 continue
             label = child_text(child, "name") or clean(child.get("displayName"))
             entry["codes"][code] = {
-                "label": label, "code_system": system,
+                "label": label, "code_system": code_system,
                 "display_name": child.get("displayName") or label,
             }
             if label:
@@ -932,9 +933,9 @@ def compile_model(
     code_systems = _parse_code_systems(root)
 
     extras: list[tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]] = []
-    for path in sorted(set(resource_paths)):
+    for resource_path in sorted(set(resource_paths)):
         try:
-            extra_root, _ = parse_file(path)
+            extra_root, _ = parse_file(resource_path)
         except ET.ParseError:
             continue
         extra_nodes = _parse_nodes(extra_root)
@@ -952,9 +953,9 @@ def compile_model(
             # different keys and are never merged here.
             value_sets[set_key] = _merge_value_set_entry(current, entry)
 
-    for path in sorted(set(terminology_paths)):
+    for terminology_path in sorted(set(terminology_paths)):
         try:
-            terminology_root, _ = parse_file(path)
+            terminology_root, _ = parse_file(terminology_path)
         except (ET.ParseError, OSError):
             continue
         for key, entry in _parse_value_sets(terminology_root).items():
@@ -979,7 +980,7 @@ def compile_model(
 
     groups: dict[str, dict[str, Any]] = {}
     fields: dict[str, dict[str, Any]] = {}
-    for path, node in nodes.items():
+    for model_path, node in nodes.items():
         common = {
             "name": node.get("name"),
             "description": node.get("description"),
@@ -991,11 +992,11 @@ def compile_model(
             "min": node.get("min"),
             "max": node.get("max"),
             "required": bool(node.get("required")),
-            "repeat": _repeat_for(path, nodes),
-            "repeat_chain": _repeat_chain_for(path, nodes),
+            "repeat": _repeat_for(model_path, nodes),
+            "repeat_chain": _repeat_chain_for(model_path, nodes),
         }
         if node.get("kind") == "group":
-            groups[path] = {**common, "repeating": bool(node.get("repeating")), "contains": node.get("contains")}
+            groups[model_path] = {**common, "repeating": bool(node.get("repeating")), "contains": node.get("contains")}
             continue
         field = {
             **common,
@@ -1033,7 +1034,7 @@ def compile_model(
         accepted_values = formal_values if formal_status["bound"] else logical_values
         if accepted_values:
             field["accepted_values"] = accepted_values
-        fields[path] = field
+        fields[model_path] = field
 
     meta = {
         "dataset_id": root.get("id"),

@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict, deque
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -33,7 +33,12 @@ from .datatypes import (
     value_representation,
 )
 from .extensions import CdaExtension, normalize_extensions
-from .core import element_definition, index_definitions, resolve_definition
+from .core import (
+    DefinitionIndex,
+    element_definition,
+    index_definitions,
+    resolve_definition,
+)
 from .model import (
     CdaValueTarget,
     Provenance,
@@ -478,7 +483,10 @@ def _apply_neutral_example_defaults(
                 node.get("representation_datatype") or node.get("datatype")
             )
             required = bool(node.get("mandatory")) or int(node.get("min") or 0) >= 1
-            origin = node.get("origin") if isinstance(node.get("origin"), Mapping) else {}
+            raw_origin = node.get("origin")
+            origin: Mapping[str, Any] = (
+                raw_origin if isinstance(raw_origin, Mapping) else {}
+            )
             template_key = (
                 str(origin.get("template_id") or ""),
                 str(origin.get("template_effective_date") or ""),
@@ -892,9 +900,14 @@ def _merge_node(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str
     merged_asserts: list[dict[str, Any]] = []
     seen_asserts: set[tuple[str, str, str]] = set()
     for assertion in list(parent.get("asserts", [])) + list(child.get("asserts", [])):
-        key = (str(assertion.get("test") or ""), str(assertion.get("role") or ""), str(assertion.get("message") or ""))
-        if key not in seen_asserts:
-            seen_asserts.add(key); merged_asserts.append(deepcopy(dict(assertion)))
+        assertion_key = (
+            str(assertion.get("test") or ""),
+            str(assertion.get("role") or ""),
+            str(assertion.get("message") or ""),
+        )
+        if assertion_key not in seen_asserts:
+            seen_asserts.add(assertion_key)
+            merged_asserts.append(deepcopy(dict(assertion)))
     result["asserts"] = merged_asserts
     result["lets"] = {**dict(parent.get("lets", {})), **dict(child.get("lets", {}))}
 
@@ -1177,7 +1190,10 @@ def _expand_nodes(
 def _model_source(
     node: Mapping[str, Any], path: str, part: str, source: str = "datatype",
 ) -> dict[str, Any]:
-    origin = node.get("origin") if isinstance(node.get("origin"), Mapping) else {}
+    raw_origin = node.get("origin")
+    origin: Mapping[str, Any] = (
+        raw_origin if isinstance(raw_origin, Mapping) else {}
+    )
     return {
         "template_id": str(origin.get("template_id") or ""),
         "template_effective_date": str(origin.get("template_effective_date") or ""),
@@ -1403,7 +1419,7 @@ def _expand_datatype_structure(
 
 
 def _materialize_polymorphic_structure(
-    nodes: list[dict[str, Any]], definitions: Mapping[str, Any],
+    nodes: list[dict[str, Any]], definitions: DefinitionIndex,
 ) -> None:
     """Expose reviewed complex datatype choices below one physical element.
 
@@ -1412,7 +1428,7 @@ def _materialize_polymorphic_structure(
     ``xsi_type`` metadata on the already-created parent element.
     """
     subtypes = getattr(definitions, "subtypes", {})
-    abstract_types = getattr(definitions, "abstract_types", set())
+    abstract_types: set[str] = definitions.abstract_types
 
     def visit(items: list[dict[str, Any]]) -> None:
         for node in items:
@@ -1484,6 +1500,29 @@ def _materialize_polymorphic_structure(
                 })
 
     visit(nodes)
+
+
+def _normalize_prohibited_subtrees(
+    nodes: Sequence[dict[str, Any]], *, inherited: bool = False,
+) -> None:
+    """Make prohibition effective for every synthesized descendant.
+
+    ART-DECOR may prohibit a particle whose CDA datatype or RIM class has
+    required children. Those children describe a value that cannot exist at
+    this document location; retaining their local cardinalities would make the
+    compiled tree self-contradictory and expose unreachable writable targets.
+    """
+    for node in nodes:
+        prohibited = inherited or (
+            str(node.get("conformance") or "").upper() == "NP"
+        )
+        if prohibited:
+            node["conformance"] = "NP"
+            node["min"] = 0
+            node["mandatory"] = False
+        _normalize_prohibited_subtrees(
+            node.get("children", []), inherited=prohibited
+        )
 
 
 def _transparent_element_children(
@@ -1944,6 +1983,11 @@ def _annotate_targets(
                         representation = value_representation(
                             attr.get("datatype"), attribute_name=str(attr.get("name") or "")
                         )
+                        if representation is None:
+                            raise ValueError(
+                                "unsupported CDA attribute datatype "
+                                f"{attr.get('datatype')!r} on {own_attr!r}"
+                            )
                         target["value_representation"] = representation.to_dict()
                         target.update(_typed_value_target(
                             own_attr,
@@ -2334,6 +2378,7 @@ def compile_cda(
     _expand_datatype_structure(document, definitions)
     if definitions:
         _materialize_polymorphic_structure(document, definitions)
+    _normalize_prohibited_subtrees(document)
     _apply_neutral_example_defaults(
         document,
         _neutral_coded_examples(reachable),
@@ -2355,7 +2400,9 @@ def compile_cda(
     _materialize_polymorphic_targets(document, targets, source_index)
     _annotate_quantity_range_targets(document, targets)
     assertions: list[dict[str, Any]] = []
-    def collect_assertions(nodes: list[Mapping[str, Any]], prefix: tuple[int, ...] = ()) -> None:
+    def collect_assertions(
+        nodes: Sequence[Mapping[str, Any]], prefix: tuple[int, ...] = (),
+    ) -> None:
         for index, node in enumerate(nodes):
             here = prefix + (index,)
             for assertion in node.get("asserts", []):
