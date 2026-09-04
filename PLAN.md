@@ -594,8 +594,8 @@ are normalized. Detailed steps in [Implementation instructions § F3](#f3-impl).
 | 4 | A5 for the 5 `build_degraded` items; S1/B1; E2; A7 finish | **done** — `build_degraded` 5 → 3, validator `complete: true`; B1 opened no medication slots | 0 (quality) |
 | 5 | F1–F3 | **done** (`4473eca`) — `gap` labels, `coverage_headline`, reproducible pinned hashes; CI workflow deliberately omitted | 0 (infra) |
 | 6 | B0, B3, C1, C6 (in that order) | **done** — B3 scoped to a reviewed union list, C1 supporting-only, C6 analysis-only with zero coverage effect | +0 direct; B3 unblocks phase 7 |
-| 7 | C5, D1 | not started | up to +4 medication datapoints |
-| 8 | C3 (`DEC-025`), C4 (`DEC-026`), C2 | not started | +1 (insurance), +1 (X-ray) subject to review |
+| 7 (next) | C5, then D1 | specified, **research done** — see [Phases 7–8 research](#phases-78--advance-research-complete); both startable now, D1's B3 precondition landed in `6396d62` | up to +4 medication datapoints |
+| 8 | C3 (`DEC-025`) only; **C4 closed as blocked**, C2 re-aimed | research done — C4 condition (b) fails on evidence, so `DEC-026` is not written; C2 has almost no dropped associations to recover | +1 (X-ray) subject to review; **the insurance +1 is withdrawn** |
 
 ## Phase 4 — LANDED
 
@@ -647,7 +647,11 @@ Blocked-upstream after all of the above (record, do not force): MRI region
 (no region-bearing leaf in the active statement); general event onset (no active
 onset statement, no association); secondary ICD-10 cardinality/relationship
 (`DEC-009`); any medication field needing an active-profile association that
-does not exist.
+does not exist; **and the insurance-relationship identifier** — the identified
+`associatedEntity/id` leaf is active and writable, but only on the sibling
+`1.2.276.0.76.10.2022` participant, and its association is held by a concept
+family (`…3.2.1.808` "Versicherungsnummer") with no identity edge to the
+selected concept (`…3.2.9.21582` "Identifikation") ([§ C4](#c4-research)).
 
 ## Decision-record impact
 
@@ -923,7 +927,7 @@ written, with three recorded deviations:
   assembled input.
 
 Phase 5 also produced the measurement that re-aims phase 6: see
-[Phase 6 § Status after phase 5](#phase-6--semantic-evidence-and-expansion-completeness-next).
+[Phase 6 § Status after phase 5](#phase-6--semantic-evidence-and-expansion-completeness-complete).
 
 **Already landed, do not redo.** A7 shipped most of the *assertions* that F2/F3
 describe: `tests/test_closure.py` pins `build_degraded ⊆ {3 reviewed items}`,
@@ -1875,6 +1879,279 @@ Sources: [IVL_TS: Interval (V3 Data Type), CDA core 2.0](https://build.fhir.org/
 | C1 | parser viability unknown | 78.2 % in-closure match; census corrected (29 choice branches, not 3 825) |
 | C6 | compiler change, size unknown | 8 new associations, all on groups, **zero** coverage effect — analysis only |
 | Ordering | B0 → B3 → C6 → C1 | **B0 → B3 → C1 → C6**, C6 last because it is now the cheapest and least consequential |
+
+### Phases 7–8 — advance research (COMPLETE)
+
+Measured against `main` @ `4473eca` while phase 6 was in flight, and re-verified
+against `6396d62` after phase 6 landed. None of it required ART-DECOR access.
+It settles one item outright (**C4 cannot fire as specified**), re-aims a second
+(**C2**), sizes the two phase-7 items, and turns up one latent compiler defect.
+
+Re-verification after phase 6: `PQ` still carries no `non_null_required_parts`
+(`cda/datatypes.py:80`), so the C5 finding stands; the ordinal-extraction regex
+in `compile/transaction.py:357` is untouched, so the C3 finding stands; and
+**D1's precondition is now satisfied** — see below.
+
+<a id="c5-research"></a>
+#### C5 (phase 7) — the source side is the whole job; the CDA side is nearly ready
+
+**Confirmed: the normalizer discards units.** `data.py:169` routes
+`quantity` / `decimal` / `duration` to `_parse_number(text, site)`, which returns
+a bare number. Any unit written by the source is lost before the value reaches a
+target.
+
+**The model already has a slot for the unit, and it is partly populated.**
+`compile/transaction.py:288` copies `unit` off the ART-DECOR `<quantity>` value
+domain into the compiled field. Of the two phase-7 fields:
+
+| Field | `type` | model `unit` | implementation note |
+|---|---|---|---|
+| `…dosierung.kontinuierliche_gabe_rate` | `quantity` | **`g/h`** | "Menge mit Einheit pro Zeiteinheit bei kontinuierlicher Gabe (Rate)" |
+| `…dosierung.dosismenge_und_einheit` | `quantity` | *(none)* | "Menge mit Einheit pro Dosis, kann auch einen Mengenbereich umfassen" |
+
+So the rate has a declared unit the compiler already knows, and the dose does
+not — its unit is genuinely per-value, and its note explicitly allows a
+**range**. That asymmetry should drive the design: a structured quantity needs
+`{value, unit}` at minimum and `{low, high, unit}` for the dose.
+
+**The CDA side is ready except for one guard.** `doseQuantity@20230130` compiles
+`value_representation {kind: "quantity", attributes: ["value","unit"],
+scalar_attribute: "value"}`, so the compound already exists — C5 step 2's
+premise holds. But `PQ` in `cda/datatypes.py` carries **no**
+`non_null_required_parts`; only `EIVL_TS` does. A bare magnitude can therefore
+be written with no unit today. **C5 step 2 is not satisfied**: add
+`non_null_required_parts=("@unit",)` (or the compiled-attribute equivalent) to
+`PQ` under `DEC-020`, and confirm the existing companion machinery
+(`bindings.py::non_null_requirement_problems`) reports it.
+
+**One design decision to record.** The unit has two possible carriers: the
+compound `attributes: ["value","unit"]` on the `doseQuantity` target itself, and
+the separate ART-DECOR-declared attribute target
+`…doseQuantity.unit@20230130` (`kind: "attribute"`, `@unit`, conformance `R`).
+Pick one and say why; writing both is a duplicate-assignment bug waiting to
+happen. Recommendation: the ART-DECOR-declared attribute target, because it is
+the one the template constrains and the one the generated validator asserts on.
+
+C5 is independent of phase 6 and can start immediately.
+
+<a id="d1-research"></a>
+#### D1 (phase 7) — the occurrence boundary already exists; only branch selection is missing
+
+All three colliding timestamps are `type: datetime`, `min 0 / max 1`, and carry
+the **same** `repeat_chain: ["masnahmen.medikamentose_therapie"]`:
+
+| Field | `runtime_blocked` |
+|---|---|
+| `…anwendungszeiten.startzeitpunkt_der_anwendung` | `SHARED(3)` |
+| `…anwendungszeiten.stoppzeitpunkt_der_anwendung` | `SHARED(3)` |
+| `…dosierung.zeitangabe.zeitpunkt` | `SHARED(3)` |
+
+So within one medication occurrence there is at most one of each — exactly the
+shape `SXPR_TS` with two or more `comp` children expects. And the enclosing
+occurrence rule is **already in place**: the reviewed mapping carries
+`for_each` on `masnahmen.medikamentose_therapie` →
+`medikamentose-therapie.entry`. D1 therefore needs no new occurrence rule; it
+needs **within-occurrence branch selection** only, and its sole blocker is
+[B3 finding 1](#b3-impl) materializing `comp_as_IVL_TS.low` / `.high` and
+`comp_as_PIVL_TS.period`.
+
+**Precondition met — B3 landed in `6396d62`.** `cda/datatypes.py` now carries
+`POLYMORPHIC_COMPLEX_ROOTS = frozenset({"SXCM_TS"})` — the reviewed one-entry
+union list this research recommended over an XSD-derived trigger — and the
+branches D1 needs are materialized and writable in the regenerated workspace:
+
+| Target | datatype | writable | locations |
+|---|---|---|---:|
+| `…SXPR_TS.comp_as_IVL_TS.low` | `IVXB_TS` | yes | 1 |
+| `…SXPR_TS.comp_as_IVL_TS.high` | `IVXB_TS` | yes | 1 |
+| `…SXPR_TS.comp_as_PIVL_TS.period` | `PQ` | yes | 1 |
+
+Sequencing consequence: D1 is a small rule on top of B3, not an independent
+workstream — start→`comp_as_IVL_TS.low`, stop→`comp_as_IVL_TS.high`,
+frequency→`comp_as_PIVL_TS.period`, inside the existing `for_each` occurrence.
+Do not let it grow an occurrence-alignment design of its own, and keep the
+`<choice> max 1` and `comp min 2` guards.
+
+<a id="c4-research"></a>
+#### C4 (phase 8) — **the premise fails; the rule cannot fire**
+
+C4 proposed a reviewed carry-forward rule with five conditions. Four hold. The
+fifth — the one that carries the *meaning* — does not.
+
+| Condition | Verdict | Evidence |
+|---|---|---|
+| (a) active **open** template `SPEC`-specializes a historical template | **holds** | `1.2.276.0.76.3.1.195.10.4` declares `<relationship type="SPEC" template="1.2.276.0.76.10.2022" flexibility="2014-08-25T00:00:00"/>` and `isClosed="false"` |
+| (b) the historical template has a static association **from a concept in the selected concept's identity lineage** to a specific leaf | **FAILS** | see below |
+| (c) CDA/RIM expansion exposes the same physical path in the active template | **holds** | `…195.10.4.associatedEntity.id`, `II`, writable, not prohibited |
+| (d) that path is unique and its occurrence inside the mapped container is unique | **holds** | exactly one `…/associatedEntity/hl7:id` target, one document location |
+| (e) an identifier root is configured | site configuration, unchanged | — |
+
+**Why (b) fails.** The historical template does declare the leaf and its
+meaning: `1.2.276.0.76.10.2022` carries
+`<element name="hl7:id" datatype="II" id="2.16.840.1.113883.2.6.77.9.26">` with
+`<desc language="de-DE">Versichertennummern</desc>`, under an
+`associatedEntity` fixed to `classCode="POLHOLD"`. Static associations to that
+element exist too, in the active document template's `<representingTemplate>`
+block: `concept ref="…3.2.2.808" elementId="…9.26"` and
+`concept ref="…3.2.3.808" elementId="…9.26"`.
+
+But those concepts are not in the selected concept's lineage. Tracing the two
+chains:
+
+- **selected:** `…3.2.9.21582` "Identifikation" → `inherit` `…3.2.6.21582` →
+  `inherit` `2.16.840.1.113883.2.6.77.2.2.60210` "Identifikation", declared in
+  an **external** dataset (`…2.6.77.2.2.60200@2015-10-15`);
+- **associated:** `…3.2.2.808` and `…3.2.3.808` → both `inherit`
+  `…3.2.1.808` **"Versicherungsnummer"** (2014-07-10, `valueDomain type="string"`).
+
+There is no `inherit` or `relationship` edge joining the two. They are
+independently rooted concept families that happen to denote the same clinical
+thing under different names. Note also that the active compiled target has
+`element_id: None` and provenance `source: "cda-rim"` — it carries no ART-DECOR
+element identity at all, so even a widened rule would have to match on physical
+path rather than element id.
+
+##### A `DEC-021` attachment cannot recover the dropped declarations
+
+Asked directly, the answer is no, for three independent reasons.
+
+1. **An attachment's payload is a contained template, not an element
+   declaration.** `DEC-021` fixes "transaction, document template, parent
+   template, parent element, CDA child particle, target template revision,
+   occurrence constraint and a review reason". `associatedEntity/id` is not a
+   standalone template; there is nothing to attach. The decision also *requires*
+   that "the named element is declared by that parent template" — an attachment
+   extends containment beneath an already-declared element, it does not create a
+   declaration.
+2. **Nothing is physically missing.** `DEC-021` exists for a leaf that openness
+   alone cannot identify. Here openness already did the work: the active
+   template is `isClosed="false"`, so the CDA core overlay supplies the omitted
+   `AssociatedEntity` children. Of the dropped parent declarations, `hl7:id`,
+   `hl7:addr`, `hl7:telecom` and `code/hl7:translation` are present and
+   **writable** under the active participant, and `hl7:associatedPerson` is
+   present (not writable). The physical gate is already open.
+3. **`DEC-021` explicitly does not supply meaning.** In its own words, "an open
+   template permits additional CDA-valid content but does not identify a
+   particular standalone template or establish dataset semantics." The blocker
+   is condition (b), and no containment mechanism touches it.
+
+##### The identified leaf is already active — in a sibling participant
+
+Investigating the attachment question produced a better characterization, and it
+corrects the framing this plan inherited from C4. The selected document
+instantiates **two** Kostenträger participants, both `typeCode="HLD"` with
+`associatedEntity/@classCode="POLHOLD"`:
+
+| Participant | Location | `associatedEntity/id` | Mapped? |
+|---|---|---|---|
+| `1.2.276.0.76.10.2022` (hl7de-) | `0.14.0` | `0.14.0.2.0`, **`element_id …2.6.77.9.26`**, `source: "template"`, writable, `<desc>Versichertennummern</desc>` | **nothing maps into it** |
+| `1.2.276.0.76.3.1.195.10.4` (AKTIN) | `0.15.0` | `0.15.0.1.5`, `element_id: None`, `source: "cda-rim"`, writable | the `hauptkostentrager` group selects this participant; `kostentrager.name` writes `scopingOrganization/name` at `0.15.0.1.1.1` |
+
+So this was never a "carry a historical declaration forward onto an expanded
+path" problem. The fully identified Versichertennummern leaf **exists, is active
+and is writable** — it sits in a sibling participant element that the dataset
+group is not mapped to. Using it would place one logical Kostenträger across two
+participant elements at two document locations: a `DEC-006` occurrence-identity
+question, not a `DEC-021` containment one, and one a reviewer must answer
+(both participants carry the same role codes and the document template declares
+both).
+
+**Conclusion.** The only bridge available is name similarity — the dataset's
+`implementation` text says "Versichertennummer" and the historical `<desc>` says
+"Versichertennummern" — which is precisely the German-label exception the plan
+forbids. **C4 is closed as blocked**, `DEC-026` is not written, and the
+sequencing table's "+1 (insurance)" is withdrawn. Reopening evidence is exact
+and narrow: an upstream `inherit`/`relationship` edge between the `…21582` and
+`…808` families, or a new static association from `…21582` to element
+`…9.26`. Record it in `known-issues.md` next to the existing insurance entry — or, alternatively, a
+reviewed `DEC-006` decision that the `0.14.0` participant is the same
+Kostenträger occurrence as `0.15.0`, which would still need its own concept
+association before anything could be written.
+
+<a id="c2-research"></a>
+#### C2 (phase 8) — re-aimed: there are almost no dropped associations to recover
+
+C2 was framed as "quantify how many of the `primary_evidence: NONE` fields have
+*some* association that is currently dropped, and why". Measured on the 25
+unmapped fields:
+
+| | Fields |
+|---|---:|
+| carry **no** terminology association at all in the compiled model | **24** |
+| carry at least one | 1 |
+
+There is essentially nothing to recover: the associations do not exist for these
+concepts, so neither reverse-`origconcept` traversal nor ambiguity-tolerant
+projection can produce them. (The lineage machinery is also not the obstacle —
+every unmapped field's concept has an `inherit` edge that resolves inside
+`project-evidence.xml` at the first hop.)
+
+What survives is the **second** bullet of C2, and [C4](#c4-research) is now its
+motivating case: projecting an association that exists on a *different but
+co-denoting* concept family. That is a much larger decision than "make
+`REVERSE_EDGES` symmetric" — it is the question of what counts as identity when
+two concept families were authored independently. Do not attempt it as a
+traversal fix; if it is attempted at all it needs its own decision record and a
+bar at least as strict as `DEC-015`.
+
+<a id="c3-research"></a>
+#### C3 (phase 8) — the crosswalk target is confirmed, and one latent defect sits next to it
+
+The X-ray `untersuchungsregion` domain is as described: `type: code`,
+`formal_terminology.status: "logical"`, **13 inline options**, three carrying
+LOINC-shaped synonyms (`30745-4` Thorax, `38008-9` Gesamte Wirbelsäule,
+`28561-9` Becken). The MRI counterpart has 15. C3's `concept_map` transform
+remains the right shape, and the maintainer-supplied table stays mandatory.
+
+**Latent defect found next door: numeric labels are misread as ordinals.**
+`compile/transaction.py:355-361` derives `option_details[...]["ordinal"]` with
+
+```python
+re.search(r"(?:^|\b)(?:rankin\s*)?([0-9]+)(?:\s*(?:punkt|score))?(?:\b|$)", text, re.I)
+```
+
+which takes the first integer in any synonym or label. Consequences in the
+reference model:
+
+- **X-ray region** — LOINC codes become ordinals: Thorax `30745`,
+  Gesamte Wirbelsäule `38008`, Becken `28561`.
+- **CEDIS** (189 members) — the CEDIS classification numbers become ordinals,
+  and range headers collide with members: `'101-150'` and `'101'` both yield
+  `101`, `'251-300'` and `'251'` both yield `251`, and so on. The result is
+  neither a rank nor injective.
+- **`notfallanamnese.unfallanamnese.unfallkinetik`** — "Sturz mit Fallhöhe
+  >= 3 m" and "Sturz mit Fallhöhe < 3 m" both yield ordinal `3`, extracted from
+  the physical measurement in the label. Wrong *and* non-injective, and it looks
+  plausible enough to pass review.
+- **GCS** (`gcs_augenoffnen`, `gcs_verbale_antwort`, …) — correct: "1 keine",
+  "2 auf Schmerzreiz" are genuine leading ranks. The heuristic works where the
+  number *is* the rank.
+
+**Impact today: latent, not live.** The reference mapping uses exactly one
+`ordinal` transform, on `scores.modified_rankin_skala_score`, and it supplies an
+explicit reviewed `map` rather than consuming the extracted metadata. So nothing
+is currently mis-rendered — but the wrong ordinals sit in `model.json` as
+evidence a reviewer may act on, and any future generated ordinal proposal would
+inherit them.
+
+Recommended fix, sized for a small standalone change rather than for C3:
+require the number to *be* the label's rank — anchored at the start of the label
+(`^\s*(\d+)\b`) or accompanied by an explicit rank word — and refuse to emit an
+ordinal when the extracted values are not injective across the option list.
+Emit nothing rather than a guess; `DEC-016`'s reasoning about logical domains
+already supports staying silent. Add it to `known-issues.md` "Transform
+vocabulary".
+
+<a id="phase78-summary"></a>
+#### What this research changes
+
+| Item | Before | After |
+|---|---|---|
+| C5 | "extend the value model" | source side is the whole job; CDA compound already exists; `PQ` needs `non_null_required_parts`; unit carrier must be chosen |
+| D1 | independent structural rule, "up to +4" | small rule on top of B3; occurrence boundary already exists; blocked until B3 lands |
+| C4 | `DEC-026`, "+1 (insurance)" | **closed as blocked** — condition (b) fails on evidence; no decision record; claim withdrawn |
+| C2 | recover dropped associations | 24 of 25 unmapped fields have no association to drop; survives only as the C4 co-denoting-concept question, which needs its own bar |
+| C3 | ConceptMap transform | unchanged and still justified; **plus** a latent ordinal-extraction defect to fix separately |
 
 ### Cross-cutting, specifiable now
 
