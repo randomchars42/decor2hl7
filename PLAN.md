@@ -2160,6 +2160,60 @@ singleton dispatcher or `DEC-025` was added.
 | C2 | recover dropped associations | 24 of 25 unmapped fields have no association to drop; survives only as the C4 co-denoting-concept question, which needs its own bar |
 | C3 | ConceptMap transform | ordinal defect fixed; ConceptMap/dispatcher deferred until the complete reviewed crosswalk and conflict policy exist |
 
+### Phase 9 — reviewable target candidates for human mapping (next)
+
+Goal: emit a complete CDA. Human review of the remaining 20 unmapped datapoints
+is accepted; what is missing is the input to that review. Evidence and the
+measured funnel are in
+[`docs/analyses/2026-09-04-target-candidate-generation.md`](docs/analyses/2026-09-04-target-candidate-generation.md).
+
+<a id="g1-impl"></a>
+#### G1. Per-datapoint candidate list
+
+Files: `compile/reports.py` (new candidate filter beside
+`_reportable_cda_target`; details renderer), `compile/mapping.py`
+(`_gap_classification`), `tests/test_core.py`, `tests/test_closure.py`,
+`docs/decisions.md` (`DEC-011` amend), `docs/mapping-documentation-format.md`.
+
+1. **New candidate filter** — do not reuse `_reportable_cda_target`; it is a
+   coverage-headline filter and excludes `datatype_derived` targets, which drops
+   CDA/RIM structural children such as `associatedEntity/id`. Keep non-derived
+   leaves **and** targets whose provenance `source` is `cda-rim` without
+   `datatype`; drop `source: datatype`; drop the fixed CDA-infrastructure
+   deny-list; drop already-selected targets. Pool: 594 document-wide.
+2. **Scope and type** — restrict to descendants of the datapoint's selected
+   container location, then to `logical_types` compatible with the model `type`.
+   Result: median 9 candidates, max 34, non-empty for all 20 context-bearing
+   unmapped datapoints.
+3. **Genericity by role, never by frequency.** A frequency rule deletes
+   `hl7:value`. Use the deny-list.
+4. **Render** grouped by contained template with IG-style columns (template,
+   path, datatype, cardinality, conformance, description, bound value sets) plus
+   `non_null_requires`, repeatable-ancestor and already-claimed flags, as a
+   "Possible targets (unproven)" section per unmapped field in
+   `cda-mapping-details.md`; persist the same list in `gap.reopens_with`.
+5. **Acceptance:** the X-ray Untersuchungsregion list surfaces the five reachable
+   fixed-code X-ray statements that
+   `docs/analyses/2026-09-02-seven-active-profile-gaps.md` found by hand.
+6. **Boundary:** an admissibility inventory, never evidence. Nothing
+   auto-selects; the coverage headline must not move. Amend `DEC-011` with the
+   filter rules so any list is reproducible.
+
+<a id="g2-impl"></a>
+#### G2. Declared-endpoint parity check (standing test)
+
+Parse `<element|attribute … id="…">` per in-closure template from the fetched
+sources and diff against `{target["element_id"]}` grouped by `template_id`.
+Measured today: 2 022 declared, 2 001 compiled, 24 differences in 8 templates —
+all fixed structural attributes (`classCode="PSN"`, `determinerCode="INSTANCE"`,
+`classCode="ORG"`) folded into the owning node's `fixed` map, which is correct.
+**Zero genuine losses**; the compiler is a strict superset of the IG's declared
+surface.
+
+Wire it as a test beside `tests/test_closure.py` so "does the compiler see
+everything AKTIN publishes?" becomes an assertion. A difference that is not a
+fixed structural attribute is a compiler defect.
+
 ### Cross-cutting, specifiable now
 
 <a id="e1-impl"></a>

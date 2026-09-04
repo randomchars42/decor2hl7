@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-04-target-candidate-generation.md`](2026-09-04-target-candidate-generation.md)
+  establishes the four-stage filter that turns the compiled target inventory
+  into a reviewable per-datapoint candidate list, and reconciles the compiled
+  leaves with the endpoints the AKTIN implementation guide publishes.
 - [`2026-09-04-phase-7-8-sequenced-implementation.md`](2026-09-04-phase-7-8-sequenced-implementation.md)
   records the safe ordinal-evidence guard and structured scalar/range quantity
   implementation, corrects the proposed blanket PQ-unit requirement, and
