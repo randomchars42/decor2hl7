@@ -2073,6 +2073,58 @@ def _annotate_non_null_requirements(
         visit_node(node, ())
 
 
+def _annotate_quantity_range_targets(
+    document: list[dict[str, Any]], targets: dict[str, dict[str, Any]],
+) -> None:
+    """Compile interval-bound target names into quantity representations.
+
+    The runtime must not infer CDA structure from datatype names or XPath
+    suffixes.  Once physical targets are known, the compiler can safely record
+    which direct children carry the low and high values of a quantity target.
+    """
+
+    def visit(node: dict[str, Any]) -> None:
+        own_name = str(node.get("target") or "")
+        target = targets.get(own_name, {})
+        representation = target.get("value_representation", {})
+        if (
+            node.get("kind") == "element"
+            and isinstance(representation, dict)
+            and representation.get("kind")
+            == ValueRepresentationKind.QUANTITY.value
+        ):
+            parts: dict[str, str] = {}
+            for part in ("low", "high"):
+                matches = [
+                    child for child in node.get("children", [])
+                    if child.get("kind") == "element"
+                    and _particle_key(str(child.get("name") or "")) == part
+                    and child.get("target") in targets
+                ]
+                if len(matches) != 1:
+                    continue
+                child_name = str(matches[0]["target"])
+                child_target = targets[child_name]
+                child_representation = child_target.get(
+                    "value_representation", {}
+                )
+                if (
+                    child_target.get("writable")
+                    and len(child_target.get("locations", [])) == 1
+                    and isinstance(child_representation, Mapping)
+                    and child_representation.get("kind")
+                    == ValueRepresentationKind.QUANTITY.value
+                ):
+                    parts[part] = child_name
+            if set(parts) == {"low", "high"}:
+                representation["range_targets"] = parts
+        for child in node.get("children", []):
+            visit(child)
+
+    for node in document:
+        visit(node)
+
+
 def _materialize_polymorphic_targets(
     document: list[dict[str, Any]],
     targets: dict[str, dict[str, Any]],
@@ -2301,6 +2353,7 @@ def compile_cda(
     source_index = _annotate_targets(document, targets)
     _annotate_non_null_requirements(document, targets)
     _materialize_polymorphic_targets(document, targets, source_index)
+    _annotate_quantity_range_targets(document, targets)
     assertions: list[dict[str, Any]] = []
     def collect_assertions(nodes: list[Mapping[str, Any]], prefix: tuple[int, ...] = ()) -> None:
         for index, node in enumerate(nodes):

@@ -4367,6 +4367,141 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(data.normalize_value("1 keine", field, {}, {}), 1)
         self.assertEqual(data.normalize_value("raw-two", field, {"raw-two": "2 Schmerzreiz"}, {}), 2)
 
+    def test_compiler_keeps_only_injective_explicit_ordinal_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transaction = Path(tmp) / "transaction.xml"
+            transaction.write_text('''<dataset>
+              <concept type="item" shortName="score" id="score"><name>Score</name>
+                <valueDomain type="ordinal"><conceptList>
+                  <concept><name>1 keine</name></concept>
+                  <concept><name>2 Schmerzreiz</name></concept>
+                </conceptList></valueDomain>
+              </concept>
+              <concept type="item" shortName="xray" id="xray"><name>Röntgen</name>
+                <valueDomain type="code"><conceptList>
+                  <concept><name>Thorax</name><synonym>30745-4</synonym></concept>
+                  <concept><name>Wirbelsäule</name><synonym>38008-9</synonym></concept>
+                </conceptList></valueDomain>
+              </concept>
+              <concept type="item" shortName="explicit" id="explicit"><name>Expliziter Rang</name>
+                <valueDomain type="ordinal"><conceptList>
+                  <concept><name>Rank 4</name></concept>
+                  <concept><name>Fünf Punkte 5</name><synonym>5 Punkte</synonym></concept>
+                </conceptList></valueDomain>
+              </concept>
+              <concept type="item" shortName="fall" id="fall"><name>Fallhöhe</name>
+                <valueDomain type="code"><conceptList>
+                  <concept><name>Sturz mit Fallhöhe &gt;= 3 m</name></concept>
+                  <concept><name>Sturz mit Fallhöhe &lt; 3 m</name></concept>
+                </conceptList></valueDomain>
+              </concept>
+              <concept type="item" shortName="taxonomy" id="taxonomy"><name>Taxonomie</name>
+                <valueDomain type="code"><conceptList>
+                  <concept><name>101 Hauptgruppe</name></concept>
+                  <concept><name>101 Untergruppe</name></concept>
+                  <concept><name>102 Andere Gruppe</name></concept>
+                </conceptList></valueDomain>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            model = compile_model(transaction)
+
+        score = model["fields"]["score"]["logical_domain"]["options"]
+        self.assertEqual([score[label]["ordinal"] for label in score], [1, 2])
+        explicit = model["fields"]["explicit"]["logical_domain"]["options"]
+        self.assertEqual(
+            [explicit[label]["ordinal"] for label in explicit], [4, 5]
+        )
+        for path in ("xray", "fall", "taxonomy"):
+            options = model["fields"][path]["logical_domain"]["options"]
+            self.assertFalse(any("ordinal" in info for info in options.values()))
+
+    def test_quantity_normalization_preserves_scalar_and_range_units(self) -> None:
+        self.assertEqual(
+            data.normalize_value("2.5 mg", {"type": "quantity"}, {}, {}),
+            {"value": 2.5, "unit": "mg"},
+        )
+        self.assertEqual(
+            data.normalize_value("1-2 {tablet}", {"type": "quantity"}, {}, {}),
+            {
+                "low": {"value": 1, "unit": "{tablet}"},
+                "high": {"value": 2, "unit": "{tablet}"},
+            },
+        )
+        self.assertEqual(
+            data.normalize_value("3", {"type": "quantity", "unit": "g/h"}, {}, {}),
+            {"value": 3, "unit": "g/h"},
+        )
+        self.assertEqual(
+            data.normalize_value("1e3 mg", {"type": "quantity"}, {}, {}),
+            {"value": 1000, "unit": "mg"},
+        )
+        self.assertEqual(
+            data.normalize_value("1,5–2,5 mg", {"type": "quantity"}, {}, {
+                "input": {"decimal_separator": ","},
+            }),
+            {
+                "low": {"value": 1.5, "unit": "mg"},
+                "high": {"value": 2.5, "unit": "mg"},
+            },
+        )
+
+    def test_quantity_normalization_rejects_ambiguous_or_invalid_shapes(self) -> None:
+        with self.assertRaisesRegex(ValueError, "conflicts with fixed dataset unit"):
+            data.normalize_value(
+                "3 mg", {"type": "quantity", "unit": "g"}, {}, {}
+            )
+        with self.assertRaisesRegex(ValueError, "low exceeds high"):
+            data.normalize_value("3-2 mg", {"type": "quantity"}, {}, {})
+        with self.assertRaisesRegex(ValueError, "must contain low, high"):
+            data.normalize_value(
+                {"low": 1}, {"type": "quantity"}, {}, {}
+            )
+        with self.assertRaisesRegex(ValueError, "must be finite"):
+            data.normalize_value(float("inf"), {"type": "quantity"}, {}, {})
+
+    def test_quantity_validation_checks_each_range_bound(self) -> None:
+        problems = validate.validate_record(
+            {"values": {"dose": {
+                "low": {"value": 0, "unit": "mg"},
+                "high": {"value": 12, "unit": "mg"},
+            }}},
+            {"fields": {"dose": {
+                "type": "quantity", "min_value": 1, "max_value": 10,
+                "repeat_chain": [],
+            }}},
+        )
+        self.assertEqual(
+            [(item["path"], item["message"]) for item in problems],
+            [
+                ("dose.low", "0 is below minimum 1"),
+                ("dose.high", "12 is above maximum 10"),
+            ],
+        )
+
+    def test_quantity_range_requires_compiled_bound_targets(self) -> None:
+        assignments, problems = build_assignments(
+            {"values": {"dose": {
+                "low": {"value": 1, "unit": "mg"},
+                "high": {"value": 2, "unit": "mg"},
+            }}},
+            {"fields": {"dose": {"type": "quantity", "repeat_chain": []}}},
+            {"targets": {"Dose.value": {
+                "writable": True, "renderable": True, "prohibited": False,
+                "locations": ["0"], "repeat_ancestors": [],
+                "value_representation": {
+                    "kind": "quantity", "attributes": ["value", "unit"],
+                    "scalar_attribute": "value",
+                },
+            }}},
+            {"fields": {"dose": "Dose.value"}},
+            {},
+        )
+        self.assertEqual(assignments, {})
+        self.assertEqual(
+            problems,
+            ["CDA target 'Dose.value' has no compiled low/high quantity targets"],
+        )
+
     def test_state_fingerprint_changes_with_transformation_context(self) -> None:
         record = {"values": {"a": 1}, "instances": {}}
         self.assertNotEqual(

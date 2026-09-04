@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import math
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -66,6 +67,121 @@ def _parse_number(raw: str, site: Mapping[str, Any], integer: bool = False) -> i
     if integer or number.is_integer():
         return int(number)
     return number
+
+
+_NUMBER_TOKEN = r"[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+-]?\d+)?"
+_QUANTITY_RANGE = re.compile(
+    rf"^\s*({_NUMBER_TOKEN})\s*(?:\.\.|[-–—])\s*({_NUMBER_TOKEN})(?:\s*(.*?))?\s*$"
+)
+_QUANTITY_SCALAR = re.compile(
+    rf"^\s*({_NUMBER_TOKEN})(?:(?:\s+|(?=[A-Za-zµμ%{{]))(.*?))?\s*$"
+)
+
+
+def _quantity_number(raw: Any, site: Mapping[str, Any], label: str) -> int | float:
+    if isinstance(raw, bool):
+        raise ValueError(f"quantity {label} must be numeric")
+    if isinstance(raw, (int, float)):
+        number = float(raw)
+        if not math.isfinite(number):
+            raise ValueError(f"quantity {label} must be finite")
+        return int(raw) if number.is_integer() else number
+    text = str(raw).strip()
+    if not re.fullmatch(_NUMBER_TOKEN, text):
+        raise ValueError(f"quantity {label} {raw!r} is not numeric")
+    number = _parse_number(text, site)
+    if not math.isfinite(float(number)):
+        raise ValueError(f"quantity {label} must be finite")
+    return number
+
+
+def _quantity_unit(raw: Any, fixed: Any) -> str | None:
+    unit = str(raw).strip() if raw not in (None, "") else None
+    fixed_unit = str(fixed).strip() if fixed not in (None, "") else None
+    if unit and fixed_unit and unit != fixed_unit:
+        raise ValueError(
+            f"quantity unit {unit!r} conflicts with fixed dataset unit {fixed_unit!r}"
+        )
+    return unit or fixed_unit
+
+
+def _quantity_bound(
+    raw: Any,
+    shared_unit: str | None,
+    fixed_unit: Any,
+    site: Mapping[str, Any],
+    label: str,
+) -> dict[str, Any]:
+    if isinstance(raw, Mapping):
+        extra = set(raw) - {"value", "unit"}
+        if extra or "value" not in raw:
+            raise ValueError(
+                f"quantity {label} must contain only value and optional unit"
+            )
+        value = _quantity_number(raw["value"], site, label)
+        unit = _quantity_unit(raw.get("unit") or shared_unit, fixed_unit)
+    else:
+        value = _quantity_number(raw, site, label)
+        unit = _quantity_unit(shared_unit, fixed_unit)
+    return {"value": value, **({"unit": unit} if unit else {})}
+
+
+def _parse_quantity(
+    raw: Any, field: Mapping[str, Any], site: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return the target-neutral scalar/range quantity representation."""
+    fixed_unit = field.get("unit")
+    if isinstance(raw, Mapping):
+        if raw.get("nullFlavor"):
+            return dict(raw)
+        if "low" in raw or "high" in raw:
+            extra = set(raw) - {"low", "high", "unit"}
+            if extra or "low" not in raw or "high" not in raw:
+                raise ValueError(
+                    "quantity range must contain low, high, and optional unit"
+                )
+            shared = _quantity_unit(raw.get("unit"), fixed_unit)
+            low = _quantity_bound(raw["low"], shared, fixed_unit, site, "low")
+            high = _quantity_bound(raw["high"], shared, fixed_unit, site, "high")
+            low_unit = low.get("unit")
+            high_unit = high.get("unit")
+            if low_unit and high_unit and low_unit != high_unit:
+                raise ValueError(
+                    f"quantity range units differ: {low_unit!r} and {high_unit!r}"
+                )
+            common = low_unit or high_unit
+            if common:
+                low.setdefault("unit", common)
+                high.setdefault("unit", common)
+            if low["value"] > high["value"]:
+                raise ValueError("quantity range low exceeds high")
+            return {"low": low, "high": high}
+        extra = set(raw) - {"value", "unit"}
+        if extra or "value" not in raw:
+            raise ValueError(
+                "quantity must contain value and optional unit, or low and high"
+            )
+        return _quantity_bound(raw, None, fixed_unit, site, "value")
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return _quantity_bound(raw, None, fixed_unit, site, "value")
+
+    text = str(raw).strip()
+    match = _QUANTITY_RANGE.fullmatch(text)
+    if match:
+        unit = _quantity_unit(match.group(3), fixed_unit)
+        low = _quantity_bound(match.group(1), unit, fixed_unit, site, "low")
+        high = _quantity_bound(match.group(2), unit, fixed_unit, site, "high")
+        if low["value"] > high["value"]:
+            raise ValueError("quantity range low exceeds high")
+        return {"low": low, "high": high}
+    match = _QUANTITY_SCALAR.fullmatch(text)
+    if match:
+        return _quantity_bound(
+            match.group(1), match.group(2), fixed_unit, site, "value"
+        )
+    raise ValueError(
+        f"quantity value {raw!r} is neither a scalar nor a low-high range"
+    )
 
 
 def _parse_boolean(raw: str, site: Mapping[str, Any]) -> bool:
@@ -156,8 +272,10 @@ def normalize_value(
 ) -> Any:
     if is_null(raw, site):
         return None
-    text = str(raw).strip()
     kind = str(field.get("type") or "text")
+    if kind == "quantity":
+        return _parse_quantity(raw, field, site)
+    text = str(raw).strip()
     if kind == "code":
         return _canonical_code(text, field, translations, site)
     if kind == "ordinal":
@@ -166,7 +284,7 @@ def normalize_value(
         return _parse_datetime(text, field, site)
     if kind == "date":
         return _parse_date(text)
-    if kind in {"quantity", "decimal", "duration"}:
+    if kind in {"decimal", "duration"}:
         return _parse_number(text, site)
     if kind == "integer":
         return _parse_number(text, site, integer=True)
@@ -203,14 +321,16 @@ def _normalize_transformed(
 ) -> Any:
     if value is OMIT or value is None:
         return None
+    kind = str(field.get("type") or "text")
+    if kind == "quantity":
+        return _parse_quantity(value, field, site)
     if isinstance(value, Mapping):
         return dict(value)
-    kind = str(field.get("type") or "text")
     if kind == "boolean" and isinstance(value, bool):
         return value
     if kind == "integer" and isinstance(value, int) and not isinstance(value, bool):
         return value
-    if kind in {"quantity", "decimal", "duration"} and isinstance(value, (int, float)) and not isinstance(value, bool):
+    if kind in {"decimal", "duration"} and isinstance(value, (int, float)) and not isinstance(value, bool):
         return value
     return normalize_value(value, field, translations, site)
 

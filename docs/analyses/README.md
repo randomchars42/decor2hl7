@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-04-phase-7-8-sequenced-implementation.md`](2026-09-04-phase-7-8-sequenced-implementation.md)
+  records the safe ordinal-evidence guard and structured scalar/range quantity
+  implementation, corrects the proposed blanket PQ-unit requirement, and
+  records why dose/rate, medication timing, and X-ray singleton dispatch remain
+  closed at their semantic evidence gates.
 - [`2026-09-03-phase-6-structural-evidence.md`](2026-09-03-phase-6-structural-evidence.md)
   records the structural-container gap correction, the scoped `SXCM_TS`
   subtype expansion, generated-Schematron supporting evidence, the corrected

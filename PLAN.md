@@ -445,22 +445,25 @@ not carried forward automatically.
 ### C5. Quantity / unit bridge for dose and rate
 
 Active UV Subordinate administration exposes `doseQuantity` and `rateQuantity`
-(`docs/analyses/2026-09-02-residual-mapping-boundaries.md`), but "the current
-source normalizer does not preserve unit/range semantics and no unambiguous
-bridge exists" for `dosismenge_und_einheit` and `kontinuierliche_gabe_rate`.
+(`docs/analyses/2026-09-02-residual-mapping-boundaries.md`). That analysis found
+two separate blockers for `dosismenge_und_einheit` and
+`kontinuierliche_gabe_rate`: the source normalizer did not preserve unit/range
+semantics, and no unambiguous source-to-target bridge existed.
 
-- Step 1 (target-neutral model): extend the dataset value model so a source
-  value carrying a magnitude + unit (and optionally a range) is normalized to a
-  structured quantity, not a string. Touch `data.py` normalization,
-  `compile/transaction.py`, `model.json` schema. This is reusable for FHIR
-  `Quantity` later (`DEC-005`).
-- Step 2 (CDA target): confirm `cda/datatypes.py` `PQ` representation exposes
-  `value` + `unit` as a compiled compound with `non_null_requires` (`DEC-020`)
-  so a bare magnitude cannot be written without a unit.
-- Step 3 (bridge): the two source fields still collide with each other only if
-  they target the same leaf; they do not (`doseQuantity` vs `rateQuantity`), so
-  once units are preserved a `TERM`/`DESC`/`ARTDECOR_ROLE` candidate below the
-  already-mapped administration context may become unique. Re-run the audit.
+- Step 1 (target-neutral model): **done 2026-09-04**. Quantity input preserves
+  scalar `{value, unit?}` and range `{low, high}` forms, supplies a declared
+  field unit when absent, and validates unit/range shape. This is reusable for
+  FHIR `Quantity` later (`DEC-005`).
+- Step 2 (CDA target): **done 2026-09-04, with the draft premise corrected**.
+  Compilation records the exact writable low/high targets for an interval
+  quantity and bindings project ranges through that metadata. The pinned CDA
+  R2 schema declares `PQ/@unit` optional with default `1`; no blanket
+  `non_null_requires` rule is added.
+- Step 3 (bridge): **evidence gate not met**. Re-running the local evidence
+  review found no formal association, exact implementation path, or reviewed
+  crosswalk selecting `doseQuantity` and `rateQuantity`. Both accepted mapping
+  entries remain `null`; datatype compatibility and distinct leaf names do not
+  establish clinical correspondence.
 - Decision-record impact: extend `DEC-013` (value model) with the structured
   quantity; no new clinical decision.
 
@@ -502,6 +505,13 @@ runtime correctly reports `SHARED(3)` instead of guessing.
 - If expansion surfaces the branches: add/extend a structural rule mapping
   start→`IVL_TS/low`, stop→`IVL_TS/high`, frequency→the repetition branch,
   reusing the existing `for_each` occurrence boundary (`DEC-007`, `DEC-017`).
+
+**2026-09-04 outcome:** expansion has surfaced the physical branches, but the
+semantic gate is not met. The source provides three datetimes and no formal
+association that selects the interval/repetition alternatives; in particular,
+the dosage `zeitpunkt` cannot be converted into the quantity carried by
+`PIVL_TS/period`. The selected choice and its `comp` cardinality also require a
+reviewed within-occurrence construction rule. No timing mapping is added.
 
 ### D2. Additional scalar transforms — only when a concrete field needs one
 
@@ -594,8 +604,8 @@ are normalized. Detailed steps in [Implementation instructions § F3](#f3-impl).
 | 4 | A5 for the 5 `build_degraded` items; S1/B1; E2; A7 finish | **done** — `build_degraded` 5 → 3, validator `complete: true`; B1 opened no medication slots | 0 (quality) |
 | 5 | F1–F3 | **done** (`4473eca`) — `gap` labels, `coverage_headline`, reproducible pinned hashes; CI workflow deliberately omitted | 0 (infra) |
 | 6 | B0, B3, C1, C6 (in that order) | **done** — B3 scoped to a reviewed union list, C1 supporting-only, C6 analysis-only with zero coverage effect | +0 direct; B3 unblocks phase 7 |
-| 7 (next) | C5, then D1 | specified, **research done** — see [Phases 7–8 research](#phases-78--advance-research-complete); both startable now, D1's B3 precondition landed in `6396d62` | up to +4 medication datapoints |
-| 8 | C3 (`DEC-025`) only; **C4 closed as blocked**, C2 re-aimed | research done — C4 condition (b) fails on evidence, so `DEC-026` is not written; C2 has almost no dropped associations to recover | +1 (X-ray) subject to review; **the insurance +1 is withdrawn** |
+| 7 | C5, then D1 | **mechanics done 2026-09-04** — structured quantities and compiled range targets landed; dose/rate and timing mappings remain closed at the semantic gate | 0; no clinical selection invented |
+| 8 | C3 (`DEC-025`) only; **C4 closed as blocked**, C2 re-aimed | ordinal defect fixed 2026-09-04; X-ray dispatcher/`DEC-025` deferred because the complete reviewed 13-row crosswalk and conflict policy do not exist | 0; **the insurance +1 is withdrawn** |
 
 ## Phase 4 — LANDED
 
@@ -1887,18 +1897,20 @@ against `6396d62` after phase 6 landed. None of it required ART-DECOR access.
 It settles one item outright (**C4 cannot fire as specified**), re-aims a second
 (**C2**), sizes the two phase-7 items, and turns up one latent compiler defect.
 
-Re-verification after phase 6: `PQ` still carries no `non_null_required_parts`
-(`cda/datatypes.py:80`), so the C5 finding stands; the ordinal-extraction regex
-in `compile/transaction.py:357` is untouched, so the C3 finding stands; and
-**D1's precondition is now satisfied** — see below.
+Implementation status after the 2026-09-04 sequenced pass: structured
+quantities and compiled interval-bound assignment are implemented; the ordinal
+extractor is guarded; and **D1's physical B3 precondition is satisfied**. The
+dose/rate, timing, and X-ray selections remain closed because their semantic
+evidence gates are not satisfied. See the durable outcome in
+[`docs/analyses/2026-09-04-phase-7-8-sequenced-implementation.md`](docs/analyses/2026-09-04-phase-7-8-sequenced-implementation.md).
 
 <a id="c5-research"></a>
-#### C5 (phase 7) — the source side is the whole job; the CDA side is nearly ready
+#### C5 (phase 7) — representation mechanics complete; semantic bridge absent
 
-**Confirmed: the normalizer discards units.** `data.py:169` routes
-`quantity` / `decimal` / `duration` to `_parse_number(text, site)`, which returns
-a bare number. Any unit written by the source is lost before the value reaches a
-target.
+**Original finding (now fixed): the normalizer discarded units.** `data.py:169`
+routed `quantity` / `decimal` / `duration` to `_parse_number(text, site)`, which
+returned a bare number. Any unit written by the source was lost before the value
+reached a target.
 
 **The model already has a slot for the unit, and it is partly populated.**
 `compile/transaction.py:288` copies `unit` off the ART-DECOR `<quantity>` value
@@ -1914,25 +1926,20 @@ not — its unit is genuinely per-value, and its note explicitly allows a
 **range**. That asymmetry should drive the design: a structured quantity needs
 `{value, unit}` at minimum and `{low, high, unit}` for the dose.
 
-**The CDA side is ready except for one guard.** `doseQuantity@20230130` compiles
+**The CDA side exposes both scalar and interval structure.** `doseQuantity@20230130` compiles
 `value_representation {kind: "quantity", attributes: ["value","unit"],
 scalar_attribute: "value"}`, so the compound already exists — C5 step 2's
-premise holds. But `PQ` in `cda/datatypes.py` carries **no**
-`non_null_required_parts`; only `EIVL_TS` does. A bare magnitude can therefore
-be written with no unit today. **C5 step 2 is not satisfied**: add
-`non_null_required_parts=("@unit",)` (or the compiled-attribute equivalent) to
-`PQ` under `DEC-020`, and confirm the existing companion machinery
-(`bindings.py::non_null_requirement_problems`) reports it.
+premise holds. The draft's proposed global `PQ/@unit` requirement does not: the
+pinned CDA R2 XSD marks that attribute optional with default `1`, and active
+examples permit unitless counts. The implemented rule preserves a provided or
+field-declared unit on the compound representation and records exact low/high
+child target names for ranges; it does not create a universal companion rule.
 
-**One design decision to record.** The unit has two possible carriers: the
-compound `attributes: ["value","unit"]` on the `doseQuantity` target itself, and
-the separate ART-DECOR-declared attribute target
-`…doseQuantity.unit@20230130` (`kind: "attribute"`, `@unit`, conformance `R`).
-Pick one and say why; writing both is a duplicate-assignment bug waiting to
-happen. Recommendation: the ART-DECOR-declared attribute target, because it is
-the one the template constrains and the one the generated validator asserts on.
-
-C5 is independent of phase 6 and can start immediately.
+**2026-09-04 outcome.** The source representation and CDA assignment mechanics
+are complete under amended `DEC-013`. The clinical bridge is not: neither field
+has a formal association or reviewed crosswalk to the active subordinate
+administration leaves. `dosismenge_und_einheit` and
+`kontinuierliche_gabe_rate` therefore remain `null` in the accepted mapping.
 
 <a id="d1-research"></a>
 #### D1 (phase 7) — the occurrence boundary already exists; only branch selection is missing
@@ -1946,14 +1953,12 @@ the **same** `repeat_chain: ["masnahmen.medikamentose_therapie"]`:
 | `…anwendungszeiten.stoppzeitpunkt_der_anwendung` | `SHARED(3)` |
 | `…dosierung.zeitangabe.zeitpunkt` | `SHARED(3)` |
 
-So within one medication occurrence there is at most one of each — exactly the
-shape `SXPR_TS` with two or more `comp` children expects. And the enclosing
+So within one medication occurrence there is at most one of each. The enclosing
 occurrence rule is **already in place**: the reviewed mapping carries
 `for_each` on `masnahmen.medikamentose_therapie` →
-`medikamentose-therapie.entry`. D1 therefore needs no new occurrence rule; it
-needs **within-occurrence branch selection** only, and its sole blocker is
-[B3 finding 1](#b3-impl) materializing `comp_as_IVL_TS.low` / `.high` and
-`comp_as_PIVL_TS.period`.
+`medikamentose-therapie.entry`. D1 needs no new outer occurrence rule, but it
+still needs approved **within-occurrence branch selection and construction**;
+physical materialization alone is not semantic evidence.
 
 **Precondition met — B3 landed in `6396d62`.** `cda/datatypes.py` now carries
 `POLYMORPHIC_COMPLEX_ROOTS = frozenset({"SXCM_TS"})` — the reviewed one-entry
@@ -1966,11 +1971,13 @@ branches D1 needs are materialized and writable in the regenerated workspace:
 | `…SXPR_TS.comp_as_IVL_TS.high` | `IVXB_TS` | yes | 1 |
 | `…SXPR_TS.comp_as_PIVL_TS.period` | `PQ` | yes | 1 |
 
-Sequencing consequence: D1 is a small rule on top of B3, not an independent
-workstream — start→`comp_as_IVL_TS.low`, stop→`comp_as_IVL_TS.high`,
-frequency→`comp_as_PIVL_TS.period`, inside the existing `for_each` occurrence.
-Do not let it grow an occurrence-alignment design of its own, and keep the
-`<choice> max 1` and `comp min 2` guards.
+Sequencing consequence: D1 remains a rule on top of B3 rather than an
+independent outer-occurrence workstream. The tempting start→low and stop→high
+correspondence still lacks a formal source bridge, while the source dosage
+`zeitpunkt` is a datetime and cannot supply the quantity represented by
+`PIVL_TS.period`. A future rule must provide the missing semantics and preserve
+the `<choice> max 1` and `comp min 2` guards. No rule was added in the
+2026-09-04 pass.
 
 <a id="c4-research"></a>
 #### C4 (phase 8) — **the premise fails; the rule cannot fire**
@@ -2134,24 +2141,24 @@ is currently mis-rendered — but the wrong ordinals sit in `model.json` as
 evidence a reviewer may act on, and any future generated ordinal proposal would
 inherit them.
 
-Recommended fix, sized for a small standalone change rather than for C3:
-require the number to *be* the label's rank — anchored at the start of the label
-(`^\s*(\d+)\b`) or accompanied by an explicit rank word — and refuse to emit an
-ordinal when the extracted values are not injective across the option list.
-Emit nothing rather than a guess; `DEC-016`'s reasoning about logical domains
-already supports staying silent. Add it to `known-issues.md` "Transform
-vocabulary".
+**Fixed 2026-09-04:** a number must now be a non-hyphenated leading rank or be
+accompanied by an explicit rank/score word. If extracted values are not
+injective across the option list, the compiler emits no ordinal metadata for
+that list. Regression tests retain genuine GCS ranks and reject the X-ray,
+CEDIS, and fall-height false positives. C3 itself remains deferred: no complete
+reviewed 13-row crosswalk or repeat/coalescing/conflict policy exists, so no
+singleton dispatcher or `DEC-025` was added.
 
 <a id="phase78-summary"></a>
 #### What this research changes
 
 | Item | Before | After |
 |---|---|---|
-| C5 | "extend the value model" | source side is the whole job; CDA compound already exists; `PQ` needs `non_null_required_parts`; unit carrier must be chosen |
-| D1 | independent structural rule, "up to +4" | small rule on top of B3; occurrence boundary already exists; blocked until B3 lands |
+| C5 | "extend the value model" | structured scalar/range quantities and compiled interval targets implemented; no global PQ-unit rule; dose/rate remain unmapped without a semantic bridge |
+| D1 | independent structural rule, "up to +4" | physical branches exist and the outer occurrence boundary is reusable; branch meaning and compound construction remain unproved |
 | C4 | `DEC-026`, "+1 (insurance)" | **closed as blocked** — condition (b) fails on evidence; no decision record; claim withdrawn |
 | C2 | recover dropped associations | 24 of 25 unmapped fields have no association to drop; survives only as the C4 co-denoting-concept question, which needs its own bar |
-| C3 | ConceptMap transform | unchanged and still justified; **plus** a latent ordinal-extraction defect to fix separately |
+| C3 | ConceptMap transform | ordinal defect fixed; ConceptMap/dispatcher deferred until the complete reviewed crosswalk and conflict policy exist |
 
 ### Cross-cutting, specifiable now
 

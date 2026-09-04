@@ -41,10 +41,10 @@ def write_datatype_schema(root: Path) -> Path:
   </xs:sequence><xs:attribute name="use" type="xs:string"/></xs:complexType>
   <xs:complexType name="PN"><xs:complexContent><xs:extension base="EN"/></xs:complexContent></xs:complexType>
   <xs:complexType name="ENXP"><xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent></xs:complexType>
-  <xs:complexType name="IVL_PQ"><xs:sequence>
+  <xs:complexType name="IVL_PQ"><xs:complexContent><xs:extension base="PQ"><xs:sequence>
     <xs:element name="low" type="PQ" minOccurs="0"/>
     <xs:element name="high" type="PQ" minOccurs="0"/>
-  </xs:sequence></xs:complexType>
+  </xs:sequence></xs:extension></xs:complexContent></xs:complexType>
   <xs:complexType name="PQ"><xs:attribute name="value" type="xs:string"/><xs:attribute name="unit" type="xs:string"/></xs:complexType>
   <xs:complexType name="TS"><xs:attribute name="value" type="xs:string"/></xs:complexType>
   <xs:complexType name="SXCM_TS"><xs:complexContent><xs:extension base="TS"/></xs:complexContent></xs:complexType>
@@ -80,6 +80,59 @@ def target_at(compiled: dict[str, object], suffix: str) -> tuple[str, dict[str, 
 
 
 class CdaDatatypeTests(unittest.TestCase):
+    def test_quantity_ranges_use_compiled_low_high_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "project.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+              <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+                <element name="hl7:doseQuantity" datatype="IVL_PQ"
+                         minimumMultiplicity="0" maximumMultiplicity="*"/>
+              </element>
+            </template>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {},
+                "fields": {"dose": {
+                    "name": "Dose", "concept": "dose", "type": "quantity",
+                    "repeat_chain": [], "value_sets": [], "codes": [],
+                }},
+            }
+            compiled = compile_cda(
+                [source], model,
+                core_definition_paths=[write_datatype_schema(root)],
+            )
+            parent_name, parent = target_at(compiled, "/hl7:doseQuantity")
+            low_name, _ = target_at(compiled, "/hl7:doseQuantity/hl7:low")
+            high_name, _ = target_at(compiled, "/hl7:doseQuantity/hl7:high")
+            self.assertEqual(
+                parent["value_representation"]["range_targets"],  # type: ignore[index]
+                {"low": low_name, "high": high_name},
+            )
+            payload, problems = cda.emit(
+                {"key": "P1", "instances": {}, "values": {"dose": [
+                    {"value": 2, "unit": "mg"},
+                    {
+                        "low": {"value": 3, "unit": "mg"},
+                        "high": {"value": 5, "unit": "mg"},
+                    },
+                ]}},
+                model, compiled, {"fields": {"dose": parent_name}}, {},
+            )
+            self.assertEqual(problems, [])
+            document = ET.fromstring(payload)
+            quantities = document.findall(f"{{{HL7}}}doseQuantity")
+            self.assertEqual(len(quantities), 2)
+            self.assertEqual(quantities[0].attrib, {"value": "2", "unit": "mg"})
+            self.assertEqual(
+                quantities[1].find(f"{{{HL7}}}low").attrib,  # type: ignore[union-attr]
+                {"value": "3", "unit": "mg"},
+            )
+            self.assertEqual(
+                quantities[1].find(f"{{{HL7}}}high").attrib,  # type: ignore[union-attr]
+                {"value": "5", "unit": "mg"},
+            )
+
     def test_reviewed_sxcm_ts_root_exposes_only_concrete_interval_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

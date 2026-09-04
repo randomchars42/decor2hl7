@@ -375,6 +375,22 @@ conformance, fixed values and datatype refinements. Optional legal datatype
 parts are instantiated only when assigned, required, fixed or needed as an
 ancestor.
 
+Normalized dataset quantities use one target-neutral representation. A scalar
+is `{value, unit?}`; a range is `{low: {value, unit?}, high: {value, unit?}}`.
+The input normalizer accepts a numeric magnitude with an optional unit or a
+low-high range, supplies a dataset-declared fixed unit when the input omits it,
+and rejects conflicting units or reversed ranges. Decimal and duration fields
+retain their existing scalar representation.
+
+Quantity-interval compilation records the exact writable `low` and `high`
+target names in the parent value representation. Assignment projects a
+normalized range through those compiled names while a scalar continues to use
+the parent's `value`/`unit` attributes; rendering does not interpret an
+`IVL_PQ` datatype or path suffix. CDA R2 permits `PQ/@unit` to be omitted (its
+schema default is `1`), so there is no blanket non-null unit requirement.
+Template-fixed units and field-specific clinical mapping decisions remain
+authoritative where present.
+
 The XSD index also records reverse extension relationships. Polymorphic complex
 expansion is deliberately enabled only for reviewed roots, currently
 `SXCM_TS`, rather than inferred for every type with extensions. A located

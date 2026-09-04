@@ -331,6 +331,51 @@ def _present(value: Any) -> bool:
     return True
 
 
+def _quantity_range_projections(value: Any) -> tuple[Any, Any, Any, bool]:
+    """Project mixed scalar/range occurrence trees onto compiled CDA slots."""
+    if isinstance(value, list):
+        projected = [_quantity_range_projections(item) for item in value]
+        return (
+            [item[0] for item in projected],
+            [item[1] for item in projected],
+            [item[2] for item in projected],
+            any(item[3] for item in projected),
+        )
+    if isinstance(value, Mapping) and ("low" in value or "high" in value):
+        return None, value.get("low"), value.get("high"), True
+    return value, None, None, False
+
+
+def _expand_quantity_range_assignments(
+    assignments: dict[str, Any],
+    targets: Mapping[str, Any],
+    problems: list[str],
+) -> None:
+    """Route target-neutral ranges through compiler-selected bound targets."""
+    for name, value in list(assignments.items()):
+        scalar, low, high, contains_range = _quantity_range_projections(value)
+        if not contains_range:
+            continue
+        target = targets.get(name, {})
+        representation = target.get("value_representation", {})
+        range_targets = (
+            representation.get("range_targets", {})
+            if isinstance(representation, Mapping) else {}
+        )
+        if not isinstance(range_targets, Mapping) or set(range_targets) != {
+            "low", "high",
+        }:
+            assignments.pop(name, None)
+            problems.append(
+                f"CDA target {name!r} has no compiled low/high quantity targets"
+            )
+            continue
+        assignments.pop(name, None)
+        _assign(assignments, name, scalar)
+        _assign(assignments, str(range_targets["low"]), low)
+        _assign(assignments, str(range_targets["high"]), high)
+
+
 def non_null_requirement_satisfied(
     cda: Mapping[str, Any], required: str, supplied: set[str],
 ) -> bool:
@@ -873,6 +918,7 @@ def build_assignments(
         problems.append(f"unknown structural binding type {kind!r} in {rule_id!r}")
     for name, value in fallback_assignments:
         assignments[name] = _fallback(assignments.get(name), value)
+    _expand_quantity_range_assignments(assignments, targets, problems)
     return assignments, problems
 
 

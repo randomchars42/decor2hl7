@@ -544,6 +544,28 @@ Logical sources map to relative filenames under the external input root via rele
 }
 ```
 
+Quantity columns accept a scalar number with an optional unit (`2.5 mg`) or a
+low-high range (`1-2 {tablet}`). The normalized record preserves the unit:
+
+```json
+{"value": 2.5, "unit": "mg"}
+```
+
+or, for a range:
+
+```json
+{
+  "low": {"value": 1, "unit": "{tablet}"},
+  "high": {"value": 2, "unit": "{tablet}"}
+}
+```
+
+When the transaction declares a fixed unit, a unitless input inherits it and a
+different explicit unit is rejected. Range bounds must use one unit and the low
+value must not exceed the high value. CDA interval quantities use their
+compiler-recorded `low`/`high` targets; this input support does not by itself
+select a clinical dose, rate, or timing mapping.
+
 ### Raw code → dataset value
 
 ```json

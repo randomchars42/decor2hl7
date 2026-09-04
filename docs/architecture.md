@@ -547,6 +547,15 @@ This supports representation changes at the input boundary without changing the
 transaction model—for example a Boolean leading-diagnosis column can become
 sequence number `1` for true and be omitted for false.
 
+Quantity fields normalize to a target-neutral object rather than a bare number:
+`{"value": 2.5, "unit": "mg"}` for a scalar, or
+`{"low": {"value": 1, "unit": "mg"}, "high": {"value": 2,
+"unit": "mg"}}` for a range. A fixed unit declared by the dataset is supplied
+when absent and conflicts are rejected. Numeric bounds are validated on both
+ends of a range. CDA compilation attaches exact low/high child target names to
+an interval quantity's value representation, so assignment can split a range
+without datatype- or path-specific renderer behavior.
+
 `build` has no input argument and never inspects CSVs. CSV/code proposal generation is a separate explicit `propose-input` step. The proposal step may inspect column names and observed coded values, but it does not infer relationships between CSV sources; joins/cardinalities remain explicit configuration.
 
 ## User-facing mapping verification

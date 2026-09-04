@@ -539,11 +539,48 @@ def validate_record(record: Mapping[str, Any], model: Mapping[str, Any]) -> list
         for item_path, item in check_values:
             if isinstance(item, Mapping) and item.get("nullFlavor"):
                 problems.append(_problem("warning", item_path, f"represented as nullFlavor {item['nullFlavor']}")); continue
-            if isinstance(item, (int, float)):
-                if field.get("min_value") is not None and item < field["min_value"]:
-                    problems.append(_problem("error", item_path, f"{item} is below minimum {field['min_value']}"))
-                if field.get("max_value") is not None and item > field["max_value"]:
-                    problems.append(_problem("error", item_path, f"{item} is above maximum {field['max_value']}"))
+            numeric_values: list[tuple[str, int | float]] = []
+            if str(field.get("type") or "") == "quantity" and isinstance(item, Mapping):
+                if "value" in item and set(item) <= {"value", "unit"}:
+                    value = item.get("value")
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        numeric_values.append((item_path, value))
+                    else:
+                        problems.append(_problem("error", item_path, "quantity value is not numeric"))
+                elif set(item) <= {"low", "high"} and set(item) == {"low", "high"}:
+                    bounds: dict[str, int | float] = {}
+                    for label in ("low", "high"):
+                        bound = item.get(label)
+                        value = bound.get("value") if isinstance(bound, Mapping) else None
+                        if (
+                            isinstance(bound, Mapping)
+                            and set(bound) <= {"value", "unit"}
+                            and isinstance(value, (int, float))
+                            and not isinstance(value, bool)
+                        ):
+                            bounds[label] = value
+                            numeric_values.append((f"{item_path}.{label}", value))
+                        else:
+                            problems.append(_problem(
+                                "error", f"{item_path}.{label}",
+                                "quantity range bound is not a numeric quantity",
+                            ))
+                    if set(bounds) == {"low", "high"} and bounds["low"] > bounds["high"]:
+                        problems.append(_problem(
+                            "error", item_path, "quantity range low exceeds high",
+                        ))
+                else:
+                    problems.append(_problem(
+                        "error", item_path,
+                        "quantity must contain value, or low and high",
+                    ))
+            elif isinstance(item, (int, float)) and not isinstance(item, bool):
+                numeric_values.append((item_path, item))
+            for numeric_path, numeric in numeric_values:
+                if field.get("min_value") is not None and numeric < field["min_value"]:
+                    problems.append(_problem("error", numeric_path, f"{numeric} is below minimum {field['min_value']}"))
+                if field.get("max_value") is not None and numeric > field["max_value"]:
+                    problems.append(_problem("error", numeric_path, f"{numeric} is above maximum {field['max_value']}"))
             if isinstance(item, str):
                 if field.get("min_length") is not None and len(item) < field["min_length"]:
                     problems.append(_problem("error", item_path, "value is shorter than minimum length"))

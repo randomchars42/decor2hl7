@@ -354,12 +354,35 @@ def _value_domain(domain: ET.Element, node: dict[str, Any]) -> None:
                 info: dict[str, Any] = {"synonyms": [value for value in synonyms if value]}
                 ordinal = None
                 for text in info["synonyms"] + [label]:
-                    match = re.search(r"(?:^|\b)(?:rankin\s*)?([0-9]+)(?:\s*(?:punkt|score))?(?:\b|$)", text, re.I)
+                    # A bare number is ordinal evidence only at the start of a
+                    # label.  Elsewhere, require an explicit rank/score word.
+                    # This deliberately excludes terminology identifiers such
+                    # as LOINC ``30745-4`` and measurements such as ``>= 3 m``.
+                    leading = re.match(r"^\s*([0-9]+)(?![0-9-])(?:\s*(?:punkte?|score))?\b", text, re.I)
+                    explicit = re.search(
+                        r"\b(?:rank(?:in)?|rang|score)\s*[:=#-]?\s*([0-9]+)\b"
+                        r"|\b([0-9]+)\s*(?:punkte?|score)\b",
+                        text,
+                        re.I,
+                    )
+                    match = leading or explicit
                     if match:
-                        ordinal = int(match.group(1)); break
+                        ordinal = int(next(group for group in match.groups() if group is not None))
+                        break
                 if ordinal is not None:
                     info["ordinal"] = ordinal
                 details[label] = info
+            # A score transform must be injective.  Some ordinary coded lists
+            # start their labels with numbers (triage bands are a common
+            # example); duplicate extracted values prove that those numbers do
+            # not form an ordinal scale for this option list.
+            ordinals = [
+                info["ordinal"] for info in details.values()
+                if info.get("ordinal") is not None
+            ]
+            if len(ordinals) != len(set(ordinals)):
+                for info in details.values():
+                    info.pop("ordinal", None)
             node["options"] = options
             if details:
                 node["option_details"] = details

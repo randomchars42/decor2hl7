@@ -76,12 +76,15 @@ source association has been found for lot number, so `chargennummer` remains
 unmapped even though a general manufactured-material model can expose such a
 slot. The active UV Subordinate administration template
 `2.16.840.1.113883.10.21.4.6` exposes alternatives for timing plus
-`doseQuantity` and `rateQuantity`, but the current source evidence does not
-uniquely bridge start/stop, dose, rate, body site, PRN and medication-reason
-fields to those alternatives. In particular, start, stop and dosage-time fields
-would otherwise claim one atomic timing target, while dose and rate are two
-equally compatible quantities. They remain unmapped instead of being resolved
-by German/English path vocabulary or positional guessing. See
+`doseQuantity` and `rateQuantity`. Quantity normalization now preserves scalar
+magnitudes, ranges and units, and compiled interval quantities expose exact
+low/high assignment targets. This closes the representation/mechanics part of
+the dose/rate issue, but the current source evidence still does not uniquely
+bridge start/stop, dose, rate, body site, PRN and medication-reason fields to
+those alternatives. The three timing meanings also lack a reviewed rule for
+the materialized `IVL_TS`/`PIVL_TS` branches and their compound occurrence
+constraints. They remain unmapped instead of being resolved by German/English
+path vocabulary or positional guessing. See
 [`analyses/2026-09-02-residual-mapping-boundaries.md`](analyses/2026-09-02-residual-mapping-boundaries.md).
 
 The subordinate `SXPR_TS/comp` now exposes its XSD-defined `IVL_TS`, `PIVL_TS`,
@@ -108,7 +111,11 @@ only from formal repeat/discriminator evidence. Legacy reviewed `fan_out`
 configuration remains executable for compatibility.
 
 The selected CEDIS ValueSet is a presenting-complaint taxonomy, not an ordered
-scale. Its hierarchy therefore does not justify an `ordinal` transform.
+scale. Its hierarchy therefore does not justify an `ordinal` transform. Dataset
+option extraction now accepts only a leading rank or an explicitly labelled
+rank/score and drops ordinal metadata for the whole option list when extracted
+values collide. LOINC-shaped synonyms, fall-height measurements and duplicate
+CEDIS classification prefixes therefore cannot become ordinal evidence.
 
 A future concept whose ART-DECOR representation needs a different structural or
 computed transformation remains evidence-linked but non-executable until an
@@ -176,18 +183,20 @@ unresolved. The dated analyses below explain the clinical history; their
 counts may drift without superseding the audit.
 
 Seven non-medication datapoints remain without a suitable target after the
-fresh-snapshot audit. The insurance-relationship identifier has a unique
-writable `associatedEntity/id` in the active open participant after CDA/RIM
-expansion, and the active description plus historical specialization support
-the intended insured-number meaning. The selected concept still has no formal
-edge to that leaf, so using it requires an explicit reviewed semantic decision;
-it is not inferred automatically.
+fresh-snapshot audit. A formally identified insurance-number
+`associatedEntity/id` is active and writable, but it belongs to a sibling
+participant rather than the participant already selected for the dataset's
+Kostenträger occurrence. The selected concept has no identity edge or static
+association to that leaf. Reopening therefore requires both a formal concept
+association and an explicit occurrence-identity decision; historical `SPEC`
+refinement or open-model expansion alone cannot supply either.
 
 General event onset has no uniquely owned active event/problem statement. The
 MRI statement is reachable, correcting the earlier residual wording, but it
 has no region-bearing target. The X-ray choice list has only three unqualified
 synonym strings matching fixed statements and lacks a complete 13-member
-crosswalk plus repeat/coalescing rules.
+crosswalk plus repeat/coalescing/conflict rules. No singleton dispatcher is
+enabled until that reviewed table exists.
 
 Exact draft templates for export interval, EDIS name and EDIS version exist in
 project evidence as `.10.85`, `.10.86` and `.10.87`. The selected Addendum
