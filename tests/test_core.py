@@ -26,6 +26,7 @@ from decor2hl7.compile.structural import (
 from decor2hl7.cda.compile import compile_cda_model
 from decor2hl7.cda.datatypes import value_representation
 from decor2hl7.cda.extensions import load_extensions
+from decor2hl7.cda.parity import declared_endpoint_parity
 from decor2hl7.compile.reports import (
     _outline_datapoint_lines, coverage_headline_counts,
     format_coverage_headline, render_cda_mapping_markdown,
@@ -1776,6 +1777,17 @@ class CoreTests(unittest.TestCase):
                 }},
             ),
             (
+                "semantic:no_association",
+                {
+                    "selected": None, "context": structural_context,
+                    "unresolved_reason": "structural_container_available",
+                    "possible_targets": {
+                        "items": [{"target": "Medication.deepTime"}],
+                    },
+                },
+                {"type": "datetime", "repeat_chain": []}, [], None,
+            ),
+            (
                 "semantic:lossy_domain",
                 {
                     "selected": None,
@@ -3425,6 +3437,123 @@ class CoreTests(unittest.TestCase):
             "Reachable.value": {"template_id": "unlocated", "locations": []},
         }}
         self.assertEqual(selected_closure_templates(cda_model), {"located"})
+
+    def test_declared_endpoint_parity_accepts_only_fixed_structural_folds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text(
+                """<templates><template id="t" name="T" effectiveDate="2026">
+                <element id="root" name="hl7:observation">
+                  <attribute id="folded" name="classCode" value="PSN"/>
+                  <attribute id="missing" name="extension"/>
+                </element>
+                </template></templates>""",
+                encoding="utf-8",
+            )
+            cda_model = {"targets": {
+                "T.root": {
+                    "template_id": "t", "element_id": "root",
+                    "locations": ["0"],
+                },
+                "T.extension": {
+                    "template_id": "t",
+                    "element_id": "decor2hl7-extension:x",
+                    "locations": ["0.1"],
+                },
+            }, "document": [{
+                "kind": "template", "template_id": "t", "children": [{
+                    "kind": "element", "fixed": {"classCode": "PSN"},
+                    "children": [],
+                }],
+            }]}
+            parity = declared_endpoint_parity([source], cda_model, {"t"})
+            self.assertEqual(parity["declared"], 3)
+            self.assertEqual(parity["compiled"], 2)
+            self.assertEqual(
+                [item["element_id"] for item in parity["fixed_structural_attributes"]],
+                ["folded"],
+            )
+            self.assertEqual(
+                [item["element_id"] for item in parity["unexpected_missing"]],
+                ["missing"],
+            )
+            self.assertEqual(
+                [item["element_id"] for item in parity["compiler_only"]],
+                ["decor2hl7-extension:x"],
+            )
+
+    def test_possible_targets_are_contextual_typed_and_claim_aware(self) -> None:
+        def target(**values: Any) -> dict[str, Any]:
+            return {
+                "writable": True, "locations": ["0.0.0"],
+                "logical_types": ["text"], "fixed": {},
+                "system_value": None, "element_name": "hl7:value",
+                "template_id": "t", "template_effective_date": "2026",
+                "template_name": "T", "path": "hl7:observation/hl7:value",
+                "datatype": "ST", "provenance": [{"source": "template"}],
+                **values,
+            }
+
+        cda_model = {
+            "document": [{
+                "kind": "element", "children": [{
+                    "kind": "template", "template_id": "t", "children": [{
+                        "kind": "element", "children": [], "attributes": [],
+                    }], "attributes": [],
+                }], "attributes": [],
+            }],
+            "targets": {
+                "T.value": target(),
+                "T.id": target(
+                    locations=["0.0.0.0"], element_name="hl7:id",
+                    path="hl7:observation/hl7:id", datatype_derived=True,
+                    provenance=[{"source": "cda-rim"}],
+                ),
+                "T.datatypePart": target(
+                    locations=["0.0.0.1"], datatype_derived=True,
+                    provenance=[{"source": "datatype"}],
+                ),
+                "T.status": target(
+                    locations=["0.0.0.2"], element_name="hl7:statusCode",
+                ),
+                "T.fixed": target(
+                    locations=["0.0.0.3"], fixed={"value": "x"},
+                ),
+                "T.number": target(
+                    locations=["0.0.0.4"], logical_types=["integer"],
+                ),
+            },
+        }
+        fields = {
+            "a": {"target": "logical", "cda_target": "T.value"},
+            "b": [{"target": "T.id"}],
+        }
+        claimed_by, occurrence_claims = mapping_compiler._mapping_target_claims(
+            fields, cda_model
+        )
+        inventory = mapping_compiler._possible_target_inventory(
+            {"type": "text", "repeat_chain": []},
+            {"target": "T.container", "node": {"locations": ["0"]}},
+            cda_model, claimed_by, occurrence_claims,
+        )
+        self.assertIsNotNone(inventory)
+        assert inventory is not None
+        self.assertEqual(inventory["document_pool_size"], 3)
+        self.assertEqual(
+            [item["target"] for item in inventory["items"]],
+            ["T.id", "T.value"],
+        )
+        self.assertEqual(inventory["items"][0]["claimed_by"], ["b"])
+        self.assertFalse(inventory["items"][0]["available"])
+        self.assertEqual(inventory["items"][1]["claimed_by"], ["a"])
+        self.assertTrue(
+            any(
+                claim["target"] == "T.value"
+                for claim in inventory["items"][0][
+                    "containing_instance_claimed_by"
+                ]
+            )
+        )
 
     def test_partial_expansion_degrades_only_an_active_value_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -342,6 +342,10 @@ Its summary persists the same coverage-headline counts printed by `build` and
 unresolved formal terminology, stores one first-failing `gap` gate and the
 smallest concrete evidence that would reopen it. This keeps regression checks
 and human details on one compiled evidence source.
+Audit version 2 separately stores `possible_targets` for an unselected field
+with a unique structural context. These type-compatible descendants are a
+claim-aware physical inventory for human review, not evidence or automatic
+selections; the coverage headline is therefore unchanged.
 Short `configuration_notes` are the exception to selection-only minimality:
 they record configured attachments or resolution rules actually used by an
 executable selection and are not themselves semantic evidence.

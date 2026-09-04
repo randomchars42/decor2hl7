@@ -264,6 +264,25 @@ reopen the decision. Generated details render the same evidence on one line;
 the audit summary rolls the keys up and persists the coverage-headline counts so
 release comparisons do not parse Markdown.
 
+Audit version 2 additionally records `possible_targets` for every unselected
+field that has one uniquely located structural context. This is a physical
+admissibility inventory, never semantic evidence: it cannot select a mapping or
+change the coverage headline. The inventory uses its own reproducible filter,
+separate from the inverse-coverage filter. It retains writable, uniquely
+located, non-prohibited, non-fixed and non-system targets that are either
+non-derived or originate from the CDA/RIM overlay without datatype-expansion
+provenance. It excludes the fixed CDA infrastructure roles `realmCode`,
+`typeId`, `templateId`, `languageCode`, `setId`, `versionNumber`,
+`confidentialityCode`, `priorityCode`, `reference`, `statusCode`, `nullFlavor`,
+`classCode`, `moodCode`, `typeCode`, `determinerCode`, and
+`contextControlCode`. Frequency is never a genericity rule. Per field, the
+compiler then keeps descendants of the selected context whose compiled
+`logical_types` include the dataset type. Exact claims remain visible with
+`claimed_by`, and claims elsewhere in the same contained-template occurrence
+remain visible with `containing_instance_claimed_by`; neither is evidence for
+the unmapped field. `gap.reopens_with` stays the compact first-gate diagnostic
+and does not duplicate this potentially long list.
+
 A dataset code may map directly to an unfixed writable CDA `hl7:code` element
 when both sides use coded datatypes and share an explicit ValueSet. This permits
 formally associated payloads such as the referral source while preventing a

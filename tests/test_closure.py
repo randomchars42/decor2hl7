@@ -5,6 +5,9 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from decor2hl7.cda.parity import declared_endpoint_parity
+from decor2hl7.compile import mapping as mapping_compiler
+from decor2hl7.compile.artifacts import compiler_inputs, selected_closure_templates
 from decor2hl7.compile.mapping import mapping_field_delta
 
 
@@ -44,7 +47,10 @@ class ReferenceClosureTests(unittest.TestCase):
         required = [
             cls.workspace / "aktin.json",
             cls.model_dir / "build-diagnostics.json",
+            cls.model_dir / "cda.json",
             cls.model_dir / "mapping-audit.json",
+            cls.model_dir / "cda-mapping.proposed.json",
+            cls.model_dir / "model.json",
             cls.model_dir / "conformance-validation" / "validator-manifest.json",
         ]
         missing = [str(path) for path in required if not path.is_file()]
@@ -62,6 +68,67 @@ class ReferenceClosureTests(unittest.TestCase):
             raise unittest.SkipTest(
                 "local companion workspace has a different selected release/transaction"
             )
+
+    def test_compiler_covers_every_declared_ig_endpoint(self) -> None:
+        cda = self._load(self.model_dir / "cda.json")
+        release_dir = self.workspace / "spec" / REFERENCE_RELEASE
+        transaction_dir = (
+            release_dir / "transactions" / REFERENCE_TRANSACTION
+        )
+        inputs = compiler_inputs(release_dir, transaction_dir)
+        parity = declared_endpoint_parity(
+            inputs["templates"], cda, selected_closure_templates(cda)
+        )
+        self.assertEqual(parity["declared"], 2022)
+        self.assertEqual(parity["compiled"], 2001)
+        self.assertEqual(parity["declared_only"], 24)
+        self.assertEqual(len(parity["fixed_structural_attributes"]), 24)
+        self.assertEqual(parity["unexpected_missing"], [])
+
+    def test_unmapped_fields_have_reproducible_possible_targets(self) -> None:
+        model = self._load(self.model_dir / "model.json")
+        cda = self._load(self.model_dir / "cda.json")
+        audit = self._load(self.model_dir / "mapping-audit.json")
+        proposal = self._load(self.model_dir / "cda-mapping.proposed.json")
+        claimed_by, occurrence_claims = mapping_compiler._mapping_target_claims(
+            proposal["fields"], cda
+        )
+        inventories: dict[str, dict[str, Any]] = {}
+        for path, detail in audit["fields"].items():
+            if detail.get("selected") is not None:
+                continue
+            inventory = mapping_compiler._possible_target_inventory(
+                model["fields"][path], detail.get("context"), cda,
+                claimed_by, occurrence_claims,
+            )
+            if inventory is not None:
+                inventories[path] = inventory
+        self.assertEqual(len(inventories), 20)
+        self.assertTrue(all(value["items"] for value in inventories.values()))
+        self.assertEqual(
+            {value["document_pool_size"] for value in inventories.values()},
+            {646},
+        )
+
+        xray_path = (
+            "diagnostik.bildgebende_diagnostik.rontgen.untersuchungsregion"
+        )
+        by_name = {
+            item["target"]: item for item in inventories[xray_path]["items"]
+        }
+        expected = {
+            "Plainchestxray.value",
+            "Radiographyofspine.value",
+            "Pelvisxray.value",
+            "Plainradiographylimbstructure.value",
+            "Plainradiography.value",
+        }
+        self.assertLessEqual(expected, set(by_name))
+        self.assertTrue(
+            by_name["Plainchestxray.value"][
+                "containing_instance_claimed_by"
+            ]
+        )
 
     @staticmethod
     def _load(path: Path) -> dict[str, Any]:

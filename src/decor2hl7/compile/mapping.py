@@ -15,7 +15,7 @@ from ..retrieval.xml import child_text, local, parse_file
 from ..workspace import write_json
 from ..semantics import (
     accepted_values, base_datatype, direct_compatibility, payload_match,
-    transformed_compatibility, type_match,
+    target_type_match, transformed_compatibility, type_match,
 )
 from ..transforms import cda_target_name, mapping_rules
 from ..cda.datatypes import classify_datatype
@@ -43,6 +43,18 @@ GENERIC_SHORTNAMES = {
     "untersuchungsregion", "definitorischer_link", "agens", "status",
     "gultigkeit", "version", "typ", "art",
 }
+
+# These nodes carry document plumbing rather than dataset payload.  The list is
+# role-based and intentionally stable: frequency is not admissibility evidence
+# and would, for example, incorrectly remove the ubiquitous ``hl7:value``.
+_CDA_CANDIDATE_INFRASTRUCTURE = {
+    "hl7:realmCode", "hl7:typeId", "hl7:templateId", "hl7:languageCode",
+    "hl7:setId", "hl7:versionNumber", "hl7:confidentialityCode",
+    "hl7:priorityCode", "hl7:reference", "hl7:statusCode", "@nullFlavor",
+    "@classCode", "@moodCode", "@typeCode", "@determinerCode",
+    "@contextControlCode",
+}
+_CDA_TARGET_CANDIDATE_POLICY = "cda-target-candidates-v1"
 
 
 def _norm(value: str) -> str:
@@ -1148,6 +1160,11 @@ def _gap_classification(
     context_target = (
         str(context.get("target") or "") if isinstance(context, Mapping) else ""
     )
+    possible_targets = detail.get("possible_targets", {})
+    possible_items = (
+        possible_targets.get("items", [])
+        if isinstance(possible_targets, Mapping) else []
+    )
 
     if reason == "structural_only":
         # DEC-021 requires an exact stranded template as well as an open
@@ -1169,6 +1186,11 @@ def _gap_classification(
                 "gate": "physical", "kind": "containment",
                 "reopens_with": unlocated_templates,
             }
+        if possible_items:
+            return {
+                "gate": "semantic", "kind": "no_association",
+                "reopens_with": [path],
+            }
         return {
             "gate": "physical", "kind": "no_writable_leaf",
             "reopens_with": [context_target] if context_target else [],
@@ -1179,6 +1201,11 @@ def _gap_classification(
             "reopens_with": candidate_targets,
         }
     if reason in {"datatype_component_available", "structural_container_available"}:
+        if reason == "structural_container_available" and possible_items:
+            return {
+                "gate": "semantic", "kind": "no_association",
+                "reopens_with": [path],
+            }
         components: list[str] = []
         if cda is not None and isinstance(context_node, Mapping):
             rows: list[tuple[str, Mapping[str, Any], int]] = []
@@ -1825,6 +1852,225 @@ def _is_descendant_target(
     root_path = str(context_node.get("path") or "").rstrip("/")
     target_path = str(target.get("path") or "")
     return bool(root_path and target_path.startswith(root_path + "/"))
+
+
+def _candidate_source_roles(target: Mapping[str, Any]) -> set[str]:
+    """Return the exact compiler-source roles behind one target."""
+    return {
+        role.strip()
+        for item in target.get("provenance", [])
+        if isinstance(item, Mapping)
+        for role in str(item.get("source") or "").split("+")
+        if role.strip()
+    }
+
+
+def _candidate_target_role(target: Mapping[str, Any]) -> str:
+    role = str(target.get("element_name") or "")
+    if role:
+        return role
+    return str(target.get("path") or "").rsplit("/", 1)[-1]
+
+
+def _location_order(value: Any) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in str(value or "").split(".") if part)
+    except ValueError:
+        return ()
+
+
+def _cda_target_candidate_pool(
+    cda: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    """Return reviewable payload leaves without treating them as evidence.
+
+    Unlike the coverage-headline filter, this inventory retains CDA/RIM
+    structural children such as ``associatedEntity/id``.  Pure datatype
+    plumbing and fixed document infrastructure remain excluded.
+    """
+    result: dict[str, Mapping[str, Any]] = {}
+    targets = cda.get("targets", {})
+    for name, target in targets.items() if isinstance(targets, Mapping) else ():
+        if not isinstance(target, Mapping):
+            continue
+        source_roles = _candidate_source_roles(target)
+        payload_source = (
+            not target.get("datatype_derived")
+            or ("cda-rim" in source_roles and "datatype" not in source_roles)
+        )
+        if (
+            target.get("writable")
+            and len(target.get("locations", [])) == 1
+            and not target.get("prohibited")
+            and not target.get("fixed")
+            and not target.get("conditional_fixed")
+            and target.get("system_value") is None
+            and payload_source
+            and _candidate_target_role(target)
+            not in _CDA_CANDIDATE_INFRASTRUCTURE
+        ):
+            result[str(name)] = target
+    return result
+
+
+def _template_occurrence(
+    cda: Mapping[str, Any], target: Mapping[str, Any],
+) -> tuple[str, str]:
+    """Identify the nearest concrete contained-template occurrence."""
+    template_id = str(target.get("template_id") or "")
+    locations = [str(value) for value in target.get("locations", [])]
+    document = cda.get("document", [])
+    if len(locations) != 1 or not isinstance(document, list):
+        return template_id, ""
+    items: list[Any] = document
+    current: Mapping[str, Any] | None = None
+    occurrence = ""
+    prefix: list[str] = []
+    for token in locations[0].split("."):
+        try:
+            index = int(token)
+            if index >= 100000:
+                attributes = current.get("attributes", []) if current else []
+                node = attributes[index - 100000]
+            else:
+                node = items[index]
+        except (IndexError, TypeError, ValueError):
+            break
+        if not isinstance(node, Mapping):
+            break
+        current = node
+        prefix.append(token)
+        if (
+            node.get("kind") == "template"
+            and str(node.get("template_id") or "") == template_id
+        ):
+            occurrence = ".".join(prefix)
+        children = node.get("children", [])
+        items = children if isinstance(children, list) else []
+    return template_id, occurrence or "document"
+
+
+def _possible_target_inventory(
+    field: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    cda: Mapping[str, Any],
+    claimed_by: Mapping[str, list[str]],
+    occurrence_claims: Mapping[tuple[str, str], list[tuple[str, str]]],
+) -> dict[str, Any] | None:
+    """List type-compatible descendants for a human mapping decision."""
+    if not isinstance(context, Mapping):
+        return None
+    context_node = context.get("node", {})
+    if (
+        not isinstance(context_node, Mapping)
+        or len(context_node.get("locations", [])) != 1
+    ):
+        return None
+    model_type = str(field.get("type") or "")
+    if not model_type:
+        return None
+    pool = _cda_target_candidate_pool(cda)
+    items: list[dict[str, Any]] = []
+    for name, target in pool.items():
+        if (
+            not _is_descendant_target(target, context_node)
+            or not target_type_match(model_type, target)
+        ):
+            continue
+        occurrence = _template_occurrence(cda, target)
+        exact_claims = sorted(set(claimed_by.get(name, [])))
+        instance_claims: dict[str, set[str]] = defaultdict(set)
+        for claimed_target, field_path in occurrence_claims.get(occurrence, []):
+            if claimed_target != name:
+                instance_claims[claimed_target].add(field_path)
+        value_set_bindings = target.get("value_set_bindings", [])
+        if not value_set_bindings:
+            value_set_bindings = [
+                {"id": str(value)} for value in target.get("value_sets", [])
+            ]
+        source_repeat_depth = len(field.get("repeat_chain", []))
+        target_repeats = [
+            str(value) for value in target.get("repeat_ancestors", [])
+        ]
+        items.append({
+            "target": name,
+            "template": {
+                "id": str(target.get("template_id") or ""),
+                "effective_date": str(
+                    target.get("template_effective_date") or ""
+                ),
+                "name": str(target.get("template_name") or ""),
+                "display_name": str(
+                    target.get("template_display_name") or ""
+                ),
+                "location": occurrence[1],
+            },
+            "path": str(target.get("path") or ""),
+            "datatype": str(target.get("datatype") or ""),
+            "cardinality": {
+                "min": target.get("min"), "max": target.get("max"),
+            },
+            "conformance": str(target.get("conformance") or ""),
+            "description": str(target.get("description") or ""),
+            "bound_value_sets": list(value_set_bindings),
+            "non_null_requires": [
+                str(value) for value in target.get("non_null_requires", [])
+            ],
+            "repeat_ancestors": target_repeats,
+            "requires_occurrence_rule": (
+                source_repeat_depth != len(target_repeats)
+            ),
+            "claimed_by": exact_claims,
+            "already_claimed": bool(exact_claims),
+            "containing_instance_claimed_by": [
+                {"target": claimed_target, "fields": sorted(paths)}
+                for claimed_target, paths in sorted(instance_claims.items())
+            ],
+            "available": not exact_claims,
+        })
+    items.sort(key=lambda item: (
+        _location_order(item["template"].get("location")),
+        str(item["template"].get("display_name") or ""),
+        str(item["template"].get("id") or ""),
+        str(item.get("path") or ""),
+        str(item.get("target") or ""),
+    ))
+    if not items:
+        return None
+    return {
+        "policy": _CDA_TARGET_CANDIDATE_POLICY,
+        "context_target": str(context.get("target") or ""),
+        "document_pool_size": len(pool),
+        "items": items,
+    }
+
+
+def _mapping_target_claims(
+    fields: Mapping[str, Any], cda: Mapping[str, Any],
+) -> tuple[
+    dict[str, list[str]],
+    dict[tuple[str, str], list[tuple[str, str]]],
+]:
+    """Index direct and structured field selections by physical CDA target."""
+    claimed_by: dict[str, list[str]] = defaultdict(list)
+    occurrence_claims: dict[
+        tuple[str, str], list[tuple[str, str]]
+    ] = defaultdict(list)
+    targets = cda.get("targets", {})
+    for field_path, selection in fields.items():
+        for rule in mapping_rules(selection):
+            target_name = cda_target_name(rule)
+            target = (
+                targets.get(target_name, {})
+                if isinstance(targets, Mapping) else {}
+            )
+            if not target_name or not isinstance(target, Mapping) or not target:
+                continue
+            claimed_by[target_name].append(str(field_path))
+            occurrence_claims[_template_occurrence(cda, target)].append(
+                (target_name, str(field_path))
+            )
+    return dict(claimed_by), dict(occurrence_claims)
 
 
 def _context_direct(
@@ -2745,6 +2991,22 @@ def _cda_mapping_analysis(
 
     _block_unsatisfied_non_null_requirements(fields, details, cda)
 
+    # Build the human-review inventory from the final executable selections.
+    # A claim is not removed from the inventory: keeping it visible, with its
+    # claimant, prevents a reviewer from silently reusing one physical leaf.
+    claimed_by, occurrence_claims = _mapping_target_claims(fields, cda)
+    for path, detail in details.items():
+        inventory = None
+        if detail.get("selected") is None:
+            inventory = _possible_target_inventory(
+                model_fields.get(path, {}), detail.get("context"), cda,
+                claimed_by, occurrence_claims,
+            )
+        if inventory is not None:
+            detail["possible_targets"] = inventory
+        else:
+            detail.pop("possible_targets", None)
+
     # Classify the final decision state only after shared-target, occurrence,
     # and compound-datatype passes have had a chance to change executability.
     unresolved_templates = list(cda.get("unresolved_templates", []))
@@ -2812,6 +3074,110 @@ def _cda_mapping_analysis(
 
     def target_datatype(name: str) -> str:
         return str(cda.get("targets", {}).get(name, {}).get("datatype") or "—")
+
+    def markdown_cell(value: Any) -> str:
+        return str(value or "—").replace("|", "\\|").replace("\n", " ")
+
+    def possible_target_lines(detail: Mapping[str, Any]) -> list[str]:
+        inventory = detail.get("possible_targets", {})
+        items = (
+            inventory.get("items", []) if isinstance(inventory, Mapping) else []
+        )
+        if not items:
+            return []
+        grouped: dict[tuple[str, str, str, str], list[Mapping[str, Any]]] = defaultdict(list)
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            template = item.get("template", {})
+            if not isinstance(template, Mapping):
+                template = {}
+            key = (
+                str(template.get("display_name") or template.get("name") or "Unnamed template"),
+                str(template.get("id") or ""),
+                str(template.get("effective_date") or ""),
+                str(template.get("location") or ""),
+            )
+            grouped[key].append(item)
+        out = [
+            "### Possible targets (unproven)",
+            "",
+            "These are type-compatible writable descendants of the selected "
+            "container. They are an admissibility inventory, not mapping evidence; "
+            "nothing in this list is selected automatically.",
+            "",
+        ]
+        for (display, template_id, effective, location), rows in grouped.items():
+            identity = f"`{template_id}` @ `{effective or 'dynamic'}`"
+            out += [
+                f"#### {display}",
+                "",
+                f"Contained template: {identity}; location `{location or 'document'}`",
+                "",
+                "| Target / CDA path | Datatype | Cardinality | Conformance | Description | Bound value sets | Non-null requires | Repeatable ancestors | Claims |",
+                "|---|---|---|---|---|---|---|---|---|",
+            ]
+            for item in rows:
+                cardinality = item.get("cardinality", {})
+                if not isinstance(cardinality, Mapping):
+                    cardinality = {}
+                maximum = cardinality.get("max")
+                cardinality_text = (
+                    f"{cardinality.get('min', 0)}.."
+                    f"{maximum if maximum is not None else '?'}"
+                )
+                bindings = []
+                for binding in item.get("bound_value_sets", []):
+                    if isinstance(binding, Mapping):
+                        oid = str(binding.get("id") or "")
+                        revision = str(
+                            binding.get("effective_date")
+                            or binding.get("flexibility") or ""
+                        )
+                        bindings.append(oid + (f"@{revision}" if revision else ""))
+                    elif binding:
+                        bindings.append(str(binding))
+                claims: list[str] = []
+                if item.get("claimed_by"):
+                    claims.append(
+                        "already claimed by "
+                        + ", ".join(str(value) for value in item["claimed_by"])
+                    )
+                instance_claims = item.get("containing_instance_claimed_by", [])
+                if instance_claims:
+                    claims.append(
+                        "same instance: "
+                        + "; ".join(
+                            f"{claim.get('target')} ← "
+                            + ", ".join(str(value) for value in claim.get("fields", []))
+                            for claim in instance_claims
+                            if isinstance(claim, Mapping)
+                        )
+                    )
+                if item.get("requires_occurrence_rule"):
+                    claims.append("occurrence rule required")
+                target_text = (
+                    f"`{item.get('target')}`<br>`{item.get('path') or '—'}`"
+                )
+                out.append(
+                    "| " + " | ".join([
+                        markdown_cell(target_text),
+                        markdown_cell(item.get("datatype")),
+                        markdown_cell(cardinality_text),
+                        markdown_cell(item.get("conformance")),
+                        markdown_cell(item.get("description")),
+                        markdown_cell(", ".join(bindings)),
+                        markdown_cell(", ".join(
+                            str(value) for value in item.get("non_null_requires", [])
+                        )),
+                        markdown_cell(", ".join(
+                            str(value) for value in item.get("repeat_ancestors", [])
+                        )),
+                        markdown_cell("; ".join(claims) or "available"),
+                    ]) + " |"
+                )
+            out.append("")
+        return out
 
     def evidence(candidate: Mapping[str, Any]) -> str:
         return " → ".join(str(item) for item in candidate.get("chain", [])) or str(candidate.get("kind") or "—")
@@ -2991,6 +3357,9 @@ def _cda_mapping_analysis(
                 f"reopens with: {reopening}",
                 "",
             ]
+
+        if detailed:
+            out += possible_target_lines(detail)
 
         rows = candidate_rows(path, detail, 8 if detailed else 5)
         if rows:
@@ -3245,6 +3614,10 @@ def _cda_mapping_analysis(
                 if detail.get("gap") else {}
             ),
             **(
+                {"possible_targets": dict(detail["possible_targets"])}
+                if detail.get("possible_targets") else {}
+            ),
+            **(
                 {"structural_rule": detail["structural_rule"]}
                 if detail.get("structural_rule") else {}
             ),
@@ -3255,7 +3628,7 @@ def _cda_mapping_analysis(
         }
 
     audit: dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "model": dict(proposal["model"]),
         "target": dict(proposal["target"]),
         "fields": {

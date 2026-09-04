@@ -174,10 +174,12 @@ diagnosis. See
 
 The generated `mapping-audit.json` is authoritative for the current boundary:
 each unselected field carries a gate key and minimal reopening evidence rather
-than relying on this hand-maintained prose. The current field partition is
+than relying on this hand-maintained prose. Audit version 2 also carries an
+unproven, claim-aware list of physically admissible targets for each of the 20
+context-bearing fields that still needs a semantic mapping decision. The
+current field partition is
 `semantic:shared_target` (four), `semantic:missing_companion` (one),
-`physical:structural_container` (nineteen), and
-`physical:no_writable_leaf` (one). One selected field additionally remains
+and `semantic:no_association` (twenty). One selected field additionally remains
 `terminology:closure` because ValueSet `1.2.276.0.76.11.53` is genuinely
 unresolved. The dated analyses below explain the clinical history; their
 counts may drift without superseding the audit.

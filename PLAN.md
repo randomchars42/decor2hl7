@@ -2160,7 +2160,7 @@ singleton dispatcher or `DEC-025` was added.
 | C2 | recover dropped associations | 24 of 25 unmapped fields have no association to drop; survives only as the C4 co-denoting-concept question, which needs its own bar |
 | C3 | ConceptMap transform | ordinal defect fixed; ConceptMap/dispatcher deferred until the complete reviewed crosswalk and conflict policy exist |
 
-### Phase 9 — reviewable target candidates for human mapping (next)
+### Phase 9 — reviewable target candidates for human mapping (implemented)
 
 Goal: emit a complete CDA. Human review of the remaining 20 unmapped datapoints
 is accepted; what is missing is the input to that review. Evidence and the
@@ -2170,9 +2170,8 @@ measured funnel are in
 <a id="g1-impl"></a>
 #### G1. Per-datapoint candidate list
 
-Files: `compile/reports.py` (new candidate filter beside
-`_reportable_cda_target`; details renderer), `compile/mapping.py`
-(`_gap_classification`), `tests/test_core.py`, `tests/test_closure.py`,
+Files: `compile/mapping.py` (candidate filter, `_gap_classification`, audit and
+details renderer), `cda/parity.py`, `tests/test_core.py`, `tests/test_closure.py`,
 `docs/decisions.md` (`DEC-011` amend), `docs/mapping-documentation-format.md`.
 
 1. **New candidate filter** — do not reuse `_reportable_cda_target`; it is a
@@ -2180,10 +2179,12 @@ Files: `compile/reports.py` (new candidate filter beside
    CDA/RIM structural children such as `associatedEntity/id`. Keep non-derived
    leaves **and** targets whose provenance `source` is `cda-rim` without
    `datatype`; drop `source: datatype`; drop the fixed CDA-infrastructure
-   deny-list; drop already-selected targets. Pool: 594 document-wide.
+   deny-list. Retain exact claims and annotate them so structured selections are
+   not silently missed. Pool: 646 document-wide (569 if all exact claims were
+   hidden; the earlier 594 count recognized only plain-string selections).
 2. **Scope and type** — restrict to descendants of the datapoint's selected
    container location, then to `logical_types` compatible with the model `type`.
-   Result: median 9 candidates, max 34, non-empty for all 20 context-bearing
+   Result: median 10 candidates, max 35, non-empty for all 20 context-bearing
    unmapped datapoints.
 3. **Genericity by role, never by frequency.** A frequency rule deletes
    `hl7:value`. Use the deny-list.
@@ -2191,7 +2192,8 @@ Files: `compile/reports.py` (new candidate filter beside
    path, datatype, cardinality, conformance, description, bound value sets) plus
    `non_null_requires`, repeatable-ancestor and already-claimed flags, as a
    "Possible targets (unproven)" section per unmapped field in
-   `cda-mapping-details.md`; persist the same list in `gap.reopens_with`.
+   `cda-mapping-details.md`; persist the same list in the audit-v2 sibling
+   `possible_targets` object. Keep `gap.reopens_with` compact.
 5. **Acceptance:** the X-ray Untersuchungsregion list surfaces the five reachable
    fixed-code X-ray statements that
    `docs/analyses/2026-09-02-seven-active-profile-gaps.md` found by hand.
@@ -2207,12 +2209,12 @@ sources and diff against `{target["element_id"]}` grouped by `template_id`.
 Measured today: 2 022 declared, 2 001 compiled, 24 differences in 8 templates —
 all fixed structural attributes (`classCode="PSN"`, `determinerCode="INSTANCE"`,
 `classCode="ORG"`) folded into the owning node's `fixed` map, which is correct.
-**Zero genuine losses**; the compiler is a strict superset of the IG's declared
-surface.
+**Zero genuine losses** after normalizing the 24 folded attributes; three
+reviewed-extension ids are compiler-only.
 
-Wire it as a test beside `tests/test_closure.py` so "does the compiler see
-everything AKTIN publishes?" becomes an assertion. A difference that is not a
-fixed structural attribute is a compiler defect.
+Implemented in `cda/parity.py` with a standing `tests/test_closure.py` assertion.
+A declared-only difference that is not a fixed structural attribute is a
+compiler defect.
 
 ### Cross-cutting, specifiable now
 

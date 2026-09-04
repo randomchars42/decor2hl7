@@ -49,16 +49,17 @@ filter.
 |---|---|---:|
 | 0 | all compiled targets | 25 075 |
 | 1 | physically admissible: `writable`, exactly one location, not `prohibited`, not `fixed` / `conditional_fixed`, no `system_value` | 16 966 |
-| 2 | payload not plumbing: keep non-derived leaves **and** `source: cda-rim` children; drop `source: datatype`; drop the CDA-infrastructure deny-list; drop already-selected targets | **594** |
+| 2 | payload not plumbing: keep non-derived leaves **and** `source: cda-rim` children without `source: datatype`; drop the CDA-infrastructure deny-list; retain and annotate exact claims | **646** |
 | 3 | context scoping: descendants of the datapoint's selected container location (`gap.context.node.locations[0]`) | 15–259 |
-| 4 | type compatibility: model `type` against compiled `logical_types` | **median 9, max 34** |
+| 4 | type compatibility: model `type` against compiled `logical_types` | **median 10, max 35** |
 
 All **20** context-bearing unmapped datapoints receive a non-empty list.
 
-The five that receive none are correctly excluded: secondary ICD-10, the three
-medication timestamps and the EIVL offset already *have* a target and are
-`runtime_blocked` (`SHARED` / `REQUIRED_COMPANION`). They need a rule, not a
-target list.
+The earlier 594 count excluded only the 52 selected values represented as plain
+strings. It missed 25 physical targets claimed through structured selections.
+Excluding every exact claim would yield 569, median 8 and maximum 33, but hiding
+claims makes accidental target reuse harder to review. The implemented list
+therefore retains all 646 base targets and marks exact and same-instance claims.
 
 ### 3.1 Genericity must be decided by role, not frequency
 
@@ -75,7 +76,7 @@ clinical inference.
 
 ### 3.2 Presentation: group by contained template, print IG columns
 
-Grouped by contained template, the largest list (X-ray Untersuchungsregion, 34
+Grouped by contained template, the largest list (X-ray Untersuchungsregion, 35
 candidates across ~19 templates) surfaces the right rows at the top of their
 groups:
 
@@ -149,37 +150,39 @@ owning node's `fixed` map rather than materializing a separate target. That is
 correct behaviour under `DEC-014`, not a loss.
 
 **Conclusion: there are zero genuine losses between the IG's declared endpoints
-and the compiled model.** The compiler is a strict superset. Anything a reviewer
-sees in the IG is reachable in `cda.json`, and the surplus is the four expansion
-layers above.
+and the compiled model.** The literal id sets differ because 24 fixed attributes
+are folded into owning nodes and three reviewed-extension ids are compiler-only;
+after that representation normalization, the compiled model covers the full IG
+surface and adds the four expansion layers above.
 
 ### 4.3 Keep the diff as a standing check
 
 The comparison is mechanizable and cheap: parse `<element|attribute … id="…">`
 per in-closure template from the fetched sources, diff against
 `{target["element_id"]}` grouped by `template_id`, and report the difference.
-A non-empty result that is **not** a fixed structural attribute is a compiler
-defect. Worth wiring as a test alongside `tests/test_closure.py`, since it turns
-"does the compiler see everything AKTIN publishes?" into an assertion rather
-than a periodic manual audit.
+A non-empty declared-only result that is **not** a fixed structural attribute is
+a compiler defect. `cda.parity.declared_endpoint_parity` and the standing
+reference test in `tests/test_closure.py` now turn "does the compiler see
+everything AKTIN publishes?" into an assertion rather than a periodic manual
+audit.
 
 ## 5. Where the candidate list belongs
 
-`gap.reopens_with` in `mapping-audit.json` is already this field, only
-under-filtered — B0 made it descend for structural containers. Replace its body
-with stages 2–4 and add a ranked, template-grouped **"Possible targets
-(unproven)"** section per unmapped field in `cda-mapping-details.md`, which is
-already the report for exactly this purpose.
+Audit version 2 stores the stage 2–4 result in a sibling `possible_targets`
+object and renders the same deterministic, template-grouped **"Possible targets
+(unproven)"** section per unmapped field in `cda-mapping-details.md`.
+`gap.reopens_with` remains the smallest first-gate diagnostic defined by
+`DEC-011`; it is not overloaded with a potentially long inventory.
 
-Touchpoints: `compile/mapping.py::_gap_classification`, a new candidate filter
-beside `_reportable_cda_target` in `compile/reports.py`, and the details
-renderer.
+The purpose-built filter and renderer live in `compile/mapping.py`; the
+coverage-only `_reportable_cda_target` in `compile/reports.py` remains
+unchanged.
 
 ## 6. The boundary that keeps this admissible
 
 The list is a **physical admissibility inventory, not evidence**. Nothing is
-auto-selected, no candidate becomes a mapping, and the ranking asserts physical
-plausibility only. It therefore does not touch `DEC-003`'s prohibition on
+auto-selected and no row becomes a mapping. It therefore does not touch
+`DEC-003`'s prohibition on
 inferred clinical semantics, and it does not weaken the two-gate model: it
 reports the physical gate's contents so a human can close the semantic gate
 deliberately.

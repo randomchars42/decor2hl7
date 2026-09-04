@@ -449,6 +449,30 @@ Where available, unresolved rows should also state the compiled cause:
   type is incompatible;
 - `no_semantic_evidence` — no usable target evidence was found.
 
+### Possible targets for human review
+
+For an unselected field with one located structural context,
+`cda-mapping-details.md` includes a **Possible targets (unproven)** section.
+The same deterministic list is stored in the field's `possible_targets` object
+in audit version 2. It is grouped by the concrete contained-template occurrence
+and shows the IG-facing template identity, CDA path, datatype, cardinality,
+conformance, description and ValueSet bindings, plus `non_null_requires`,
+repeat ancestors, occurrence-rule mismatch, exact target claims and claims in
+the same template occurrence.
+
+This table is an admissibility inventory, not another candidate-evidence tier.
+Rows do not receive confidence or scores, do not enter `primary` or
+`alternatives`, and never change `cda-mapping.proposed.json` or the coverage
+headline. An `available` row is only unclaimed; a reviewer must still establish
+its semantics. An `already_claimed` row is retained so target reuse cannot be
+missed, including structured selections whose logical and physical target names
+differ.
+
+The document-wide pool and per-field narrowing follow `DEC-011`. In particular,
+genericity is determined by the fixed CDA-infrastructure role deny-list, never
+by path frequency: frequent payload roles such as `hl7:value` must remain
+reviewable.
+
 The expanded CDA documentation must identify whether a node comes from an
 ART-DECOR template, an HL7 datatype part, or both. Datatype-derived optional
 parts are legal targets, not instructions to emit empty XML elements.
