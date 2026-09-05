@@ -296,11 +296,18 @@ def _value_set_binding(node: ET.Element) -> dict[str, str] | None:
     value_set = node.get("valueSet") or ""
     if not value_set:
         return None
-    return {
+    binding = {
         "id": value_set,
         "effective_date": node.get("vseffectiveDate") or node.get("effectiveDate") or "",
         "flexibility": node.get("flexibility") or "",
     }
+    display_name = clean(node.get("vsdisplayName") or "")
+    name = clean(node.get("vsname") or "")
+    if display_name:
+        binding["display_name"] = display_name
+    if name:
+        binding["name"] = name
+    return binding
 
 
 def _attribute_fixed_value(attribute: ET.Element) -> str | None:
@@ -317,11 +324,11 @@ def _attribute_fixed_value(attribute: ET.Element) -> str | None:
 def _constraints(
     element: ET.Element,
 ) -> tuple[
-    list[str], list[dict[str, str]], list[tuple[str, str]], dict[str, str], str | None,
+    list[str], list[dict[str, str]], list[tuple[str, str, str]], dict[str, str], str | None,
 ]:
     value_sets: list[str] = []
     value_set_bindings: list[dict[str, str]] = []
-    codes: list[tuple[str, str]] = []
+    codes: list[tuple[str, str, str]] = []
     fixed: dict[str, str] = {}
     unit: str | None = None
     for node in list(element):
@@ -336,13 +343,17 @@ def _constraints(
                 # CS constraints commonly state only the vocabulary code; the
                 # code system is implicit in the CDA attribute's domain.  A
                 # single such code is still an executable fixed value.
-                codes.append((node.get("code") or "", node.get("codeSystem") or ""))
+                codes.append((
+                    node.get("code") or "",
+                    node.get("codeSystem") or "",
+                    clean(node.get("displayName") or ""),
+                ))
         elif kind == "attribute" and node.get("name") and node.get("value"):
             fixed[node.get("name") or ""] = node.get("value") or ""
         elif kind == "property" and node.get("unit"):
             unit = node.get("unit")
     if fixed.get("code"):
-        codes.append((fixed["code"], fixed.get("codeSystem", "")))
+        codes.append((fixed["code"], fixed.get("codeSystem", ""), ""))
     return (
         list(dict.fromkeys(value_sets)), value_set_bindings,
         list(dict.fromkeys(codes)), fixed, unit,
@@ -401,6 +412,7 @@ def _neutral_coded_examples(
             yield current, {
                 "code": node.get("code") or "",
                 "code_system": node.get("codeSystem") or "",
+                "display_name": clean(node.get("displayName") or ""),
             }
         for child in list(node):
             yield from example_values(child, current)
@@ -493,6 +505,22 @@ def _apply_neutral_example_defaults(
             )
             path = _normalized_xml_path(str(origin.get("path") or ""))
             candidates = examples.get((template_key, path), [])
+            for explicit in node.get("codes", []):
+                if not isinstance(explicit, dict):
+                    continue
+                labels = {
+                    str(candidate.get("display_name") or "")
+                    for candidate in candidates
+                    if candidate.get("display_name")
+                    and candidate.get("code") == explicit.get("code")
+                    and (
+                        not candidate.get("code_system")
+                        or not explicit.get("code_system")
+                        or candidate.get("code_system") == explicit.get("code_system")
+                    )
+                }
+                if len(labels) == 1:
+                    explicit["display_name"] = next(iter(labels))
             allowed, binding = _allowed_coded_values(node, members)
             resolved: set[tuple[str, str]] = set()
             if (
@@ -512,6 +540,16 @@ def _apply_neutral_example_defaults(
                         resolved.update(matches)
             if len(resolved) == 1:
                 code, code_system = next(iter(resolved))
+                display_names = {
+                    str(candidate.get("display_name") or "")
+                    for candidate in candidates
+                    if candidate.get("display_name")
+                    and candidate.get("code") == code
+                    and (
+                        not candidate.get("code_system")
+                        or candidate.get("code_system") == code_system
+                    )
+                }
                 evidence: dict[str, Any] = {
                     "source": "template-example",
                     "evidence": "STRONG",
@@ -525,6 +563,10 @@ def _apply_neutral_example_defaults(
                     "value": {
                         "code": code,
                         **({"codeSystem": code_system} if code_system else {}),
+                        **(
+                            {"displayName": next(iter(display_names))}
+                            if len(display_names) == 1 else {}
+                        ),
                     },
                     **evidence,
                 }
@@ -547,6 +589,7 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
             template.get("name") or template.get("displayName") or tkey[0].split(".")[-1]
         )
         display = clean(template.get("displayName") or child_text(template, "name") or template_name)
+        template_description = _description(template)
 
         def walk(parent: ET.Element, path: tuple[str, ...] = ()) -> None:
             for child in list(parent):
@@ -561,6 +604,7 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                         "template_effective_date": tkey[1],
                         "template_name": template_name,
                         "template_display_name": display,
+                        "template_description": template_description,
                         "kind": "element",
                         "element_id": child.get("id"),
                         "element_name": name,
@@ -568,7 +612,14 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                         "datatype": child.get("datatype"),
                         "value_sets": value_sets,
                         "value_set_bindings": value_set_bindings,
-                        "codes": [{"code": c, "code_system": s} for c, s in codes],
+                        "codes": [
+                            {
+                                "code": code,
+                                "code_system": code_system,
+                                **({"display_name": display_name} if display_name else {}),
+                            }
+                            for code, code_system, display_name in codes
+                        ],
                         "fixed": fixed,
                         "fixed_text": _fixed_text(child),
                         "description": _description(child),
@@ -589,6 +640,7 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                             "template_effective_date": tkey[1],
                             "template_name": template_name,
                             "template_display_name": display,
+                            "template_description": template_description,
                             "kind": "attribute",
                             "element_id": direct.get("id"),
                             "element_name": aname,
@@ -743,6 +795,7 @@ def _parse_element(
             template.get("displayName") or child_text(template, "name")
             or template.get("name") or ""
         ),
+        "template_description": _description(template),
         "id": element.get("id"),
         "datatype": element.get("datatype"),
         "min": _int(element.get("minimumMultiplicity")),
@@ -753,9 +806,17 @@ def _parse_element(
         "reviewed_extension": source_kind == "reviewed-extension",
         "fixed": fixed,
         "fixed_text": _fixed_text(element),
+        "description": _description(element),
         "value_sets": value_sets,
         "value_set_bindings": value_set_bindings,
-        "codes": [{"code": c, "code_system": s} for c, s in codes],
+        "codes": [
+            {
+                "code": code,
+                "code_system": code_system,
+                **({"display_name": display_name} if display_name else {}),
+            }
+            for code, code_system, display_name in codes
+        ],
         "unit": unit or fixed.get("unit"),
         "attributes": attributes,
         "children": children,
@@ -874,7 +935,8 @@ def _merge_node(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str
     # parent supplies only omitted constraints.
     for key in (
         "name", "id", "datatype", "min", "max", "mandatory", "conformance",
-        "fixed_text", "unit", "origin",
+        "fixed_text", "unit", "origin", "description", "template_name",
+        "template_display_name", "template_description",
     ):
         if child.get(key) is not None:
             result[key] = deepcopy(child.get(key))
@@ -1219,6 +1281,7 @@ def _datatype_child(
         "name": name,
         "template_name": parent.get("template_name"),
         "template_display_name": parent.get("template_display_name"),
+        "template_description": parent.get("template_description"),
         "id": None,
         "datatype": datatype,
         "min": minimum,
@@ -1743,6 +1806,7 @@ def _raw_datatype_targets(document: Iterable[Mapping[str, Any]]) -> list[dict[st
                     "template_effective_date": origin.get("template_effective_date"),
                     "template_name": node.get("template_name") or "Datatype",
                     "template_display_name": node.get("template_display_name") or "HL7 datatype",
+                    "template_description": node.get("template_description"),
                     "kind": "element",
                     "element_id": None,
                     "element_name": node.get("name"),
@@ -1753,7 +1817,7 @@ def _raw_datatype_targets(document: Iterable[Mapping[str, Any]]) -> list[dict[st
                     "codes": list(node.get("codes", [])),
                     "fixed": dict(node.get("fixed", {})),
                     "fixed_text": node.get("fixed_text"),
-                    "description": None,
+                    "description": node.get("description"),
                     "conformance": node.get("conformance"),
                     "prohibited": False,
                     "unit": node.get("unit"),
@@ -1770,6 +1834,7 @@ def _raw_datatype_targets(document: Iterable[Mapping[str, Any]]) -> list[dict[st
                     "template_effective_date": origin.get("template_effective_date"),
                     "template_name": node.get("template_name") or "Datatype",
                     "template_display_name": node.get("template_display_name") or "HL7 datatype",
+                    "template_description": node.get("template_description"),
                     "kind": "attribute",
                     "element_id": None,
                     "element_name": "@" + str(attribute.get("name") or "attribute"),
@@ -2440,6 +2505,7 @@ def compile_cda(
             "effective_date": selected.get("effectiveDate"),
             "name": selected.get("name"),
             "display_name": selected.get("displayName"),
+            "description": _description(selected),
         },
         "reviewed_extensions": applied_extensions,
         "targets": targets,

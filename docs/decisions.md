@@ -235,10 +235,13 @@ Evidence: `src/decor2hl7/compile/artifacts.py`, `docs/architecture.md`,
 **Implementation:** verified
 
 `mapping-audit.json` is the structured evidence/decision product.
-`cda-mapping.proposed.json`, `cda-mapping.md` and
-`cda-mapping-details.md` derive from the same analysis. The concise guide shows
-human names, exact keys, contextual read-only XML and explicit candidate/result
-classes. Configuration is edited in JSON, never in generated Markdown or XML.
+`cda-mapping.proposed.json`, `cda-mapping.md`, `cda-mapping-details.md` and
+`cda-mapping-trees.md` derive from the same analysis. The reports deliberately
+separate three reviewer tasks: the main guide contains only unresolved decisions
+and their candidate leaves; the details appendix contains every accepted mapping,
+its abridged JSON and contextual read-only XML plus full evidence; the tree report
+contains the two exhaustive coverage views. Configuration is edited in JSON,
+never in generated Markdown or XML.
 
 When an executable proposal depends on a reviewed attachment, identity alias,
 source hint or OID-owner override, `cda-mapping.json` carries a short generated
@@ -247,10 +250,12 @@ preserving reviewer-authored notes and mapping choices.
 
 Its stable coverage headline separates mapped dataset datapoints and target
 leaves, actionable unselected suggestions, datapoints with no suitable writable
-CDA leaf, and reportable template-level CDA leaves with no dataset source. Two
-status-gutter trees present the same evidence in opposite directions: every
-dataset datapoint through its source hierarchy, and every reportable CDA leaf
-through the document/template hierarchy. Tree leaves stay on one physical line.
+CDA leaf, and reportable template-level CDA leaves with no dataset source.
+`cda-mapping.md` prunes both hierarchies to unresolved datapoints and candidate
+leaves. `cda-mapping-trees.md` presents the exhaustive evidence in opposite
+directions: every dataset datapoint through its source hierarchy, and every
+reportable CDA leaf through the document/template hierarchy. Tree leaves stay
+on one physical line with status in a dedicated left gutter.
 The inverse view excludes generic datatype-expansion plumbing and fixed,
 conditional-fixed or system-supplied values rather than reporting the raw
 writable-target inventory as meaningful mapping surface.
@@ -282,6 +287,14 @@ compiler then keeps descendants of the selected context whose compiled
 remain visible with `containing_instance_claimed_by`; neither is evidence for
 the unmapped field. `gap.reopens_with` stays the compact first-gate diagnostic
 and does not duplicate this potentially long list.
+
+The main decision card groups this inventory by contained-template occurrence
+and renders an annotated XML-like constraint skeleton beside each group. The
+skeleton is not an instance example and is not editable: its template name,
+description and identity, element description, datatype, cardinality,
+conformance, fixed codes and display labels, ValueSet identity/name/revision,
+claims, occurrence requirements and non-null companions all come from compiled
+metadata. Missing source labels remain missing; the report never invents them.
 
 A dataset code may map directly to an unfixed writable CDA `hl7:code` element
 when both sides use coded datatypes and share an explicit ValueSet. This permits

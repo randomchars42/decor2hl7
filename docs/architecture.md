@@ -336,7 +336,8 @@ references resolve to a frozen manifest identity.
 ## Mapping evidence
 
 Editable JSON stores only selections. `mapping-audit.json` stores the structured
-decision record, and both Markdown views are produced from the same analysis.
+decision record, and all three Markdown views are produced from the same analysis:
+unresolved decisions, accepted mappings/evidence, and exhaustive coverage trees.
 Its summary persists the same coverage-headline counts printed by `build` and
 `init-cda-mapping`. Each unselected field/group, plus any selected field with
 unresolved formal terminology, stores one first-failing `gap` gate and the

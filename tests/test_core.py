@@ -29,7 +29,8 @@ from decor2hl7.cda.extensions import load_extensions
 from decor2hl7.cda.parity import declared_endpoint_parity
 from decor2hl7.compile.reports import (
     _outline_datapoint_lines, coverage_headline_counts,
-    format_coverage_headline, render_cda_mapping_markdown,
+    format_coverage_headline, render_accepted_cda_mappings_markdown,
+    render_cda_mapping_markdown, render_cda_mapping_trees_markdown,
 )
 from decor2hl7.compile.terminology import domain_difference
 from decor2hl7.retrieval.artifacts import artifact_problems, artifact_record, closure_records
@@ -493,14 +494,29 @@ class CoreTests(unittest.TestCase):
 <project>
   <templateAssociation templateId="doc" effectiveDate="2026-01-01"><concept ref="c" elementId="e"/></templateAssociation>
   <template id="doc" effectiveDate="2026-01-01" name="ExampleDocument">
+    <desc language="en-US">Example document description</desc>
     <element name="hl7:ClinicalDocument" id="root" minimumMultiplicity="1" maximumMultiplicity="1">
-      <element name="hl7:value" id="e" datatype="ST" minimumMultiplicity="0" maximumMultiplicity="1"/>
+      <element name="hl7:value" id="e" datatype="ST" minimumMultiplicity="0" maximumMultiplicity="1">
+        <desc language="en-US">Example payload description</desc>
+      </element>
     </element>
   </template>
 </project>''', encoding="utf-8")
             model = {"meta": {"template_id": "doc", "template_effective_date": "2026-01-01"}, "groups": {}, "fields": {"foo": {"name": "Foo", "concept": "c", "type": "text", "value_sets": [], "codes": [], "parent": None}}}
             target = compile_cda([project], model)
             self.assertIn("ExampleDocument.value", target["targets"])
+            self.assertEqual(
+                target["document_template"]["description"],
+                "Example document description",
+            )
+            self.assertEqual(
+                target["targets"]["ExampleDocument.value"]["description"],
+                "Example payload description",
+            )
+            self.assertEqual(
+                target["targets"]["ExampleDocument.value"]["template_description"],
+                "Example document description",
+            )
             proposal, report = cda_mapping_proposal(model, target, [project])
             _, _, details = mapping.cda_mapping_reports(model, target, [project])
             self.assertEqual(proposal["fields"]["foo"], "ExampleDocument.value")
@@ -518,7 +534,7 @@ class CoreTests(unittest.TestCase):
             readable = (output / "cda-expanded-readable.xml").read_text(encoding="utf-8")
             self.assertIn("Mapped dataset path(s): foo", readable)
             self.assertTrue((output / "cda-expanded-readable.md").is_file())
-            guide = (output / "cda-mapping.md").read_text(encoding="utf-8")
+            guide = (output / "cda-mapping-details.md").read_text(encoding="utf-8")
             self.assertIn(
                 "| Name in dataset | `model.json` datapoint | "
                 "`cda-mapping.json` target | Name in CDA template | Status |",
@@ -532,6 +548,9 @@ class CoreTests(unittest.TestCase):
                 guide.index("Resulting CDA placement"),
             )
             self.assertNotIn("Put the value", guide)
+            decisions = (output / "cda-mapping.md").read_text(encoding="utf-8")
+            self.assertNotIn("Abridged configuration excerpt", decisions)
+            self.assertTrue((output / "cda-mapping-trees.md").is_file())
 
 
     def test_ta_selects_formally_bound_hl7_code_payload(self) -> None:
@@ -869,6 +888,12 @@ class CoreTests(unittest.TestCase):
             }]}},
         }
         report = render_cda_mapping_markdown(model, cda_model, mapping_cfg, audit)
+        trees = render_cda_mapping_trees_markdown(
+            model, cda_model, mapping_cfg, audit
+        )
+        accepted = render_accepted_cda_mappings_markdown(
+            model, cda_model, mapping_cfg
+        )
         counts = coverage_headline_counts(model, cda_model, mapping_cfg, audit)
         self.assertEqual(counts, {
             "datapoints": 3,
@@ -891,17 +916,17 @@ class CoreTests(unittest.TestCase):
             "○ no source **1 leaf**",
             report,
         )
-        self.assertIn("!      └── Referral source → {Referral.code}", report)
-        self.assertIn("✓  │       ├── low {Encounter.low} ← Start", report)
+        self.assertIn("!      └── Referral source", report)
+        self.assertIn("✓  │       ├── low {Encounter.low} ← Start", trees)
         self.assertIn(
             "○          └── text {Referral.unused} ← no dataset counterpart",
-            report,
+            trees,
         )
-        self.assertIn('<componentOf typeCode="COMP">', report)
-        self.assertIn('<encompassingEncounter classCode="ENC" moodCode="EVN">', report)
-        self.assertIn('<low value="{Encounter.low}"/>', report)
-        self.assertIn('<high value="{Encounter.high}"/>', report)
-        self.assertIn("**1** unresolved dataset datapoint(s)", report)
+        self.assertIn('<componentOf typeCode="COMP">', accepted)
+        self.assertIn('<encompassingEncounter classCode="ENC" moodCode="EVN">', accepted)
+        self.assertIn('<low value="{Encounter.low}"/>', accepted)
+        self.assertIn('<high value="{Encounter.high}"/>', accepted)
+        self.assertIn("manual decision workbench", report)
         self.assertIn("Referral code", report)
         self.assertIn("SPEC → TA", report)
         self.assertIn("selectable after review", report)
@@ -1429,9 +1454,8 @@ class CoreTests(unittest.TestCase):
             "document": [],
             "datapoints": datapoints,
         }
-        report = render_cda_mapping_markdown(
+        report = render_accepted_cda_mappings_markdown(
             model, report_cda, mapping_cfg,
-            {"summary": {"field_coverage": {"NO": 0}}},
         )
         self.assertIn("{Pupil_right.value}", report)
         self.assertIn("{Pupil_left.value}", report)
@@ -1439,7 +1463,7 @@ class CoreTests(unittest.TestCase):
             report.index("Abridged configuration excerpt"),
             report.index("Resulting CDA placement"),
         )
-        self.assertIn("do not edit the XML examples", report)
+        self.assertIn("XML excerpts below are read-only", report)
         self.assertIn("review the rule stored at `fields[\"pupil.right\"]`", report)
         self.assertIn("Text in `{braces}` names a generated CDA datapoint", report)
         self.assertEqual(
@@ -2716,17 +2740,20 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(observations[0]), 3)
         self.assertEqual(len(observations[1]), 3)
 
+        accepted = render_accepted_cda_mappings_markdown(
+            model, compiled, mapping
+        )
         report = render_cda_mapping_markdown(
             model, compiled, mapping,
             {"summary": {"field_coverage": {"NO": 0}}},
         )
-        self.assertIn("## Required CDA completion", report)
-        self.assertIn('nullFlavor="NI"', report)
-        self.assertIn('nullFlavor="UNK"', report)
-        self.assertIn("No diagnosis-onset datapoint is available", report)
-        self.assertIn("## Review required", report)
+        self.assertIn("## Accepted required-CDA completion", accepted)
+        self.assertIn('nullFlavor="NI"', accepted)
+        self.assertIn('nullFlavor="UNK"', accepted)
+        self.assertIn("No diagnosis-onset datapoint is available", accepted)
+        self.assertIn("## Decisions", report)
         self.assertIn("`diagnoses.note`", report)
-        self.assertIn("explicitly `null` in `cda-mapping.json`", report)
+        self.assertIn("explicit `null` entry in `cda-mapping.json`", report)
 
     def test_target_default_validation_rejects_unsafe_nullification(self) -> None:
         def target(**changes: object) -> dict[str, object]:
@@ -3503,7 +3530,20 @@ class CoreTests(unittest.TestCase):
                 }], "attributes": [],
             }],
             "targets": {
-                "T.value": target(),
+                "T.value": target(
+                    template_display_name="Readable template",
+                    template_description="A human-readable template description.",
+                    description="The candidate payload.", min=1, max=1,
+                    conformance="R", codes=[{
+                        "code": "KNOWN", "code_system": "9.8.7",
+                        "display_name": "Known value",
+                    }],
+                    value_set_bindings=[{
+                        "id": "1.2.3", "effective_date": "2026",
+                        "display_name": "Example values",
+                    }],
+                    value_representation={"kind": "element_text"},
+                ),
                 "T.id": target(
                     locations=["0.0.0.0"], element_name="hl7:id",
                     path="hl7:observation/hl7:id", datatype_derived=True,
@@ -3554,6 +3594,39 @@ class CoreTests(unittest.TestCase):
                 ]
             )
         )
+        value_item = next(
+            item for item in inventory["items"] if item["target"] == "T.value"
+        )
+        self.assertEqual(
+            value_item["template"]["description"],
+            "A human-readable template description.",
+        )
+        guide = render_cda_mapping_markdown(
+            {
+                "meta": {}, "order": ["field"], "groups": {},
+                "fields": {"field": {"name": "Unmapped field", "type": "text"}},
+            },
+            {
+                **cda_model,
+                "document_template": {
+                    "id": "doc", "effective_date": "2026",
+                    "display_name": "Document",
+                },
+            },
+            {"fields": {"field": None}},
+            {"fields": {"field": {
+                "possible_targets": inventory,
+                "gap": {"gate": "semantic", "kind": "no_association"},
+            }}},
+        )
+        self.assertIn("#### Possible targets (unproven)", guide)
+        self.assertIn("A human-readable template description.", guide)
+        self.assertIn(
+            "<!-- Bound ValueSet: Example values (1.2.3@2026) -->", guide
+        )
+        self.assertIn('displayName="Known value"', guide)
+        self.assertIn("<!-- Possible target (unproven): T.value -->", guide)
+        self.assertNotIn("## Sections and entities", guide)
 
     def test_partial_expansion_degrades_only_an_active_value_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3744,8 +3817,8 @@ class CoreTests(unittest.TestCase):
             _, audit, _, _ = mapping_compiler.cda_mapping_audit(
                 model, compiled, [project]
             )
-            guide = render_cda_mapping_markdown(
-                model, compiled, proposal, audit
+            guide = render_accepted_cda_mappings_markdown(
+                model, compiled, proposal
             )
             self.assertIn("Target-governed coded fallback", guide)
             self.assertIn('`nullFlavor="OTH"`', guide)

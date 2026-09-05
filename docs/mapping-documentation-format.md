@@ -1,18 +1,20 @@
-# Generated `cda-mapping.md` documentation
+# Generated CDA mapping documentation
 
-This specification defines the generated, human-facing `cda-mapping.md` user
-guide. It applies to dataset-to-CDA mapping. The guide is for reviewers who
+This specification defines the three generated, human-facing CDA mapping
+reports. They apply to dataset-to-CDA mapping and are for reviewers who
 understand either the dataset or the CDA template but should not need to
 understand compiler internals.
 
 ## Source of truth and report purpose
 
-`cda-mapping.json` is the editable source of truth. `cda-mapping.md` and all
-XML fragments are generated explanations and may be replaced by the next build.
+`cda-mapping.json` is the editable source of truth. `cda-mapping.md`,
+`cda-mapping-details.md`, `cda-mapping-trees.md` and all XML-like fragments are
+generated explanations and may be replaced by the next build.
 
 The guide must say explicitly:
 
-> Edit `cda-mapping.json`. Do not edit the XML examples in this report.
+> Edit `cda-mapping.json`. Do not edit generated XML examples or template
+> skeletons in these reports.
 
 It connects three representations:
 
@@ -33,7 +35,7 @@ mapping. `init-cda-mapping` may refresh those generated entries, but it must
 preserve reviewer-authored notes and every reviewed field/structure/default
 choice. A note records provenance; it is not additional semantic evidence.
 
-The report should answer, in order:
+Together the reports should answer:
 
 1. Where would mapped data appear in the CDA?
 2. Which mappings are already executable?
@@ -43,17 +45,17 @@ The report should answer, in order:
 
 ## Required organization
 
-Generate the guide in this order:
+Generate three reports with distinct roles:
 
-1. document identity, coverage and editing instruction;
-2. dataset-to-CDA coverage tree;
-3. inverse CDA-to-dataset coverage tree;
-4. sections and CDA entities;
-5. selected configuration examples and contextual CDA previews;
-6. decisions and mappings requiring review;
-7. structural and transformation rules;
-8. required-CDA completion rules;
-9. a pointer to detailed evidence.
+1. `cda-mapping.md`: document identity and coverage headline, the dataset tree
+   pruned to unresolved datapoints, the CDA tree pruned to evidence candidates
+   and possible targets, then one decision card per unresolved datapoint;
+2. `cda-mapping-details.md`: the established section/entity presentation for
+   every accepted mapping, selected configuration examples, contextual CDA
+   previews, structural/default rules, then full scores, evidence chains and
+   structural group context;
+3. `cda-mapping-trees.md`: the complete dataset-to-CDA and inverse
+   CDA-to-dataset coverage trees.
 
 ## Coverage headline and trees
 
@@ -83,10 +85,16 @@ targets: unique-location, template-level writable leaves that are neither fixed,
 conditional-fixed, system-supplied nor generic datatype-expansion plumbing.
 The report must not headline the raw compiled writable-target inventory.
 
-Render two complementary trees. Both use a dedicated three-character status
-gutter and keep every leaf, including its complete stable target name, on one
-physical line. Long lines may scroll horizontally; identifiers must never be
-split onto a continuation line.
+Render two complementary exhaustive trees in `cda-mapping-trees.md`. Both use
+a dedicated three-character status gutter and keep every leaf, including its
+complete stable target name, on one physical line. Long lines may scroll
+horizontally; identifiers must never be split onto a continuation line.
+
+The main decision guide uses the same hierarchy and gutter convention but
+prunes the dataset side to unresolved datapoints and their ancestors, and the
+CDA side to leaves present in their semantic evidence or physical admissibility
+inventories. Its `!` means evidence exists and `?` means possible but unproven;
+it does not reproduce accepted or unrelated leaves.
 
 ### Dataset coverage tree
 
@@ -133,7 +141,7 @@ alternatives and long evidence chains.
 
 ## Section and entity presentation
 
-For every section and CDA entity, show its human-readable name, template identity
+In `cda-mapping-details.md`, for every section and CDA entity, show its human-readable name, template identity
 and a short description when available. Align the three representations:
 
 | Name in dataset | `model.json` datapoint | `cda-mapping.json` target | Name in CDA template | Status |
@@ -382,9 +390,8 @@ Every offered rule must be accompanied by its exact abridged JSON configuration.
 
 ## Review required
 
-Use the same candidate structure as the concise candidate table derived for
-`cda-mapping-details.md`, enriched with a human target name and a short
-explanation.
+Use the audit candidate structure in `cda-mapping.md`, enriched with a human
+target name and a short explanation.
 
 For each unmapped dataset datapoint, generate a decision card rather than only a
 comma-separated list:
@@ -452,7 +459,7 @@ Where available, unresolved rows should also state the compiled cause:
 ### Possible targets for human review
 
 For an unselected field with one located structural context,
-`cda-mapping-details.md` includes a **Possible targets (unproven)** section.
+`cda-mapping.md` includes a **Possible targets (unproven)** section.
 The same deterministic list is stored in the field's `possible_targets` object
 in audit version 2. It is grouped by the concrete contained-template occurrence
 and shows the IG-facing template identity, CDA path, datatype, cardinality,
@@ -472,6 +479,17 @@ The document-wide pool and per-field narrowing follow `DEC-011`. In particular,
 genericity is determined by the fixed CDA-infrastructure role deny-list, never
 by path frequency: frequent payload roles such as `hl7:value` must remain
 reviewable.
+
+After each contained-template candidate table, render a compact annotated
+XML-like constraint skeleton. It is a navigation aid, not an instance document.
+Include as many available human-readable compiled labels as remain useful:
+template name, description, OID and revision; containment occurrence; element
+name/description; datatype, cardinality and conformance; fixed codes with display
+labels; ValueSet identity, name and revision; exact or same-occurrence claims;
+repeat/occurrence requirements; and non-null companions. Candidate placeholders
+use logical target names in braces. All comments and attributes must derive from
+compiled CDA and audit metadata. Never reread source XML in the report renderer,
+guess a label, or imply that the skeleton is editable XML.
 
 The expanded CDA documentation must identify whether a node comes from an
 ART-DECOR template, an HL7 datatype part, or both. Datatype-derived optional
@@ -577,20 +595,21 @@ behavior.
 
 ## Compactness rules
 
-- Show all mappings in entity tables.
-- Show every dataset datapoint in the dataset coverage tree.
-- Show every reportable template-level CDA leaf in the inverse coverage tree;
-  exclude generic datatype plumbing and fixed/system-supplied values.
+- Show all accepted mappings in the details report's entity tables.
+- Show every dataset datapoint in the complete dataset coverage tree.
+- Show every reportable template-level CDA leaf in the complete inverse
+  coverage tree; exclude generic datatype plumbing and fixed/system-supplied
+  values.
 - Keep each tree leaf on one physical line and never truncate or wrap a stable
   dataset or CDA identifier.
 - Do not generate full JSON and XML for every direct mapping.
 - Generate one simple example and one example for every non-trivial pattern that
   occurs: transform, repetition, repeat-by-discriminator, coalescing, fallback,
   ambiguity or target-specific default.
-- Group candidate details into decision cards only for unresolved or ambiguous
-  fields.
-- Limit the working guide to the strongest five candidates; keep complete
-  evidence in the detailed report.
+- Group candidate details into decision cards only for unresolved fields.
+- Keep the complete physical admissibility inventory in each main-guide decision
+  card. Semantic evidence may stay compact, but must not hide a selectable row.
+- Keep complete scored evidence chains in the detailed report.
 - Merge one entity’s XML targets into one contextual fragment.
 - Omit XML that would contain only isolated leaves.
 - Truncate prose descriptions, not identifiers.
@@ -603,7 +622,7 @@ behavior.
 - Never phrase XML as a place where the user enters values.
 - Reuse candidate classification and reasoning from the mapping audit; do not
   implement a second scoring system in the report generator.
-- Derive the headline and both trees from the same selected mappings, actionable
+- Derive the headline and all tree views from the same selected mappings, actionable
   audit candidates and compiled CDA target metadata used elsewhere in the
   report, so comparison metrics cannot drift from the displayed leaves.
 - Distinguish selected mappings, alternatives, transforms, rule requirements,

@@ -753,7 +753,9 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         )
         for path in delta["lost"]:
             _say("review  " + str(path))
-    for guide_name in ("cda-mapping.md", "cda-mapping-details.md"):
+    for guide_name in (
+        "cda-mapping.md", "cda-mapping-details.md", "cda-mapping-trees.md",
+    ):
         _copy_generated_guide(model_dir / guide_name, destination.parent / guide_name)
     mapping = load_json(destination)
     lock = destination.parent / "mapping-lock.json"

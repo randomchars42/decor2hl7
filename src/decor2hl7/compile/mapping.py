@@ -2003,6 +2003,9 @@ def _possible_target_inventory(
                 "display_name": str(
                     target.get("template_display_name") or ""
                 ),
+                "description": str(
+                    target.get("template_description") or ""
+                ),
                 "location": occurrence[1],
             },
             "path": str(target.get("path") or ""),
@@ -3075,110 +3078,6 @@ def _cda_mapping_analysis(
     def target_datatype(name: str) -> str:
         return str(cda.get("targets", {}).get(name, {}).get("datatype") or "—")
 
-    def markdown_cell(value: Any) -> str:
-        return str(value or "—").replace("|", "\\|").replace("\n", " ")
-
-    def possible_target_lines(detail: Mapping[str, Any]) -> list[str]:
-        inventory = detail.get("possible_targets", {})
-        items = (
-            inventory.get("items", []) if isinstance(inventory, Mapping) else []
-        )
-        if not items:
-            return []
-        grouped: dict[tuple[str, str, str, str], list[Mapping[str, Any]]] = defaultdict(list)
-        for item in items:
-            if not isinstance(item, Mapping):
-                continue
-            template = item.get("template", {})
-            if not isinstance(template, Mapping):
-                template = {}
-            key = (
-                str(template.get("display_name") or template.get("name") or "Unnamed template"),
-                str(template.get("id") or ""),
-                str(template.get("effective_date") or ""),
-                str(template.get("location") or ""),
-            )
-            grouped[key].append(item)
-        out = [
-            "### Possible targets (unproven)",
-            "",
-            "These are type-compatible writable descendants of the selected "
-            "container. They are an admissibility inventory, not mapping evidence; "
-            "nothing in this list is selected automatically.",
-            "",
-        ]
-        for (display, template_id, effective, location), rows in grouped.items():
-            identity = f"`{template_id}` @ `{effective or 'dynamic'}`"
-            out += [
-                f"#### {display}",
-                "",
-                f"Contained template: {identity}; location `{location or 'document'}`",
-                "",
-                "| Target / CDA path | Datatype | Cardinality | Conformance | Description | Bound value sets | Non-null requires | Repeatable ancestors | Claims |",
-                "|---|---|---|---|---|---|---|---|---|",
-            ]
-            for item in rows:
-                cardinality = item.get("cardinality", {})
-                if not isinstance(cardinality, Mapping):
-                    cardinality = {}
-                maximum = cardinality.get("max")
-                cardinality_text = (
-                    f"{cardinality.get('min', 0)}.."
-                    f"{maximum if maximum is not None else '?'}"
-                )
-                bindings = []
-                for binding in item.get("bound_value_sets", []):
-                    if isinstance(binding, Mapping):
-                        oid = str(binding.get("id") or "")
-                        revision = str(
-                            binding.get("effective_date")
-                            or binding.get("flexibility") or ""
-                        )
-                        bindings.append(oid + (f"@{revision}" if revision else ""))
-                    elif binding:
-                        bindings.append(str(binding))
-                claims: list[str] = []
-                if item.get("claimed_by"):
-                    claims.append(
-                        "already claimed by "
-                        + ", ".join(str(value) for value in item["claimed_by"])
-                    )
-                instance_claims = item.get("containing_instance_claimed_by", [])
-                if instance_claims:
-                    claims.append(
-                        "same instance: "
-                        + "; ".join(
-                            f"{claim.get('target')} ← "
-                            + ", ".join(str(value) for value in claim.get("fields", []))
-                            for claim in instance_claims
-                            if isinstance(claim, Mapping)
-                        )
-                    )
-                if item.get("requires_occurrence_rule"):
-                    claims.append("occurrence rule required")
-                target_text = (
-                    f"`{item.get('target')}`<br>`{item.get('path') or '—'}`"
-                )
-                out.append(
-                    "| " + " | ".join([
-                        markdown_cell(target_text),
-                        markdown_cell(item.get("datatype")),
-                        markdown_cell(cardinality_text),
-                        markdown_cell(item.get("conformance")),
-                        markdown_cell(item.get("description")),
-                        markdown_cell(", ".join(bindings)),
-                        markdown_cell(", ".join(
-                            str(value) for value in item.get("non_null_requires", [])
-                        )),
-                        markdown_cell(", ".join(
-                            str(value) for value in item.get("repeat_ancestors", [])
-                        )),
-                        markdown_cell("; ".join(claims) or "available"),
-                    ]) + " |"
-                )
-            out.append("")
-        return out
-
     def evidence(candidate: Mapping[str, Any]) -> str:
         return " → ".join(str(item) for item in candidate.get("chain", [])) or str(candidate.get("kind") or "—")
 
@@ -3357,9 +3256,6 @@ def _cda_mapping_analysis(
                 f"reopens with: {reopening}",
                 "",
             ]
-
-        if detailed:
-            out += possible_target_lines(detail)
 
         rows = candidate_rows(path, detail, 8 if detailed else 5)
         if rows:
@@ -3543,6 +3439,14 @@ def _cda_mapping_analysis(
             flexibility = unresolved.get("flexibility") or "dynamic"
             detail_lines.append(f"- `{relation}` → `{template}` @ `{flexibility}`")
         detail_lines.append("")
+
+    from .reports import render_accepted_cda_mappings_markdown
+    detail_lines.extend(
+        render_accepted_cda_mappings_markdown(model, cda, proposal)
+        .rstrip()
+        .splitlines()
+    )
+    detail_lines.append("")
 
     detail_lines += ["# Datapoint analysis", ""]
     for path in field_order:
@@ -4209,11 +4113,20 @@ def write_cda_mapping(
     write_json(model_dir / "cda-mapping.proposed.json", cda_proposal)
     write_json(model_dir / "mapping-audit.json", audit)
     (model_dir / "cda-mapping-details.md").write_text(cda_details, encoding="utf-8")
-    from .reports import render_cda_mapping_markdown, write_readable_cda
+    from .reports import (
+        render_cda_mapping_markdown, render_cda_mapping_trees_markdown,
+        write_readable_cda,
+    )
     cda_report = render_cda_mapping_markdown(
         model, enriched_cda, cda_proposal, audit
     )
     (model_dir / "cda-mapping.md").write_text(cda_report, encoding="utf-8")
+    tree_report = render_cda_mapping_trees_markdown(
+        model, enriched_cda, cda_proposal, audit
+    )
+    (model_dir / "cda-mapping-trees.md").write_text(
+        tree_report, encoding="utf-8"
+    )
     write_readable_cda(model_dir, enriched_cda, audit)
     return cda_proposal
 

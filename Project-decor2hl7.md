@@ -208,6 +208,7 @@ WORKSPACE/
 │           ├── cda-mapping.json
 │           ├── cda-mapping.md
 │           ├── cda-mapping-details.md
+│           ├── cda-mapping-trees.md
 │           └── mapping-lock.json
 │
 ├── site/                           deployment-specific configuration
@@ -479,8 +480,9 @@ The generic requirements and the current CDA specialization are defined separate
 
 For CDA the generated products are expected to include at least:
 
-- `cda-mapping.md` — concise review/implementation guide;
-- `cda-mapping-details.md` — detailed candidate/evidence information;
+- `cda-mapping.md` — unresolved review decisions and candidate leaves;
+- `cda-mapping-details.md` — accepted mappings plus detailed evidence;
+- `cda-mapping-trees.md` — exhaustive dataset and CDA coverage trees;
 - `mapping-audit.json` — machine-readable evidence and decisions.
 
 A future FHIR target should be able to generate the analogous `fhir-mapping.md` / detail documentation from the same generic documentation contract.

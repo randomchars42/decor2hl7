@@ -602,6 +602,7 @@ def _review_required(
             "path": str(path),
             "name": str(model_fields.get(path, {}).get("name") or path),
             "candidates": candidates,
+            "detail": detail,
             "action": action,
             "reason": _review_reason(detail, candidates),
         })
@@ -936,98 +937,698 @@ def _configuration_excerpt(
     return json.dumps(excerpt, ensure_ascii=False, indent=2)
 
 
-def render_cda_mapping_markdown(
-    model: Mapping[str, Any],
-    cda: Mapping[str, Any],
-    mapping: Mapping[str, Any],
-    audit: Mapping[str, Any],
-) -> str:
-    """Render the concise, review-oriented dataset-to-CDA mapping guide."""
-    view = _mapping_view(model, cda, mapping)
-    coverage = _coverage_index(model, cda, mapping, audit)
-    cda_tree, no_source_count = _cda_coverage_tree(
-        view, model, cda, mapping, coverage,
-    )
-    rows_by_section = view["rows"]
-    sections = view["sections"]
+def _review_dataset_tree(
+    model: Mapping[str, Any], review_rows: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Render only unresolved datapoints and the groups needed for context."""
+    groups = model.get("groups", {})
+    fields = model.get("fields", {})
+    review_by_path = {str(row["path"]): row for row in review_rows}
+    included_groups: set[str] = set()
+    for path in review_by_path:
+        parent = str(fields.get(path, {}).get("parent") or "") or None
+        while parent:
+            included_groups.add(parent)
+            parent = str(groups.get(parent, {}).get("parent") or "") or None
+
+    children: dict[str | None, list[tuple[str, str]]] = defaultdict(list)
+    for path, group in groups.items():
+        if str(path) not in included_groups:
+            continue
+        parent = str(group.get("parent") or "") or None
+        children[parent].append(("group", str(path)))
+    for path in _ordered_model_paths(model):
+        if path not in review_by_path:
+            continue
+        parent = str(fields.get(path, {}).get("parent") or "") or None
+        children[parent].append(("field", path))
+
+    lines = ["```text", "   Dataset decisions"]
+
+    def render(parent: str | None, stem: str = "") -> None:
+        items = children.get(parent, [])
+        for index, (kind, path) in enumerate(items):
+            last = index == len(items) - 1
+            branch = "└──" if last else "├──"
+            next_stem = stem + ("    " if last else "│   ")
+            if kind == "group":
+                name = str(groups.get(path, {}).get("name") or path.rsplit(".", 1)[-1])
+                lines.append(f"   {stem}{branch} {name}")
+                render(path, next_stem)
+                continue
+            row = review_by_path[path]
+            detail = row.get("detail", {})
+            detail = detail if isinstance(detail, Mapping) else {}
+            gap = detail.get("gap", {})
+            gap = gap if isinstance(gap, Mapping) else {}
+            status = "!" if (
+                row.get("candidates") or detail.get("primary")
+                or detail.get("runtime_blocked")
+            ) else "×"
+            inventory = detail.get("possible_targets", {})
+            inventory = inventory if isinstance(inventory, Mapping) else {}
+            possible_count = len(inventory.get("items", []))
+            gate = ":".join(
+                str(gap.get(key) or "") for key in ("gate", "kind")
+            ).strip(":")
+            notes = [value for value in (
+                gate,
+                f"{possible_count} possible target{'s' if possible_count != 1 else ''}"
+                if possible_count else "no generated target inventory",
+            ) if value]
+            name = str(fields.get(path, {}).get("name") or path.rsplit(".", 1)[-1])
+            lines.append(
+                f"{status:<3}{stem}{branch} {name} [{'; '.join(notes)}]"
+            )
+
+    render(None)
+    return lines + ["```"]
+
+
+def _review_target_rows(
+    review_rows: Sequence[Mapping[str, Any]], cda: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Combine evidence candidates and unproven inventory rows for one tree."""
+    combined: dict[str, dict[str, Any]] = {}
+    targets = cda.get("targets", {})
+    for review in review_rows:
+        field_path = str(review.get("path") or "")
+        field_name = str(review.get("name") or field_path)
+        for candidate in review.get("candidates", []):
+            if not isinstance(candidate, Mapping):
+                continue
+            name = str(candidate.get("target") or "")
+            target = targets.get(name, {}) if isinstance(targets, Mapping) else {}
+            if (
+                not name or not isinstance(target, Mapping)
+                or not target.get("writable")
+                or len(target.get("locations", [])) != 1
+            ):
+                continue
+            row = combined.setdefault(name, {
+                "name": name, "target": target, "fields": [],
+                "evidence": False, "possible": False, "claimed": False,
+                "same_instance_claimed": False,
+            })
+            row["evidence"] = True
+            row["fields"].append((field_path, field_name))
+        detail = review.get("detail", {})
+        detail = detail if isinstance(detail, Mapping) else {}
+        inventory = detail.get("possible_targets", {})
+        inventory = inventory if isinstance(inventory, Mapping) else {}
+        for item in inventory.get("items", []):
+            if not isinstance(item, Mapping):
+                continue
+            name = str(item.get("target") or "")
+            target = targets.get(name, {}) if isinstance(targets, Mapping) else {}
+            if not name or not isinstance(target, Mapping):
+                continue
+            row = combined.setdefault(name, {
+                "name": name, "target": target, "fields": [],
+                "evidence": False, "possible": False, "claimed": False,
+                "same_instance_claimed": False,
+            })
+            row["possible"] = True
+            row["claimed"] = bool(row["claimed"] or item.get("already_claimed"))
+            row["same_instance_claimed"] = bool(
+                row["same_instance_claimed"]
+                or item.get("containing_instance_claimed_by")
+            )
+            row["fields"].append((field_path, field_name))
+    for row in combined.values():
+        row["fields"] = list(dict.fromkeys(row["fields"]))
+    return sorted(combined.values(), key=lambda row: (
+        _location(row["target"].get("locations", [""])[0]) or (999999,),
+        str(row["name"]),
+    ))
+
+
+def _review_cda_tree(
+    view: Mapping[str, Any], cda: Mapping[str, Any],
+    review_rows: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Render the pruned CDA hierarchy containing only reviewable leaves."""
+    rows = _review_target_rows(review_rows, cda)
+    by_section: dict[tuple[int, ...] | None, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        location = _location(row["target"].get("locations", [""])[0])
+        if location is None:
+            continue
+        row["location"] = location
+        by_section[_section_of(location, view["nodes"], view["parents"])].append(row)
+
     template = view["template"]
-    headline_counts = coverage_headline_counts(model, cda, mapping, audit)
-    # The tree supplies the acceptance check for the independently reusable
-    # count helper; both must describe the same reportable inverse surface.
-    if headline_counts["no_source_leaves"] != no_source_count:
-        raise ValueError("coverage headline and CDA coverage tree disagree")
+    title = str(template.get("display_name") or template.get("name") or "ClinicalDocument")
+    lines = ["```text", f"   {title} (review candidate surface)"]
+    all_areas: list[tuple[str, tuple[int, ...] | None]] = [
+        ("Document header", None)
+    ] + [
+        (_section_label(section, view["nodes"], cda), section)
+        for section in view["sections"]
+    ]
+    areas = [(label, section) for label, section in all_areas if by_section.get(section)]
+    for area_index, (area_label, section) in enumerate(areas):
+        area_last = area_index == len(areas) - 1
+        area_branch = "└──" if area_last else "├──"
+        area_stem = "    " if area_last else "│   "
+        lines.append(f"   {area_branch} {area_label}")
+        grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for row in by_section[section]:
+            target = row["target"]
+            key = (
+                str(target.get("template_display_name") or target.get("template_name") or "CDA template"),
+                str(target.get("template_id") or ""),
+                str(target.get("template_effective_date") or ""),
+            )
+            grouped.setdefault(key, []).append(row)
+        template_groups = list(grouped.items())
+        for group_index, ((display, template_id, effective), group_rows) in enumerate(template_groups):
+            group_last = group_index == len(template_groups) - 1
+            group_branch = "└──" if group_last else "├──"
+            group_stem = area_stem + ("    " if group_last else "│   ")
+            lines.append(
+                f"   {area_stem}{group_branch} {display} · "
+                f"{template_id or 'unknown'} @ {effective or 'dynamic'}"
+            )
+            trie: dict[str, Any] = {"children": {}, "rows": []}
+            for row in group_rows:
+                node = trie
+                for segment in str(row["target"].get("path") or "value").split("/"):
+                    if not segment:
+                        continue
+                    node = node["children"].setdefault(
+                        segment, {"children": {}, "rows": []}
+                    )
+                node["rows"].append(row)
+
+            def render_trie(node: Mapping[str, Any], stem: str) -> None:
+                items = list(node.get("children", {}).items())
+                for item_index, (segment, child) in enumerate(items):
+                    last = item_index == len(items) - 1
+                    branch = "└──" if last else "├──"
+                    next_stem = stem + ("    " if last else "│   ")
+                    leaf_rows = child.get("rows", [])
+                    if leaf_rows:
+                        status = "!" if any(row["evidence"] for row in leaf_rows) else "?"
+                        target_names = ", ".join(
+                            "{" + str(row["name"]) + "}" for row in leaf_rows
+                        )
+                        target = leaf_rows[0]["target"]
+                        maximum = target.get("max")
+                        card = f"{target.get('min', 0)}..{maximum if maximum is not None else '*'}"
+                        meta = " ".join(value for value in (
+                            str(target.get("datatype") or ""), card,
+                            str(target.get("conformance") or ""),
+                        ) if value)
+                        fields = ", ".join(
+                            name for row in leaf_rows for _, name in row["fields"]
+                        )
+                        flags = []
+                        if any(row["claimed"] for row in leaf_rows):
+                            flags.append("already claimed")
+                        if any(row["same_instance_claimed"] for row in leaf_rows):
+                            flags.append("same occurrence in use")
+                        suffix = f"; {'; '.join(flags)}" if flags else ""
+                        lines.append(
+                            f"{status:<3}{stem}{branch} {_leaf(segment)} {target_names} "
+                            f"[{meta}] ← {fields}{suffix}"
+                        )
+                    else:
+                        lines.append(f"   {stem}{branch} {_leaf(segment)}")
+                    render_trie(child, next_stem)
+
+            render_trie(trie, group_stem)
+    return lines + ["```"]
+
+
+def _binding_label(binding: Any) -> str:
+    if not isinstance(binding, Mapping):
+        return str(binding or "")
+    name = str(binding.get("display_name") or binding.get("name") or "")
+    identity = str(binding.get("id") or "")
+    revision = str(
+        binding.get("effective_date") or binding.get("flexibility") or ""
+    )
+    exact = identity + (f"@{revision}" if revision else "")
+    return f"{name} ({exact})" if name and exact else name or exact
+
+
+def _possible_target_groups(
+    detail: Mapping[str, Any],
+) -> list[tuple[tuple[str, str, str, str, str], list[Mapping[str, Any]]]]:
+    inventory = detail.get("possible_targets", {})
+    items = inventory.get("items", []) if isinstance(inventory, Mapping) else []
+    grouped: dict[
+        tuple[str, str, str, str, str], list[Mapping[str, Any]]
+    ] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        template = item.get("template", {})
+        template = template if isinstance(template, Mapping) else {}
+        key = (
+            str(template.get("display_name") or template.get("name") or "Unnamed template"),
+            str(template.get("id") or ""),
+            str(template.get("effective_date") or ""),
+            str(template.get("location") or ""),
+            str(template.get("description") or ""),
+        )
+        grouped.setdefault(key, []).append(item)
+    return list(grouped.items())
+
+
+def _comment_text(value: Any) -> str:
+    return " ".join(str(value or "").replace("--", "—").split())
+
+
+def _annotated_template_excerpt(
+    group_key: tuple[str, str, str, str, str],
+    candidate_items: Sequence[Mapping[str, Any]],
+    cda: Mapping[str, Any],
+) -> list[str]:
+    """Render a compact constraint skeleton for one candidate template group."""
+    display, template_id, effective, occurrence, template_description = group_key
+    candidate_names = {
+        str(item.get("target") or "") for item in candidate_items
+        if item.get("target")
+    }
+    candidate_paths = {
+        str(item.get("path") or "") for item in candidate_items if item.get("path")
+    }
+    candidate_by_name = {
+        str(item.get("target") or ""): item for item in candidate_items
+        if item.get("target")
+    }
+    context: list[tuple[str, Mapping[str, Any]]] = []
+    targets = cda.get("targets", {})
+    for name, target in targets.items() if isinstance(targets, Mapping) else ():
+        if not isinstance(target, Mapping):
+            continue
+        locations = [str(value) for value in target.get("locations", [])]
+        if (
+            str(target.get("template_id") or "") != template_id
+            or len(locations) != 1
+            or (
+                occurrence and occurrence != "document"
+                and not locations[0].startswith(occurrence + ".")
+            )
+        ):
+            continue
+        path = str(target.get("path") or "")
+        declared = bool(target.get("element_id")) and not target.get("datatype_derived")
+        candidate_ancestor = any(
+            candidate_path == path or candidate_path.startswith(path.rstrip("/") + "/")
+            for candidate_path in candidate_paths
+        )
+        informative = bool(
+            target.get("mandatory") or int(target.get("min") or 0) >= 1
+            or target.get("fixed") or target.get("codes")
+        )
+        if str(name) in candidate_names or candidate_ancestor or (declared and informative):
+            context.append((str(name), target))
+
+    trie: dict[str, Any] = {"children": {}, "rows": [], "attributes": []}
+    for name, target in sorted(context, key=lambda row: (
+        str(row[1].get("path") or ""), row[0],
+    )):
+        node = trie
+        parts = [part for part in str(target.get("path") or "").split("/") if part]
+        for index, part in enumerate(parts):
+            if part.startswith("@") and index == len(parts) - 1:
+                node["attributes"].append((name, target))
+                break
+            node = node["children"].setdefault(
+                part, {"children": {}, "rows": [], "attributes": []}
+            )
+            if index == len(parts) - 1:
+                node["rows"].append((name, target))
+
     lines = [
-        "# Dataset-to-CDA mapping",
+        "```xml",
+        f"<!-- Template: {_comment_text(display)} -->",
+        f"<!-- OID/revision: {_comment_text(template_id)} @ {_comment_text(effective or 'dynamic')} -->",
+    ]
+    if template_description:
+        lines.append(f"<!-- Description: {_comment_text(template_description)} -->")
+    lines.append(f"<!-- Contained-template occurrence: {_comment_text(occurrence or 'document')} -->")
+    lines.append("<!-- Read-only constraint skeleton generated from cda.json; edit cda-mapping.json. -->")
+
+    def render_node(part: str, node: Mapping[str, Any], depth: int) -> None:
+        indent = "  " * depth
+        rows = list(node.get("rows", []))
+        names = [name for name, _ in rows if name in candidate_names]
+        primary = next(
+            (target for name, target in rows if name in candidate_names),
+            rows[0][1] if rows else {},
+        )
+        item = candidate_by_name.get(names[0], {}) if names else {}
+        if names:
+            lines.append(f"{indent}<!-- Possible target (unproven): {_comment_text(', '.join(names))} -->")
+        description = str(primary.get("description") or "")
+        if description:
+            lines.append(f"{indent}<!-- Name/description: {_comment_text(description)} -->")
+        datatype = str(primary.get("datatype") or "")
+        if primary:
+            maximum = primary.get("max")
+            cardinality = f"{primary.get('min', 0)}..{maximum if maximum is not None else '*'}"
+            conformance = str(primary.get("conformance") or "—")
+            lines.append(
+                f"{indent}<!-- Datatype: {_comment_text(datatype or '—')}; "
+                f"cardinality: {cardinality}; conformance: {_comment_text(conformance)} -->"
+            )
+        for binding in primary.get("value_set_bindings", []) if primary else []:
+            lines.append(
+                f"{indent}<!-- Bound ValueSet: {_comment_text(_binding_label(binding))} -->"
+            )
+        if item:
+            if item.get("claimed_by"):
+                lines.append(
+                    f"{indent}<!-- Already claimed by: "
+                    f"{_comment_text(', '.join(str(value) for value in item['claimed_by']))} -->"
+                )
+            instance_claims = item.get("containing_instance_claimed_by", [])
+            if instance_claims:
+                claimed = "; ".join(
+                    f"{claim.get('target')} ← {', '.join(str(value) for value in claim.get('fields', []))}"
+                    for claim in instance_claims if isinstance(claim, Mapping)
+                )
+                lines.append(
+                    f"{indent}<!-- Same template occurrence already carries: {_comment_text(claimed)} -->"
+                )
+            if item.get("requires_occurrence_rule"):
+                lines.append(f"{indent}<!-- An explicit occurrence rule is required. -->")
+            if item.get("non_null_requires"):
+                lines.append(
+                    f"{indent}<!-- Non-null value also requires: "
+                    f"{_comment_text(', '.join(str(value) for value in item['non_null_requires']))} -->"
+                )
+
+        for attribute_name, attribute in node.get("attributes", []):
+            if attribute_name not in candidate_names:
+                continue
+            attribute_item = candidate_by_name.get(attribute_name, {})
+            lines.append(
+                f"{indent}<!-- Possible attribute target (unproven): "
+                f"{_comment_text(attribute_name)} -->"
+            )
+            attribute_description = str(attribute.get("description") or "")
+            if attribute_description:
+                lines.append(
+                    f"{indent}<!-- Name/description: "
+                    f"{_comment_text(attribute_description)} -->"
+                )
+            maximum = attribute.get("max")
+            cardinality = (
+                f"{attribute.get('min', 0)}.."
+                f"{maximum if maximum is not None else '*'}"
+            )
+            lines.append(
+                f"{indent}<!-- Datatype: "
+                f"{_comment_text(attribute.get('datatype') or '—')}; "
+                f"cardinality: {cardinality}; conformance: "
+                f"{_comment_text(attribute.get('conformance') or '—')} -->"
+            )
+            for binding in attribute.get("value_set_bindings", []):
+                lines.append(
+                    f"{indent}<!-- Bound ValueSet: "
+                    f"{_comment_text(_binding_label(binding))} -->"
+                )
+            if attribute_item.get("claimed_by"):
+                lines.append(
+                    f"{indent}<!-- Already claimed by: "
+                    f"{_comment_text(', '.join(str(value) for value in attribute_item['claimed_by']))} -->"
+                )
+            attribute_instance_claims = attribute_item.get(
+                "containing_instance_claimed_by", []
+            )
+            if attribute_instance_claims:
+                claimed = "; ".join(
+                    f"{claim.get('target')} ← "
+                    f"{', '.join(str(value) for value in claim.get('fields', []))}"
+                    for claim in attribute_instance_claims
+                    if isinstance(claim, Mapping)
+                )
+                lines.append(
+                    f"{indent}<!-- Same template occurrence already carries: "
+                    f"{_comment_text(claimed)} -->"
+                )
+            if attribute_item.get("requires_occurrence_rule"):
+                lines.append(
+                    f"{indent}<!-- An explicit occurrence rule is required. -->"
+                )
+            if attribute_item.get("non_null_requires"):
+                lines.append(
+                    f"{indent}<!-- Non-null value also requires: "
+                    f"{_comment_text(', '.join(str(value) for value in attribute_item['non_null_requires']))} -->"
+                )
+
+        attrs: dict[str, str] = {
+            str(key): str(value) for key, value in primary.get("fixed", {}).items()
+            if value is not None
+        } if primary else {}
+        codes = primary.get("codes", []) if primary else []
+        if len(codes) == 1 and isinstance(codes[0], Mapping):
+            code = codes[0]
+            if code.get("code"):
+                attrs.setdefault("code", str(code["code"]))
+            if code.get("code_system"):
+                attrs.setdefault("codeSystem", str(code["code_system"]))
+            if code.get("display_name"):
+                attrs.setdefault("displayName", str(code["display_name"]))
+        for attribute_name, attribute in node.get("attributes", []):
+            attr = str(attribute.get("element_name") or attribute.get("path") or "attribute")
+            attr = _leaf(attr).lstrip("@")
+            fixed = attribute.get("fixed", {})
+            if isinstance(fixed, Mapping) and fixed.get("value") is not None:
+                attrs[attr] = str(fixed["value"])
+            elif attribute_name in candidate_names:
+                attrs[attr] = "{" + attribute_name + "}"
+        if names and not primary.get("has_children"):
+            representation = primary.get("value_representation", {})
+            representation = representation if isinstance(representation, Mapping) else {}
+            kind = str(representation.get("kind") or "")
+            placeholder = "{" + names[0] + "}"
+            if kind == "coded":
+                attrs.setdefault("code", placeholder)
+            elif kind == "identifier":
+                attrs.setdefault("extension", placeholder)
+            elif kind not in {"element_text", ""}:
+                attrs.setdefault(str(representation.get("scalar_attribute") or "value"), placeholder)
+        attr_text = "".join(
+            f" {key}={quoteattr(value)}" for key, value in attrs.items()
+        )
+        children = list(node.get("children", {}).items())
+        text_value = "{" + names[0] + "}" if names and (
+            primary.get("value_representation", {}).get("kind") == "element_text"
+            if isinstance(primary.get("value_representation"), Mapping) else False
+        ) else str(primary.get("fixed_text") or "")
+        tag = _leaf(part)
+        if not children and not text_value:
+            lines.append(f"{indent}<{tag}{attr_text}/>")
+            return
+        lines.append(f"{indent}<{tag}{attr_text}>")
+        if text_value:
+            lines.append(f"{indent}  {escape(text_value)}")
+        for child_part, child in children:
+            render_node(str(child_part), child, depth + 1)
+        lines.append(f"{indent}</{tag}>")
+
+    for part, node in trie["children"].items():
+        render_node(str(part), node, 0)
+    lines += ["```", ""]
+    return lines
+
+
+def _possible_target_lines(
+    detail: Mapping[str, Any], cda: Mapping[str, Any],
+) -> list[str]:
+    groups = _possible_target_groups(detail)
+    if not groups:
+        return []
+    out = [
+        "#### Possible targets (unproven)",
         "",
-        f"Template: **{template.get('display_name') or template.get('name') or 'ClinicalDocument'}** "
-        f"(`{template.get('id')}` @ `{template.get('effective_date')}`)",
-        "",
-        format_coverage_headline(headline_counts),
-        "",
-        "- ✓ **Mapped** — selected executable mapping.",
-        "- ! **Suggested** — a suitable writable CDA leaf exists, but no executable mapping is selected.",
-        "- × **No target** — no suitable writable CDA leaf was found.",
-        "- ○ **No source** — a reportable writable CDA leaf has no corresponding dataset datapoint.",
-        "",
-        "The CDA-side count excludes generic datatype-expansion plumbing and fixed, "
-        "conditional-fixed, or system-supplied values.",
-        "",
-        "Edit `cda-mapping.json`; do not edit the XML examples in this report. The",
-        "mapping table explicitly connects the dataset model, the editable JSON",
-        "assignment, and the CDA template. XML excerpts are read-only previews of",
-        "what the JSON configuration produces.",
-        f"A required CDA leaf that remains deliberately unmapped is emitted with "
-        f"`nullFlavor=\"{required_unmapped_null_flavor(mapping)}\"`; an unmapped "
-        "optional element is omitted.",
-        "",
-        "## Dataset coverage",
-        "",
-        "`Dataset datapoint` → `{logical CDA target}`",
-        "",
-        *_dataset_coverage_tree(model, coverage),
-        "",
-        "## CDA coverage",
-        "",
-        "`Logical CDA target` ← `dataset datapoint`",
-        "",
-        *cda_tree,
-        "",
-        "## Sections and entities",
+        "These type-compatible writable descendants are an admissibility inventory, "
+        "not semantic mapping evidence. Nothing in this list is selected automatically.",
         "",
     ]
+    for key, rows in groups:
+        display, template_id, effective, location, template_description = key
+        out += [
+            f"##### {display}",
+            "",
+            f"Contained template: `{template_id}` @ `{effective or 'dynamic'}`; "
+            f"occurrence `{location or 'document'}`",
+            "",
+        ]
+        if template_description:
+            out += [template_description, ""]
+        out += [
+            "| Target / CDA path | Datatype | Cardinality | Conformance | Description | Bound value sets | Decision constraints |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for item in rows:
+            cardinality = item.get("cardinality", {})
+            cardinality = cardinality if isinstance(cardinality, Mapping) else {}
+            minimum = cardinality.get("min")
+            maximum = cardinality.get("max")
+            card = f"{minimum if minimum is not None else 0}..{maximum if maximum is not None else '*'}"
+            constraints: list[str] = []
+            if item.get("claimed_by"):
+                constraints.append(
+                    "already claimed by "
+                    + ", ".join(str(value) for value in item["claimed_by"])
+                )
+            instance_claims = item.get("containing_instance_claimed_by", [])
+            if instance_claims:
+                constraints.append(
+                    "same occurrence: " + "; ".join(
+                        f"{claim.get('target')} ← "
+                        + ", ".join(str(value) for value in claim.get("fields", []))
+                        for claim in instance_claims if isinstance(claim, Mapping)
+                    )
+                )
+            if item.get("requires_occurrence_rule"):
+                constraints.append("occurrence rule required")
+            if item.get("repeat_ancestors"):
+                constraints.append(
+                    "repeatable ancestors: "
+                    + ", ".join(
+                        str(value) for value in item["repeat_ancestors"]
+                    )
+                )
+            if item.get("non_null_requires"):
+                constraints.append(
+                    "non-null requires "
+                    + ", ".join(str(value) for value in item["non_null_requires"])
+                )
+            target_text = f"`{item.get('target')}`<br>`{item.get('path') or '—'}`"
+            bindings = ", ".join(
+                _binding_label(binding) for binding in item.get("bound_value_sets", [])
+            )
+            out.append(
+                "| " + " | ".join([
+                    _md(target_text), _md(item.get("datatype") or "—"),
+                    _md(card), _md(item.get("conformance") or "—"),
+                    _md(item.get("description") or "—"), _md(bindings or "—"),
+                    _md("; ".join(constraints) or "available; semantics unproven"),
+                ]) + " |"
+            )
+        out += ["", "Annotated template skeleton:", ""]
+        out.extend(_annotated_template_excerpt(key, rows, cda))
+    return out
 
+
+def _structural_and_completion_lines(
+    mapping: Mapping[str, Any], cda: Mapping[str, Any],
+) -> list[str]:
+    lines: list[str] = []
+    structures = mapping.get("structures", {})
+    if isinstance(structures, Mapping) and structures:
+        lines += [
+            "## Accepted structural rules",
+            "",
+            "These rules create or coordinate CDA occurrences; they are configuration, not XML edits.",
+            "",
+        ]
+        for name, rule in structures.items():
+            if not isinstance(rule, Mapping):
+                continue
+            kind = str(rule.get("type") or "unknown")
+            if kind in {"fan_out", "repeat_by_discriminator"}:
+                branches = [
+                    f"`{branch.get('source')}` → `{{{branch.get('target')}}}`"
+                    for branch in rule.get("branches", []) if isinstance(branch, Mapping)
+                ]
+                explanation = (
+                    "Create one discriminated CDA occurrence for each present "
+                    "branch: " + "; ".join(branches) + "."
+                )
+                if rule.get("coalesce_existing_discriminator"):
+                    explanation += (
+                        " Merge a branch with an existing occurrence when their "
+                        "coded discriminators are equal."
+                    )
+            elif kind == "for_each":
+                explanation = (
+                    f"Create one `{rule.get('target_repeat')}` occurrence for every "
+                    f"`{rule.get('source_group')}` occurrence."
+                )
+            elif kind == "coalesce":
+                explanation = (
+                    f"Assign `{rule.get('target')}` from the configured sources using "
+                    f"`{rule.get('policy')}`."
+                )
+            else:
+                explanation = "Review this structural rule in `cda-mapping.json`."
+            lines += [f"- `{name}`: {explanation}", ""]
+
+    target_defaults = mapping.get("target_defaults", {})
+    lines += [
+        "## Accepted required-CDA completion",
+        "",
+        f"General rule: an active required leaf without a mapped value receives "
+        f"`nullFlavor=\"{required_unmapped_null_flavor(mapping)}\"`. A real mapped "
+        "value always takes precedence.",
+        "",
+    ]
+    if isinstance(target_defaults, Mapping) and target_defaults:
+        lines += [
+            "The following reviewed targets use a more specific default:",
+            "",
+            "| CDA template value | Default | Reason |",
+            "|---|---|---|",
+        ]
+        targets = cda.get("targets", {})
+        for name, rule in target_defaults.items():
+            target = targets.get(str(name), {}) if isinstance(targets, Mapping) else {}
+            label = target.get("template_display_name") or target.get("template_name") or "CDA"
+            leaf = _leaf(target.get("path")) or str(name).split(".")[-1]
+            flavor = rule.get("nullFlavor") if isinstance(rule, Mapping) else ""
+            reason = rule.get("reason") if isinstance(rule, Mapping) else ""
+            lines.append(
+                f"| {label} → {leaf} `{{{name}}}` | `nullFlavor=\"{flavor}\"` | "
+                f"{reason or 'Reviewed target-specific completion rule.'} |"
+            )
+        lines.append("")
+    else:
+        lines += ["No target-specific defaults are configured.", ""]
+    return lines
+
+
+def render_accepted_cda_mappings_markdown(
+    model: Mapping[str, Any], cda: Mapping[str, Any], mapping: Mapping[str, Any],
+) -> str:
+    """Render the accepted mappings in the former concise-guide presentation."""
+    view = _mapping_view(model, cda, mapping)
+    rows_by_section = view["rows"]
     areas: list[tuple[str, list[Mapping[str, Any]]]] = [
         ("Document header", rows_by_section.get(None, []))
     ] + [
         (_section_label(section, view["nodes"], cda), rows_by_section.get(section, []))
-        for section in sections
+        for section in view["sections"]
     ]
-    review_rows = _review_required(model, mapping, audit)
-    candidate_sections = _candidate_sections(review_rows, view, cda)
+    mapped_datapoints = {
+        str(row["dataset_path"])
+        for rows in rows_by_section.values() for row in rows
+    }
+    mapped_leaves = sum(len(rows) for rows in rows_by_section.values())
+    lines = [
+        "# Accepted mappings",
+        "",
+        f"This section records **{len(mapped_datapoints)}** executable dataset datapoints "
+        f"writing **{mapped_leaves}** logical CDA leaves. Edit `cda-mapping.json`; "
+        "the XML excerpts below are read-only consequences of that configuration.",
+        "",
+        "## Sections and entities",
+        "",
+    ]
     example_written = False
     configured_complex_fields: set[str] = set()
-    for area_index, (area_name, rows) in enumerate(areas):
-        lines += [f"### {area_name}", ""]
+    for area_name, rows in areas:
         if not rows:
-            section = None if area_index == 0 else sections[area_index - 1]
-            candidate_count = len(candidate_sections.get(section, set()))
-            if candidate_count:
-                lines += [
-                    "No dataset mapping is selected for this area. "
-                    f"**{candidate_count}** unresolved dataset datapoint(s) have CDA "
-                    "candidate or contextual evidence in this area; review their candidate "
-                    "cards under **Review required**.",
-                    "",
-                ]
-            else:
-                lines += [
-                    "No dataset mapping is selected for this area, and the analysis found "
-                    "no candidate that can be assigned uniquely to it. This can mean that "
-                    "the transaction has no corresponding datapoint, or that the available "
-                    "evidence is too weak or ambiguous to place here.",
-                    "",
-                ]
             continue
+        lines += [f"### {area_name}", ""]
         for entity, entity_rows in _entity_groups(rows):
             first_target = entity_rows[0]["target_model"]
             identity = (
@@ -1035,12 +1636,15 @@ def render_cda_mapping_markdown(
                 f"`{first_target.get('template_effective_date')}`"
             )
             lines += [f"#### {entity}", "", f"Template: {identity}", ""]
-            description = next((
+            template_description = str(first_target.get("template_description") or "")
+            if template_description:
+                lines += [_concise(template_description), ""]
+            descriptions = [
                 _concise(row["target_model"].get("description"))
                 for row in entity_rows if row["target_model"].get("description")
-            ), "")
-            if description:
-                lines += [description, ""]
+            ]
+            if descriptions:
+                lines += [descriptions[0], ""]
             lines += [
                 "| Name in dataset | `model.json` datapoint | `cda-mapping.json` target | Name in CDA template | Status |",
                 "|---|---|---|---|---|",
@@ -1080,8 +1684,6 @@ def render_cda_mapping_markdown(
                 lines += [
                     *[_configuration_instruction(row) for row in excerpt_rows or entity_rows],
                     "",
-                ]
-                lines += [
                     "Abridged configuration excerpt — edit the corresponding entry in the full JSON file:",
                     "",
                     "```json",
@@ -1094,7 +1696,6 @@ def render_cda_mapping_markdown(
                     configured_complex_fields.update(
                         str(row["dataset_path"]) for row in excerpt_rows
                     )
-
             if show_example or complex_mapping:
                 lines += [
                     "Resulting CDA placement — read-only consequence of the JSON configuration:",
@@ -1106,150 +1707,199 @@ def render_cda_mapping_markdown(
                 ]
                 lines.extend(_contextual_xml(entity_rows, view, cda))
                 lines += ["```", ""]
+    lines.extend(_structural_and_completion_lines(mapping, cda))
+    return "\n".join(lines).rstrip() + "\n"
 
-    lines += ["## Review required", ""]
-    if review_rows:
-        lines += [
-            "These dataset datapoints are explicitly `null` in `cda-mapping.json`.",
-            "That does not invalidate the mapping; it records that no executable target has been approved yet.",
-            "Each card distinguishes selectable targets from evidence that is useful only "
-            "for navigation. Choose at most one selectable target unless the card says that "
-            "a transform or structural rule is required.",
-            "",
-        ]
-        for row in review_rows:
-            lines += [
-                f"### {row['name']}", "", f"Dataset datapoint: `{row['path']}`", "",
-                f"**Why review is required:** {row['reason']}", "",
-            ]
-            candidates = row["candidates"]
-            if candidates:
-                lines += [
-                    "| CDA target | Name / explanation in CDA template | Datatype | Confidence | Evidence | Result |",
-                    "|---|---|---|---|---|---|",
-                ]
-                selectable: list[str] = []
-                for candidate in candidates[:5]:
-                    name = str(candidate.get("target") or "")
-                    target = cda.get("targets", {}).get(name, {})
-                    description = _concise(target.get("description"), 100)
-                    human = description or _leaf(target.get("path") or target.get("element_name")) or "—"
-                    result = str(candidate.get("result") or "evidence only")
-                    if result in {"selectable after review", "transform required"}:
-                        selectable.append(name)
-                    lines.append(
-                        f"| `{_md(name)}` | {_md(human)} | "
-                        f"`{_md(target.get('datatype') or '—')}` | "
-                        f"{_md(candidate.get('confidence') or '—')} | "
-                        f"{_md(_evidence(candidate))} | {result} |"
-                    )
-                lines.append("")
-                if selectable:
-                    lines += [
-                        "Available choices in `cda-mapping.json`:", "",
-                        *[f"{index}. `{name}`" for index, name in enumerate(selectable, 1)],
-                        "",
-                        "To choose one, replace this datapoint's `null` with exactly one target; for example:",
-                        "",
-                        "```json",
-                        json.dumps({"fields": {row["path"]: selectable[0]}}, ensure_ascii=False, indent=2),
-                        "```",
-                        "",
-                    ]
-                else:
-                    lines += [
-                        "None of these rows is directly selectable. Do not copy a context-only "
-                        "or evidence-only target into the JSON; use it to investigate the "
-                        "template, or leave this datapoint `null`.",
-                        "",
-                    ]
-            else:
-                lines += [
-                    "No CDA candidates were found. There is therefore no generated target to "
-                    "choose from; keep the value `null` unless manual template review identifies "
-                    "a suitable representation.",
-                    "",
-                ]
-            lines += [f"**Action:** {row['action']}", ""]
-    else:
+
+def render_cda_mapping_markdown(
+    model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    mapping: Mapping[str, Any],
+    audit: Mapping[str, Any],
+) -> str:
+    """Render the human review workbench for unresolved mappings only."""
+    view = _mapping_view(model, cda, mapping)
+    review_rows = _review_required(model, mapping, audit)
+    headline_counts = coverage_headline_counts(model, cda, mapping, audit)
+    template = view["template"]
+    lines = [
+        "# Dataset-to-CDA mapping decisions",
+        "",
+        f"Template: **{template.get('display_name') or template.get('name') or 'ClinicalDocument'}** "
+        f"(`{template.get('id')}` @ `{template.get('effective_date')}`)",
+        "",
+        format_coverage_headline(headline_counts),
+        "",
+        "This file is the manual decision workbench. It contains only unresolved "
+        "dataset datapoints and the CDA leaves that may help resolve them. Accepted "
+        "mappings are documented in `cda-mapping-details.md`; the exhaustive source "
+        "and target trees are in `cda-mapping-trees.md`.",
+        "",
+        "- ! **Evidence candidate** — related evidence exists, but no executable mapping is selected.",
+        "- ? **Possible target (unproven)** — type-compatible and reachable, but not semantic evidence.",
+        "- × **No generated target** — manual template review has not yet produced a candidate.",
+        "",
+        "Nothing in a candidate list is selected automatically. Edit `cda-mapping.json`. "
+        "Do not edit the XML-like template skeletons in this report; all trees, tables, "
+        "and excerpts below are generated read-only evidence.",
+        "",
+        "## Unresolved dataset tree",
+        "",
+        *_review_dataset_tree(model, review_rows),
+        "",
+        "## CDA review tree",
+        "",
+    ]
+    cda_review_tree = _review_cda_tree(view, cda, review_rows)
+    lines += cda_review_tree if len(cda_review_tree) > 3 else [
+        "No unresolved datapoint currently has a generated CDA candidate."
+    ]
+    lines += ["", "## Decisions", ""]
+    if not review_rows:
         lines += ["No dataset datapoints currently require target selection.", ""]
-
-    structures = mapping.get("structures", {})
-    if structures:
-        lines += [
-            "## Structural rules",
-            "",
-            "These rules create or coordinate CDA occurrences; they are configuration, not XML edits.",
-            "",
-        ]
-        for name, rule in structures.items():
-            kind = str(rule.get("type") or "unknown")
-            if kind in {"fan_out", "repeat_by_discriminator"}:
-                branches = [
-                    f"`{branch.get('source')}` → `{{{branch.get('target')}}}`"
-                    for branch in rule.get("branches", []) if isinstance(branch, Mapping)
-                ]
-                explanation = (
-                    "Create one discriminated CDA occurrence for each present "
-                    "branch: " + "; ".join(branches) + "."
-                )
-                if rule.get("coalesce_existing_discriminator"):
-                    explanation += (
-                        " Merge a branch with an existing occurrence when their "
-                        "coded discriminators are equal."
-                    )
-            elif kind == "for_each":
-                explanation = (
-                    f"Create one `{rule.get('target_repeat')}` occurrence for every "
-                    f"`{rule.get('source_group')}` occurrence."
-                )
-            elif kind == "coalesce":
-                explanation = (
-                    f"Assign `{rule.get('target')}` from the configured sources using "
-                    f"`{rule.get('policy')}`."
-                )
-            else:
-                explanation = "Review this structural rule in `cda-mapping.json`."
-            lines += [f"- `{name}`: {explanation}", ""]
-
-    target_defaults = mapping.get("target_defaults", {})
-    lines += [
-        "## Required CDA completion",
-        "",
-        f"General rule: an active required leaf without a mapped value receives "
-        f"`nullFlavor=\"{required_unmapped_null_flavor(mapping)}\"`. A real mapped "
-        "value always takes precedence.",
-        "",
-    ]
-    if isinstance(target_defaults, Mapping) and target_defaults:
-        lines += [
-            "The following reviewed targets use a more specific default:",
-            "",
-            "| CDA template value | Default | Reason |",
-            "|---|---|---|",
-        ]
-        for name, rule in target_defaults.items():
-            target = cda.get("targets", {}).get(str(name), {})
-            label = target.get("template_display_name") or target.get("template_name") or "CDA"
-            leaf = _leaf(target.get("path")) or str(name).split(".")[-1]
-            flavor = rule.get("nullFlavor") if isinstance(rule, Mapping) else ""
-            reason = rule.get("reason") if isinstance(rule, Mapping) else ""
-            lines.append(
-                f"| {label} → {leaf} `{{{name}}}` | `nullFlavor=\"{flavor}\"` | "
-                f"{reason or 'Reviewed target-specific completion rule.'} |"
-            )
-        lines.append("")
-    else:
-        lines += ["No target-specific defaults are configured.", ""]
+        return "\n".join(lines).rstrip() + "\n"
 
     lines += [
-        "## Detailed evidence",
-        "",
-        "Candidate scores, rejected alternatives, evidence chains and unresolved mappings are",
-        "kept in `cda-mapping-details.md` and `mapping-audit.json` so this guide remains concise.",
+        "Every card corresponds to an explicit `null` entry in `cda-mapping.json`. "
+        "Retaining `null` is valid when the clinical representation remains unproven.",
         "",
     ]
-    return "\n".join(lines)
+    for row in review_rows:
+        detail = row.get("detail", {})
+        detail = detail if isinstance(detail, Mapping) else {}
+        gap = detail.get("gap", {})
+        gap = gap if isinstance(gap, Mapping) else {}
+        lines += [
+            f"### {row['name']}",
+            "",
+            f"Dataset datapoint: `{row['path']}`",
+            "",
+            f"**Why review is required:** {row['reason']}",
+            "",
+        ]
+        if gap:
+            lines += [
+                f"**Gap:** `{gap.get('gate')}:{gap.get('kind')}`",
+                "",
+            ]
+        candidates = row.get("candidates", [])
+        selectable: list[str] = []
+        if candidates:
+            lines += [
+                "#### Evidence candidates",
+                "",
+                "| CDA target | Name / explanation in CDA template | Datatype | Confidence | Evidence | Result |",
+                "|---|---|---|---|---|---|",
+            ]
+            for candidate in candidates:
+                name = str(candidate.get("target") or "")
+                target = cda.get("targets", {}).get(name, {})
+                target = target if isinstance(target, Mapping) else {}
+                description = _concise(target.get("description"), 100)
+                human = description or _leaf(
+                    target.get("path") or target.get("element_name")
+                ) or "—"
+                result = str(candidate.get("result") or "evidence only")
+                if result in {
+                    "selectable after review", "suggested without formal bridge",
+                    "transform required",
+                }:
+                    selectable.append(name)
+                lines.append(
+                    f"| `{_md(name)}` | {_md(human)} | "
+                    f"`{_md(target.get('datatype') or '—')}` | "
+                    f"{_md(candidate.get('confidence') or '—')} | "
+                    f"{_md(_evidence(candidate))} | {_md(result)} |"
+                )
+            lines.append("")
+        else:
+            lines += ["No semantic evidence candidate was generated.", ""]
+
+        lines.extend(_possible_target_lines(detail, cda))
+        lines += [f"**Action:** {row['action']}", ""]
+        if selectable:
+            lines += [
+                "Selectable values established by the mapping evidence:",
+                "",
+                *[f"{index}. `{name}`" for index, name in enumerate(selectable, 1)],
+                "",
+                "Example edit (choose only after review):",
+                "",
+                "```json",
+                json.dumps(
+                    {"fields": {row["path"]: selectable[0]}},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                "```",
+                "",
+            ]
+        else:
+            lines += [
+                "Current editable state:",
+                "",
+                "```json",
+                json.dumps(
+                    {"fields": {row["path"]: None}},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                "```",
+                "",
+            ]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_cda_mapping_trees_markdown(
+    model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    mapping: Mapping[str, Any],
+    audit: Mapping[str, Any],
+) -> str:
+    """Render the exhaustive dataset and reportable CDA coverage trees."""
+    view = _mapping_view(model, cda, mapping)
+    coverage = _coverage_index(model, cda, mapping, audit)
+    cda_tree, no_source_count = _cda_coverage_tree(
+        view, model, cda, mapping, coverage,
+    )
+    headline_counts = coverage_headline_counts(model, cda, mapping, audit)
+    if headline_counts["no_source_leaves"] != no_source_count:
+        raise ValueError("coverage headline and CDA coverage tree disagree")
+    template = view["template"]
+    lines = [
+        "# Dataset-to-CDA coverage trees",
+        "",
+        f"Template: **{template.get('display_name') or template.get('name') or 'ClinicalDocument'}** "
+        f"(`{template.get('id')}` @ `{template.get('effective_date')}`)",
+        "",
+        format_coverage_headline(headline_counts),
+        "",
+        "This report is exhaustive. The status gutter is the first column of every "
+        "leaf line; hierarchy branches remain visually independent from status.",
+        "",
+        "- ✓ **Mapped** — selected executable mapping.",
+        "- ! **Suggested** — a writable CDA leaf exists, but no executable mapping is selected.",
+        "- × **No target** — no suitable writable CDA leaf was found.",
+        "- ○ **No source** — a reportable writable CDA leaf has no dataset counterpart.",
+        "- ✓! **Mapped and suggested** — one datapoint is selected and another remains under review.",
+        "",
+        "The CDA tree excludes generic datatype-expansion plumbing and fixed, "
+        "conditional-fixed, or system-supplied values. Those remain available in `cda.json`.",
+        "",
+        "## Complete dataset tree",
+        "",
+        "`Dataset datapoint` → `{logical CDA target}`",
+        "",
+        *_dataset_coverage_tree(model, coverage),
+        "",
+        "## Complete CDA coverage tree",
+        "",
+        "`Logical CDA target` ← `dataset datapoint`",
+        "",
+        *cda_tree,
+        "",
+    ]
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _constraint_xml(

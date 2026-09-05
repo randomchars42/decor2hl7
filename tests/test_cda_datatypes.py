@@ -441,7 +441,7 @@ class CdaDatatypeTests(unittest.TestCase):
             source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
   <element name="hl7:ClinicalDocument"><element name="hl7:statusCode"
       datatype="CS" minimumMultiplicity="1" maximumMultiplicity="1" isMandatory="true">
-    <vocabulary code="completed"/>
+    <vocabulary code="completed" displayName="Completed"/>
   </element></element>
 </template>''', encoding="utf-8")
             model = {
@@ -454,7 +454,10 @@ class CdaDatatypeTests(unittest.TestCase):
                 if str(target.get("path") or "").endswith("/hl7:statusCode")
             )
             self.assertEqual(
-                target["codes"], [{"code": "completed", "code_system": ""}]
+                target["codes"], [{
+                    "code": "completed", "code_system": "",
+                    "display_name": "Completed",
+                }]
             )
             self.assertFalse(target["writable"])
             payload, problems = cda.emit(
@@ -1082,7 +1085,7 @@ class CdaDatatypeTests(unittest.TestCase):
   <valueSet id="eyes" effectiveDate="2015-03-01"><concept code="362502000" codeSystem="2.16.840.1.113883.6.96" displayName="Entire right eye"/></valueSet>
   <valueSet id="eyes" effectiveDate="2015-11-17"><concept code="R" codeSystem="1.2.276.0.76.3.1.195.5.48" displayName="Auge rechts"><designation language="en-US" displayName="Right eye"/></concept></valueSet>
   <template id="doc" effectiveDate="2026" name="Document"><element name="hl7:ClinicalDocument">
-    <element name="hl7:targetSiteCode" datatype="CD"><vocabulary valueSet="eyes" vseffectiveDate="2015-11-17"/></element>
+    <element name="hl7:targetSiteCode" datatype="CD"><vocabulary valueSet="eyes" vseffectiveDate="2015-11-17" vsname="EyeSite" vsdisplayName="Eye site values"/></element>
   </element></template>
 </project>''', encoding="utf-8")
             members = value_set_members([source])
@@ -1095,6 +1098,7 @@ class CdaDatatypeTests(unittest.TestCase):
             _, target = target_at(compiled, "/hl7:targetSiteCode")
             self.assertEqual(target["value_set_bindings"], [{
                 "id": "eyes", "effective_date": "2015-11-17", "flexibility": "",
+                "display_name": "Eye site values", "name": "EyeSite",
             }])
 
     def test_seven_real_fixed_unit_quantities_keep_scalar_values_writable(self) -> None:
