@@ -3628,6 +3628,101 @@ class CoreTests(unittest.TestCase):
         self.assertIn("<!-- Possible target (unproven): T.value -->", guide)
         self.assertNotIn("## Sections and entities", guide)
 
+    def test_possible_targets_apply_datatype_cooccurrence_admissibility(self) -> None:
+        def target(
+            location: str, path: str, datatype: str,
+            representation: Mapping[str, Any], **values: Any,
+        ) -> dict[str, Any]:
+            return {
+                "writable": True, "renderable": True,
+                "locations": [location], "kind": "element",
+                "logical_types": list(representation.get("logical_types", [])),
+                "value_representation": dict(representation),
+                "fixed": {}, "system_value": None,
+                "element_name": path.rsplit("/", 1)[-1],
+                "template_id": "t", "template_effective_date": "2026",
+                "template_name": "T", "path": path, "datatype": datatype,
+                "provenance": [{"source": "template"}],
+                **values,
+            }
+
+        cda_model = {
+            "document": [{
+                "kind": "element", "name": "hl7:ClinicalDocument",
+                "children": [{
+                    "kind": "element", "name": "hl7:effectiveTime",
+                    "datatype": "IVL_TS", "min": 0, "children": [
+                        {
+                            "kind": "element", "name": "hl7:width",
+                            "datatype": "PQ", "min": 1, "children": [],
+                            "attributes": [], "targets": ["T.width"],
+                        },
+                        {
+                            "kind": "element", "name": "hl7:low",
+                            "datatype": "TS", "min": 0, "children": [],
+                            "attributes": [], "targets": ["T.low"],
+                        },
+                    ], "attributes": [], "targets": ["T.interval"],
+                }], "attributes": [], "targets": ["T.root"],
+            }],
+            "targets": {
+                "T.interval": target(
+                    "0.0", "hl7:ClinicalDocument/hl7:effectiveTime", "IVL_TS",
+                    {
+                        "kind": "timestamp",
+                        "logical_types": ["datetime", "date"],
+                        "attribute": "value",
+                    },
+                ),
+                "T.width": target(
+                    "0.0.0", "hl7:ClinicalDocument/hl7:effectiveTime/hl7:width",
+                    "PQ", {
+                        "kind": "quantity", "logical_types": ["quantity"],
+                        "attributes": ["value", "unit"],
+                        "scalar_attribute": "value",
+                    }, min=1,
+                ),
+                "T.low": target(
+                    "0.0.1", "hl7:ClinicalDocument/hl7:effectiveTime/hl7:low",
+                    "TS", {
+                        "kind": "timestamp",
+                        "logical_types": ["datetime", "date"],
+                        "attribute": "value",
+                    }, datatype_derived=True,
+                    provenance=[{"source": "datatype"}],
+                ),
+            },
+            "datatype_constraints": {
+                "version": 1,
+                "rules": {"IVL_TS": [{
+                    "selectors": ["@value", "hl7:*"],
+                    "test": "not(@value and hl7:*)",
+                    "declared_in": "IVL_TS",
+                    "source": "DTr1_IVL_TS.sch",
+                }, {
+                    "selectors": ["@value", "hl7:low"],
+                    "test": "not(@value and (hl7:low|hl7:width))",
+                    "declared_in": "IVL_TS",
+                    "source": "DTr1_IVL_TS.sch",
+                }]},
+            },
+        }
+        inventory = mapping_compiler._possible_target_inventory(
+            {"type": "datetime", "repeat_chain": []},
+            {"target": "T.root", "node": {"locations": ["0"]}},
+            cda_model, {}, {},
+        )
+        self.assertIsNotNone(inventory)
+        assert inventory is not None
+        items = {item["target"]: item for item in inventory["items"]}
+        self.assertFalse(items["T.interval"]["available"])
+        self.assertIn(
+            "not(@value and hl7:*)",
+            items["T.interval"]["conformance_conflicts"][0]["message"],
+        )
+        self.assertTrue(items["T.low"]["available"])
+        self.assertEqual(items["T.low"]["conformance_conflicts"], [])
+
     def test_partial_expansion_degrades_only_an_active_value_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             inputs = {

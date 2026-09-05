@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from itertools import product
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 import re
@@ -20,6 +21,9 @@ _PREDICATE_VALUE = re.compile(
     r"@([A-Za-z_][\w:.-]*)\s*=\s*(['\"])(.*?)\2", re.DOTALL,
 )
 _VOCABULARY = re.compile(r"(?:^|/)voc-((?:\d+\.)+\d+)-(?:[^/'\"]+)\.xml")
+_DATATYPE_SELECTOR = re.compile(
+    r"(?:@[A-Za-z_][\w.-]*|hl7:(?:[A-Za-z_][\w.-]*|\*))"
+)
 
 
 def _effective_key(value: Any) -> str:
@@ -157,6 +161,206 @@ def read_constraints(paths: Iterable[Path]) -> list[dict[str, Any]]:
     return result
 
 
+def _strip_outer_parentheses(value: str) -> str:
+    """Remove parentheses only when they enclose the complete expression."""
+    value = value.strip()
+    while value.startswith("(") and value.endswith(")"):
+        depth = 0
+        complete = True
+        for index, character in enumerate(value):
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0 and index != len(value) - 1:
+                    complete = False
+                    break
+                if depth < 0:
+                    complete = False
+                    break
+        if not complete or depth != 0:
+            break
+        value = value[1:-1].strip()
+    return value
+
+
+def _split_top_level(value: str, operator: str) -> list[str] | None:
+    """Split a tiny XPath subset without accepting nested XPath syntax."""
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth < 0:
+                return None
+        if depth == 0:
+            if operator == "|" and character == "|":
+                parts.append(value[start:index].strip())
+                start = index + 1
+            elif operator == "and" and value.startswith("and", index):
+                before = value[index - 1] if index else " "
+                after_index = index + 3
+                after = value[after_index] if after_index < len(value) else " "
+                if not (before.isalnum() or before in "_.-") and not (
+                    after.isalnum() or after in "_.-"
+                ):
+                    parts.append(value[start:index].strip())
+                    start = after_index
+                    index = after_index - 1
+        index += 1
+    if depth != 0:
+        return None
+    parts.append(value[start:].strip())
+    return parts if all(parts) else None
+
+
+def _datatype_forbidden_clauses(test: str) -> list[list[str]]:
+    """Compile a strict presence-only ``not(A and B)`` XPath subset.
+
+    Each returned row is a forbidden conjunction. Parenthesized unions are
+    expanded, so ``not(@value and (hl7:low|hl7:high))`` becomes two clauses.
+    No XPath is evaluated and anything outside this grammar is ignored.
+    """
+    matched = re.fullmatch(r"\s*not\s*\((.*)\)\s*", test, re.DOTALL)
+    if matched is None:
+        return []
+    expression = _strip_outer_parentheses(matched.group(1))
+    terms = _split_top_level(expression, "and")
+    if terms is None or len(terms) < 2:
+        return []
+    groups: list[list[str]] = []
+    for term in terms:
+        alternatives = _split_top_level(_strip_outer_parentheses(term), "|")
+        if alternatives is None:
+            return []
+        selectors = [_strip_outer_parentheses(item) for item in alternatives]
+        if not selectors or any(
+            _DATATYPE_SELECTOR.fullmatch(selector) is None
+            for selector in selectors
+        ):
+            return []
+        groups.append(selectors)
+    # Keep the accepted language deliberately small and bounded even if a
+    # future upstream file contains a large union expression.
+    count = 1
+    for group in groups:
+        count *= len(group)
+    if count > 32:
+        return []
+    result: list[list[str]] = []
+    for values in product(*groups):
+        clause = list(dict.fromkeys(values))
+        if len(clause) >= 2 and clause not in result:
+            result.append(clause)
+    return result
+
+
+def read_datatype_cooccurrences(
+    paths: Iterable[Path],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    """Read and inherit the supported datatype Schematron constraint subset."""
+    direct: dict[str, list[dict[str, Any]]] = {}
+    parents: dict[str, list[str]] = {}
+    files = 0
+    rules_seen = 0
+    assertions = 0
+    error_assertions = 0
+    supported_assertions = 0
+    for path in sorted(set(paths)):
+        if not path.name.startswith("DTr1_") or path.suffix != ".sch":
+            continue
+        try:
+            root = ET.parse(path).getroot()
+        except ET.ParseError:
+            continue
+        files += 1
+        rules = [node for node in root.iter() if node.tag == f"{SCH}rule"]
+        for rule in rules:
+            datatype = str(rule.get("id") or "")
+            if not datatype:
+                continue
+            rules_seen += 1
+            direct.setdefault(datatype, [])
+            inherited = parents.setdefault(datatype, [])
+            for extension in rule.findall(f"./{SCH}extends"):
+                parent = str(extension.get("rule") or "")
+                if parent and parent not in inherited:
+                    inherited.append(parent)
+            for assertion in rule.findall(f"./{SCH}assert"):
+                assertions += 1
+                if str(assertion.get("role") or "error").casefold() != "error":
+                    continue
+                error_assertions += 1
+                test = str(assertion.get("test") or "")
+                clauses = _datatype_forbidden_clauses(test)
+                if not clauses:
+                    continue
+                supported_assertions += 1
+                for selectors in clauses:
+                    row = {
+                        "selectors": selectors,
+                        "test": test,
+                        "declared_in": datatype,
+                        "source": path.name,
+                    }
+                    if row not in direct[datatype]:
+                        direct[datatype].append(row)
+
+    unresolved: set[tuple[str, str]] = set()
+    cycles: set[tuple[str, ...]] = set()
+    memo: dict[str, list[dict[str, Any]]] = {}
+
+    def inherited_constraints(
+        datatype: str, trail: tuple[str, ...] = (),
+    ) -> list[dict[str, Any]]:
+        if datatype in memo:
+            return memo[datatype]
+        if datatype in trail:
+            cycles.add(trail[trail.index(datatype):] + (datatype,))
+            return []
+        result: list[dict[str, Any]] = []
+        for parent in parents.get(datatype, []):
+            if parent not in direct:
+                unresolved.add((datatype, parent))
+                continue
+            for row in inherited_constraints(parent, trail + (datatype,)):
+                if row not in result:
+                    result.append(row)
+        for row in direct.get(datatype, []):
+            if row not in result:
+                result.append(row)
+        memo[datatype] = result
+        return result
+
+    compiled = {
+        datatype: inherited_constraints(datatype)
+        for datatype in sorted(direct)
+        if inherited_constraints(datatype)
+    }
+    summary = {
+        "source": "generated-datatype-schematron",
+        "files": files,
+        "rules": rules_seen,
+        "assertions": assertions,
+        "error_assertions": error_assertions,
+        "supported_assertions": supported_assertions,
+        "unsupported_error_assertions": error_assertions - supported_assertions,
+        "compiled_clauses": sum(len(rows) for rows in compiled.values()),
+        "constrained_datatypes": len(compiled),
+        "unresolved_extends": [
+            {"datatype": datatype, "parent": parent}
+            for datatype, parent in sorted(unresolved)
+        ],
+        "inheritance_cycles": [list(cycle) for cycle in sorted(cycles)],
+    }
+    return compiled, summary
+
+
 def _matched_targets(
     constraint: Mapping[str, Any],
     target_index: Mapping[tuple[str, str], list[tuple[str, str, list[str]]]],
@@ -221,6 +425,14 @@ def attach_constraints(cda: dict[str, Any], include_dir: Path) -> dict[str, Any]
             evidence = targets[name].setdefault("schematron_constraints", [])
             if payload not in evidence:
                 evidence.append(payload)
+    datatype_rules, datatype_summary = read_datatype_cooccurrences(
+        include_dir.glob("DTr1_*.sch") if include_dir.is_dir() else []
+    )
+    cda["datatype_constraints"] = {
+        "version": 1,
+        "source": "generated-datatype-schematron",
+        "rules": datatype_rules,
+    }
     summary = {
         "source": "generated-template-schematron",
         "constraints": len(constraints),
@@ -228,6 +440,7 @@ def attach_constraints(cda: dict[str, Any], include_dir: Path) -> dict[str, Any]
         "kinds": dict(sorted(Counter(
             str(item.get("kind") or "") for item in constraints
         ).items())),
+        "datatype_cooccurrence": datatype_summary,
     }
     cda["schematron_evidence"] = summary
     return summary

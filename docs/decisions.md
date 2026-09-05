@@ -38,6 +38,7 @@ is not necessarily an accepted clinical policy.
 | DEC-021 | Open templates and reviewed CDA extension attachments | accepted | verified |
 | DEC-022 | Reviewed malformed artifact-identity aliases | accepted | verified |
 | DEC-023 | Generated Schematron as supporting mapping evidence | accepted | verified |
+| DEC-024 | Datatype Schematron co-occurrence admissibility | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -110,7 +111,7 @@ Evidence: `docs/architecture.md`, `src/decor2hl7/retrieval/`.
 ## DEC-005 — Target-neutral model and target boundary
 
 **Decision:** accepted  
-**Implementation:** implemented
+**Implementation:** verified
 
 The normalized dataset model and site input configuration do not depend on CDA.
 CDA is the first target; a future FHIR target should reuse acquisition,
@@ -912,6 +913,58 @@ Evidence: `src/decor2hl7/compile/schematron.py`,
 `src/decor2hl7/compile/structural.py`, `src/decor2hl7/cli.py`,
 `tests/test_conformance.py`, `tests/test_core.py`,
 `docs/analyses/2026-09-03-phase-6-structural-evidence.md`.
+
+## DEC-024 — Datatype Schematron co-occurrence admissibility
+
+**Decision:** accepted
+**Implementation:** implemented
+
+Generated datatype Schematron may disqualify a physical representation without
+supplying any dataset-to-CDA semantics. The compiler therefore reads a narrow,
+source-derived subset of error-level abstract datatype rules: a negated
+conjunction of direct attribute or `hl7:` child-presence selectors, optionally
+containing parenthesized unions. It expands unions to bounded forbidden
+clauses, preserves conjunctions of more than two selectors, resolves abstract
+rule inheritance, records source/test provenance, and reports every unsupported
+error assertion. It never evaluates arbitrary XPath and warning-level rules
+never become mapping restrictions.
+
+A clause is a hard mapping restriction only when one ordinary non-null target
+assignment plus fixed attributes and direct children required by the compiled
+template necessarily violates it. This proof marks the target unavailable in
+the unproven possible-target inventory, rejects a reviewed mapping at
+configuration validation, and is repeated before rendering. Optional sibling
+assignments are not combined statically because their co-occurrence—especially
+inside repeats—is not guaranteed; the complete generated Schematron remains
+the authoritative document-level gate for those cases. If generation is
+unavailable, the datatype registry is explicitly unavailable and no constraint
+is invented.
+
+When a parent representation is already inadmissible because of required or
+fixed structure, direct scalar datatype descendants explicitly named beside
+that representation by a compiled co-occurrence clause are reviewable physical
+candidates even when generated semantic proposals do not name them as logical
+CDA datapoints. Wildcard-only participation does not reopen a whole generic
+datatype expansion.
+An explicit reviewed physical selection is accepted by configuration only
+after the same target existence, uniqueness, writability, datatype,
+occurrence, and co-occurrence checks. This widens reviewability, not semantic
+automation.
+
+For CEDIS problem-observation `effectiveTime`, template 4040 requires direct
+child `width`. `DTr1_IVL_TS.sch` forbids `@value` with any `hl7:` child and also
+forbids it with `width` explicitly. The parent timestamp representation is
+therefore unavoidably inadmissible, whereas datatype-derived `low/@value` plus
+required `width` is structurally admissible. An unmapped required `width` is
+rendered with the configured required-value null flavor; this completion does
+not establish that `low` is the clinical mapping.
+
+Evidence: `src/decor2hl7/compile/schematron.py`,
+`src/decor2hl7/cooccurrence.py`, `src/decor2hl7/compile/mapping.py`,
+`src/decor2hl7/validate.py`, `src/decor2hl7/cda/render.py`,
+`tests/test_conformance.py`, `tests/test_cda_datatypes.py`,
+`tests/test_core.py`,
+`docs/analyses/2026-09-05-datatype-schematron-cooccurrence.md`.
 
 ## Maintenance rule
 

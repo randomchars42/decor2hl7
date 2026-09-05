@@ -21,6 +21,10 @@ from ..transforms import cda_target_name, mapping_rules
 from ..cda.datatypes import classify_datatype
 from ..cda.model import ValueRepresentationKind
 from ..bindings import non_null_requirement_satisfied
+from ..cooccurrence import (
+    constrained_datatype_components, cooccurrence_problem_message,
+    unavoidable_targets_problems,
+)
 from .structural import (
     boolean_example_discriminator_rules as _boolean_example_discriminator_rules,
     coalesce_rule as _coalesce_rule,
@@ -54,7 +58,7 @@ _CDA_CANDIDATE_INFRASTRUCTURE = {
     "@classCode", "@moodCode", "@typeCode", "@determinerCode",
     "@contextControlCode",
 }
-_CDA_TARGET_CANDIDATE_POLICY = "cda-target-candidates-v1"
+_CDA_TARGET_CANDIDATE_POLICY = "cda-target-candidates-v2"
 
 
 def _norm(value: str) -> str:
@@ -1885,18 +1889,28 @@ def _cda_target_candidate_pool(
     """Return reviewable payload leaves without treating them as evidence.
 
     Unlike the coverage-headline filter, this inventory retains CDA/RIM
-    structural children such as ``associatedEntity/id``.  Pure datatype
-    plumbing and fixed document infrastructure remain excluded.
+    structural children such as ``associatedEntity/id``. Scalar datatype
+    descendants are payload candidates; other datatype plumbing and fixed
+    document infrastructure remain excluded.
     """
     result: dict[str, Mapping[str, Any]] = {}
     targets = cda.get("targets", {})
+    constrained_components = constrained_datatype_components(cda)
     for name, target in targets.items() if isinstance(targets, Mapping) else ():
         if not isinstance(target, Mapping):
             continue
         source_roles = _candidate_source_roles(target)
+        datatype_payload = bool(
+            target.get("datatype_derived")
+            and target.get("kind") == "element"
+            and isinstance(target.get("value_representation"), Mapping)
+            and target.get("value_representation", {}).get("kind")
+            and str(name) in constrained_components
+        )
         payload_source = (
             not target.get("datatype_derived")
             or ("cda-rim" in source_roles and "datatype" not in source_roles)
+            or datatype_payload
         )
         if (
             target.get("writable")
@@ -1970,6 +1984,7 @@ def _possible_target_inventory(
     if not model_type:
         return None
     pool = _cda_target_candidate_pool(cda)
+    unavoidable = unavoidable_targets_problems(cda, list(pool))
     items: list[dict[str, Any]] = []
     for name, target in pool.items():
         if (
@@ -1991,6 +2006,13 @@ def _possible_target_inventory(
         source_repeat_depth = len(field.get("repeat_chain", []))
         target_repeats = [
             str(value) for value in target.get("repeat_ancestors", [])
+        ]
+        conformance_conflicts = [
+            {
+                **problem,
+                "message": cooccurrence_problem_message(problem),
+            }
+            for problem in unavoidable.get(name, [])
         ]
         items.append({
             "target": name,
@@ -2025,11 +2047,12 @@ def _possible_target_inventory(
             ),
             "claimed_by": exact_claims,
             "already_claimed": bool(exact_claims),
+            "conformance_conflicts": conformance_conflicts,
             "containing_instance_claimed_by": [
                 {"target": claimed_target, "fields": sorted(paths)}
                 for claimed_target, paths in sorted(instance_claims.items())
             ],
-            "available": not exact_claims,
+            "available": not exact_claims and not conformance_conflicts,
         })
     items.sort(key=lambda item: (
         _location_order(item["template"].get("location")),

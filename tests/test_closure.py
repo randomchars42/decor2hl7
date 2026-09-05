@@ -9,6 +9,9 @@ from decor2hl7.cda.parity import declared_endpoint_parity
 from decor2hl7.compile import mapping as mapping_compiler
 from decor2hl7.compile.artifacts import compiler_inputs, selected_closure_templates
 from decor2hl7.compile.mapping import mapping_field_delta
+from decor2hl7.compile.schematron import read_datatype_cooccurrences
+from decor2hl7.cooccurrence import unavoidable_targets_problems
+from decor2hl7.transforms import cda_target_name, mapping_rules
 
 
 REFERENCE_RELEASE = "2026.1.2"
@@ -107,7 +110,7 @@ class ReferenceClosureTests(unittest.TestCase):
         self.assertTrue(all(value["items"] for value in inventories.values()))
         self.assertEqual(
             {value["document_pool_size"] for value in inventories.values()},
-            {646},
+            {848},
         )
 
         xray_path = (
@@ -129,6 +132,60 @@ class ReferenceClosureTests(unittest.TestCase):
                 "containing_instance_claimed_by"
             ]
         )
+
+    def test_datatype_cooccurrence_narrows_cedis_without_mapping_loss(self) -> None:
+        model = self._load(self.model_dir / "model.json")
+        cda = self._load(self.model_dir / "cda.json")
+        audit = self._load(self.model_dir / "mapping-audit.json")
+        accepted = self._load(
+            self.workspace / "mapping" / REFERENCE_RELEASE
+            / REFERENCE_TRANSACTION / "cda-mapping.json"
+        )
+        rules, summary = read_datatype_cooccurrences(
+            (
+                self.model_dir / "conformance-validation" / "generated"
+                / "include"
+            ).glob("DTr1_*.sch")
+        )
+        self.assertEqual(summary["supported_assertions"], 42)
+        self.assertEqual(summary["unresolved_extends"], [])
+        self.assertEqual(summary["inheritance_cycles"], [])
+        cda["datatype_constraints"] = {
+            "version": 1, "source": "generated-datatype-schematron",
+            "rules": rules,
+        }
+
+        selected_targets = [
+            cda_target_name(rule)
+            for value in accepted["fields"].values()
+            for rule in mapping_rules(value)
+        ]
+        self.assertFalse(any(
+            unavoidable_targets_problems(cda, selected_targets).values()
+        ))
+
+        claimed_by, occurrence_claims = mapping_compiler._mapping_target_claims(
+            accepted["fields"], cda
+        )
+        path = (
+            "notfallanamnese.beschwerden_bei_vorstellung.ereigniseintritt"
+        )
+        inventory = mapping_compiler._possible_target_inventory(
+            model["fields"][path], audit["fields"][path].get("context"), cda,
+            claimed_by, occurrence_claims,
+        )
+        self.assertIsNotNone(inventory)
+        assert inventory is not None
+        self.assertEqual(inventory["document_pool_size"], 873)
+        by_name = {item["target"]: item for item in inventory["items"]}
+        parent = by_name["Problemobservationcedis.effectiveTime"]
+        low = by_name[
+            "Problemobservationcedis.observation.effectiveTime.low"
+        ]
+        self.assertFalse(parent["available"])
+        self.assertTrue(parent["conformance_conflicts"])
+        self.assertTrue(low["available"])
+        self.assertEqual(low["conformance_conflicts"], [])
 
     @staticmethod
     def _load(path: Path) -> dict[str, Any]:

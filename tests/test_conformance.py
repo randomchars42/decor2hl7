@@ -14,7 +14,8 @@ from unittest.mock import patch
 
 from decor2hl7.cda.core import CORE_FILES, CORE_REVISION, core_paths
 from decor2hl7.compile.schematron import (
-    attach_constraints, read_constraints, split_xpath,
+    attach_constraints, read_constraints, read_datatype_cooccurrences,
+    split_xpath,
 )
 from decor2hl7.conformance import (
     _complete_schematron_namespaces,
@@ -35,6 +36,38 @@ from decor2hl7.retrieval.fetch import _fetch_direct
 
 
 class ConformanceTests(unittest.TestCase):
+    def test_datatype_presence_cooccurrences_are_strict_and_inherited(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            include = Path(temporary)
+            (include / "DTr1_BASE.sch").write_text('''<rule
+    xmlns="http://purl.oclc.org/dsdl/schematron" abstract="true" id="BASE">
+  <assert role="error" test="not(@value and hl7:*)">base</assert>
+  <assert role="error" test="not(hl7:low/@value = hl7:high/@value)">unsupported</assert>
+  <assert role="warning" test="not(@code and hl7:translation)">warning</assert>
+</rule>''', encoding="utf-8")
+            (include / "DTr1_CHILD.sch").write_text('''<rule
+    xmlns="http://purl.oclc.org/dsdl/schematron" abstract="true" id="CHILD">
+  <extends rule="BASE"/>
+  <assert role="error" test="not(@value and (hl7:low|hl7:high))">union</assert>
+  <assert role="error" test="not(hl7:width and hl7:low and hl7:high)">n-ary</assert>
+</rule>''', encoding="utf-8")
+
+            rules, summary = read_datatype_cooccurrences(
+                include.glob("DTr1_*.sch")
+            )
+            self.assertEqual(summary["supported_assertions"], 3)
+            self.assertEqual(summary["unsupported_error_assertions"], 1)
+            self.assertEqual(summary["unresolved_extends"], [])
+            self.assertEqual(
+                [row["selectors"] for row in rules["CHILD"]],
+                [
+                    ["@value", "hl7:*"],
+                    ["@value", "hl7:low"],
+                    ["@value", "hl7:high"],
+                    ["hl7:width", "hl7:low", "hl7:high"],
+                ],
+            )
+
     def test_generated_template_constraints_are_parsed_and_cross_referenced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             include = Path(temporary)

@@ -218,11 +218,17 @@ and the earlier snapshot in
 [`analyses/2026-09-02-residual-mapping-boundaries.md`](analyses/2026-09-02-residual-mapping-boundaries.md).
 
 The active CEDIS problem-observation interval is open. Its explicitly required
-`width` therefore coexists with inherited XSD `low`, `high`, and `center`
-targets; declaring one child does not close the others. `IVL_TS` also legally
-inherits the scalar `TS/@value` shorthand, and the pinned CDA model contains no
-constraint forbidding that shorthand alongside `width`. These legal choices do
-not establish which one carries the dataset's Ereigniseintritt.
+`width` coexists with inherited XSD `low`, `high`, and `center` targets;
+declaring one child does not close the others. The earlier conclusion that the
+pinned model contained no constraint against scalar `IVL_TS/@value` alongside
+`width` was incomplete: the generated `DTr1_IVL_TS.sch` forbids `@value` with
+any `hl7:` child and names `width` explicitly. DEC-024 now compiles that narrow
+co-occurrence rule, making the parent timestamp target inadmissible while
+retaining `effectiveTime/low` as a structurally admissible, datatype-derived
+review candidate. The required `width` can be emitted with the configured
+required-value null flavor when it has no real value. None of this establishes
+the missing clinical association from Ereigniseintritt to `low`; that semantic
+selection remains a review decision.
 
 The active MRI statement has no region-bearing `targetSiteCode`,
 `approachSiteCode`, or equivalent particle. Its region datapoint remains blocked

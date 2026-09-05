@@ -19,6 +19,9 @@ from ..bindings import (
     required_unmapped_null_flavor,
     target_default_values,
 )
+from ..cooccurrence import (
+    cooccurrence_problem_message, datatype_cooccurrence_problems,
+)
 from .model import ValueRepresentationKind
 
 HL7 = "urn:hl7-org:v3"
@@ -846,6 +849,18 @@ def emit(
         raise ValueError(
             "generated CDA violates compound datatype requirements:\n"
             + "\n".join(compound_problems)
+        )
+    datatype_problems = datatype_cooccurrence_problems(
+        cda, {**target_defaults, **assignments},
+    )
+    if datatype_problems:
+        raise ValueError(
+            "generated CDA violates datatype co-occurrence requirements:\n"
+            + "\n".join(
+                f"{problem.get('target')}: "
+                + cooccurrence_problem_message(problem)
+                for problem in datatype_problems
+            )
         )
     active_locations = _active_target_locations(cda, assignments)
     for location in physical_values:

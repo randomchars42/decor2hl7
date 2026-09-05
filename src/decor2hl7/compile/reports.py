@@ -1502,6 +1502,13 @@ def _possible_target_lines(
                     "non-null requires "
                     + ", ".join(str(value) for value in item["non_null_requires"])
                 )
+            for conflict in item.get("conformance_conflicts", []):
+                if isinstance(conflict, Mapping):
+                    constraints.append(
+                        "unavailable: " + str(
+                            conflict.get("message") or "datatype constraint conflict"
+                        )
+                    )
             target_text = f"`{item.get('target')}`<br>`{item.get('path') or '—'}`"
             bindings = ", ".join(
                 _binding_label(binding) for binding in item.get("bound_value_sets", [])

@@ -21,6 +21,10 @@ from .bindings import (
     validate_target_defaults,
 )
 from .data import mapping_locator
+from .cooccurrence import (
+    cooccurrence_problem_message, datatype_cooccurrence_problems,
+    unavoidable_targets_problems,
+)
 from .retrieval.xml import local, parse_file
 from .semantics import direct_compatibility, transformed_compatibility, identifier_root_for_target, valid_oid
 from .transforms import mapping_rules, validate_transform
@@ -135,6 +139,7 @@ def check_config(
     }
     claims: dict[str, list[str]] = defaultdict(list)
     configured_targets: set[str] = set()
+    configured_target_modes: dict[str, bool] = {}
     for path, value in cda_mapping.get("fields", {}).items():
         field = model.get("fields", {}).get(path, {})
         for rule in mapping_rules(value):
@@ -143,19 +148,34 @@ def check_config(
             if isinstance(datapoints, Mapping) and datapoints:
                 datapoint = datapoints.get(target_name)
                 if not isinstance(datapoint, Mapping):
-                    errors.append(
-                        f"cda-mapping: {path} references unknown logical CDA "
-                        f"datapoint {target_name}"
-                    )
-                    continue
-                modeled_target = str(datapoint.get("cda_target") or "")
-                if modeled_target and modeled_target != cda_target_name:
-                    errors.append(
-                        f"cda-mapping: {path} logical datapoint {target_name} resolves "
-                        f"to {modeled_target}, not {cda_target_name}"
-                    )
-                    continue
-                cda_target_name = modeled_target or cda_target_name
+                    # The mapping guide also exposes reviewed physical targets
+                    # which are intentionally absent from generated logical
+                    # proposal datapoints. They remain subject to the complete
+                    # physical target, type, and conformance validation below.
+                    if target_name in targets:
+                        if cda_target_name != target_name:
+                            errors.append(
+                                f"cda-mapping: {path} physical target "
+                                f"{target_name} resolves to itself, not "
+                                f"{cda_target_name}"
+                            )
+                            continue
+                        cda_target_name = target_name
+                    else:
+                        errors.append(
+                            f"cda-mapping: {path} references unknown logical CDA "
+                            f"datapoint {target_name}"
+                        )
+                        continue
+                else:
+                    modeled_target = str(datapoint.get("cda_target") or "")
+                    if modeled_target and modeled_target != cda_target_name:
+                        errors.append(
+                            f"cda-mapping: {path} logical datapoint {target_name} resolves "
+                            f"to {modeled_target}, not {cda_target_name}"
+                        )
+                        continue
+                    cda_target_name = modeled_target or cda_target_name
             target = targets.get(cda_target_name)
             if target is None:
                 errors.append(
@@ -171,6 +191,10 @@ def check_config(
             if mode != "fallback":
                 claims[cda_target_name].append(path)
             configured_targets.add(cda_target_name)
+            configured_target_modes[cda_target_name] = bool(
+                configured_target_modes.get(cda_target_name, True)
+                and mode == "presence"
+            )
             valid_presence_target = bool(
                 mode == "presence" and target.get("renderable")
                 and target.get("has_children") and not target.get("prohibited")
@@ -227,6 +251,14 @@ def check_config(
             ):
                 if not identifier_root_for_target(cda_target_name, target, site):
                     errors.append(f"cda-mapping: {path} -> {target_name} is an II without a fixed/configured root")
+    for target_name, problems in unavoidable_targets_problems(
+        cda, configured_target_modes,
+    ).items():
+        for problem in problems:
+            errors.append(
+                f"cda-mapping: target {target_name} is not admissible: "
+                + cooccurrence_problem_message(problem)
+            )
     site_targets = {
         str(name) for name in (
             site.get("cda", {}).get("values", {})
@@ -279,6 +311,16 @@ def check_config(
                     errors.append(f"codes-mapping: {path} maps {raw!r} to unknown canonical value {value!r}")
     if site is not None:
         errors.extend(check_site(site, cda))
+        site_values = (
+            site.get("cda", {}).get("values", {})
+            if isinstance(site.get("cda", {}), Mapping) else {}
+        )
+        if isinstance(site_values, Mapping):
+            for problem in datatype_cooccurrence_problems(cda, site_values):
+                errors.append(
+                    f"site: cda.values[{problem.get('target')!r}] is not admissible: "
+                    + cooccurrence_problem_message(problem)
+                )
     errors.extend(validate_target_defaults(cda, cda_mapping))
     errors.extend(validate_structures(model, cda, cda_mapping))
     return errors

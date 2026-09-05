@@ -48,6 +48,7 @@ src/decor2hl7/
         xml.py          XML repair/helpers
     compile/
         artifacts.py    build-ready compiler inputs
+        schematron.py   bounded template/datatype Schematron evidence
         transaction.py source + analysis → model.json
         terminology.py logical/formal domain accessors
         mapping.py      decisions → audit + proposal
@@ -62,6 +63,7 @@ src/decor2hl7/
     build/              transitional imports for one release
     data.py             CSV joining/normalization
     bindings.py         occurrence fan-out/coalescing + CDA assignments
+    cooccurrence.py     conservative datatype-shape admissibility
     validate.py         config + record/source-constraint validation
     transforms.py       small declarative mapping transforms
     assertions.py       ART-DECOR assert evaluator + Schematron output
@@ -237,8 +239,12 @@ after mapping. Most logical datapoints point to a same-named physical target.
 Discriminated repetitions instead expose separate names such as
 `Pupilsize_right.value` and `Pupilsize_left.value`, both linked to the physical
 repeatable `Pupilsize.value` constraint and carrying their side discriminator.
-The same logical datapoints are used by configuration, reports, validation and
-runtime assignment. ART-DECOR identifiers are provenance, not runtime addresses.
+The same logical datapoints are used by generated configuration, reports,
+validation and runtime assignment. A reviewer may additionally select a known
+physical target exposed by the possible-target inventory; it passes the same
+physical/type/occurrence checks and does not become semantic evidence merely by
+bypassing the generated proposal interface. ART-DECOR identifiers are
+provenance, not runtime addresses.
 
 Compilation first resolves template relationships and specialization, then
 derives the effective CDA model inventory. `cda/core.py` indexes the fetched
@@ -249,6 +255,17 @@ Structural targets remain navigation, evidence and repeat anchors. Scalar mappin
 sees only targets whose compiled
 `value_representation` marks them writable. The renderer executes that
 representation and does not contain a second datatype dispatch table.
+
+When current-build Schematron generation succeeds,
+`datatype_constraints.rules` stores a shared registry of a strict error-level
+presence co-occurrence subset from `DTr1_*.sch`, including resolved abstract
+rule inheritance and original test/source provenance. The compiler records how
+many error assertions were unsupported. Mapping admissibility applies a clause
+only when one target assignment plus fixed attributes and required direct
+children proves the violation; it does not infer optional-field or repeat
+co-occurrence. The renderer repeats the same unavoidable-shape check before XML
+construction, while the full generated Schematron remains the document-level
+authority.
 
 ART-DECOR choices are transparent structural constraints. Predicate variants
 retain distinct identities but overlay one underlying XSD particle. Abstract
@@ -346,7 +363,11 @@ and human details on one compiled evidence source.
 Audit version 2 separately stores `possible_targets` for an unselected field
 with a unique structural context. These type-compatible descendants are a
 claim-aware physical inventory for human review, not evidence or automatic
-selections; the coverage headline is therefore unchanged.
+selections; the coverage headline is therefore unchanged. A source-derived
+datatype replacement part enters this inventory only when a compiled
+co-occurrence clause names it directly beside an already inadmissible parent
+representation. Rows with an unavoidable clause violation are retained but
+marked unavailable.
 Short `configuration_notes` are the exception to selection-only minimality:
 they record configured attachments or resolution rules actually used by an
 executable selection and are not themselves semantic evidence.

@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-05-datatype-schematron-cooccurrence.md`](2026-09-05-datatype-schematron-cooccurrence.md)
+  records the source-derived, narrowly parsed datatype co-occurrence
+  admissibility rule, its conservative enforcement boundary, and why required
+  CEDIS `width` rules out parent `IVL_TS/@value` but not `low/@value`.
 - [`2026-09-04-target-candidate-generation.md`](2026-09-04-target-candidate-generation.md)
   establishes the four-stage filter that turns the compiled target inventory
   into a reviewable per-datapoint candidate list, and reconciles the compiled

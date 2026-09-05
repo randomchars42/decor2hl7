@@ -87,6 +87,105 @@ def target_at(compiled: Mapping[str, Any], suffix: str) -> tuple[str, dict[str, 
 
 
 class CdaDatatypeTests(unittest.TestCase):
+    def test_required_interval_width_rules_out_parent_value_but_not_low(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "project.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:observation" minimumMultiplicity="0" maximumMultiplicity="1">
+      <element name="hl7:effectiveTime" datatype="IVL_TS"
+               minimumMultiplicity="0" maximumMultiplicity="1">
+        <element name="hl7:width" datatype="PQ" conformance="R"
+                 minimumMultiplicity="1" maximumMultiplicity="1"/>
+      </element>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc", "template_effective_date": "2026",
+                },
+                "groups": {},
+                "fields": {"event": {
+                    "name": "Event", "concept": "event", "type": "datetime",
+                    "repeat_chain": [], "value_sets": [], "codes": [],
+                }},
+            }
+            compiled = compile_cda(
+                [source], model,
+                core_definition_paths=[write_datatype_schema(root)],
+            )
+            parent_name, _ = target_at(compiled, "/hl7:effectiveTime")
+            low_name, _ = target_at(
+                compiled, "/hl7:effectiveTime/hl7:low"
+            )
+            compiled["datatype_constraints"] = {
+                "version": 1,
+                "source": "generated-datatype-schematron",
+                "rules": {"IVL_TS": [{
+                    "selectors": ["@value", "hl7:*"],
+                    "test": "not(@value and hl7:*)",
+                    "declared_in": "IVL_TS",
+                    "source": "DTr1_IVL_TS.sch",
+                }]},
+            }
+            # A reviewed physical target remains selectable even when the
+            # generated proposal has a non-empty logical datapoint registry.
+            compiled["datapoints"] = {
+                "unrelated.logical": {"cda_target": low_name},
+            }
+            csv_mapping = {"fields": {"event": None}}
+            low_mapping = {"fields": {"event": low_name}}
+            self.assertEqual(
+                validate.check_config(
+                    model, compiled, csv_mapping, low_mapping,
+                ),
+                [],
+            )
+            parent_errors = validate.check_config(
+                model, compiled, csv_mapping,
+                {"fields": {"event": parent_name}},
+            )
+            self.assertTrue(any(
+                "not admissible" in error
+                and "not(@value and hl7:*)" in error
+                for error in parent_errors
+            ))
+
+            with self.assertRaisesRegex(
+                ValueError, "datatype co-occurrence requirements",
+            ):
+                cda.emit(
+                    {
+                        "key": "P1", "instances": {},
+                        "values": {"event": "2026-09-05T12:00:00Z"},
+                    },
+                    model, compiled, {"fields": {"event": parent_name}}, {},
+                )
+            payload, problems = cda.emit(
+                {
+                    "key": "P1", "instances": {},
+                    "values": {"event": "2026-09-05T12:00:00Z"},
+                },
+                model, compiled, low_mapping, {},
+            )
+            self.assertEqual(problems, [])
+            effective_time = find_required(
+                ET.fromstring(payload), f".//{{{HL7}}}effectiveTime",
+            )
+            self.assertNotIn("value", effective_time.attrib)
+            self.assertEqual(
+                find_required(effective_time, f"{{{HL7}}}width").get(
+                    "nullFlavor"
+                ),
+                "NI",
+            )
+            self.assertEqual(
+                find_required(effective_time, f"{{{HL7}}}low").get("value"),
+                "20260905120000+0000",
+            )
+
     def test_quantity_ranges_use_compiled_low_high_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

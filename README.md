@@ -376,8 +376,9 @@ headline build status.
 - `cda.json`: reachable CDA template constraints plus XSD-derived CDA/RIM and
   datatype structure, reviewed polymorphic datatype branches, the automatic
   model inventory, explicit writable value representations, formal ART-DECOR
-  assertions, generated-Schematron supporting constraints, and readable target
-  names such as `PatientIdentifier.id` or `ersteinschatzung.effectiveTime`.
+  assertions, generated-Schematron supporting constraints, the bounded
+  datatype co-occurrence registry, and readable target names such as
+  `PatientIdentifier.id` or `ersteinschatzung.effectiveTime`.
 - `cda-assertions.sch`: ISO Schematron containing the original effective
   ART-DECOR `<assert>` expressions and `<let>` variables.
 - `mapping-audit.json`: structured candidates, evidence, confidence, conflicts
@@ -404,6 +405,13 @@ template declares only the parent datatype. ART-DECOR constraints refine those
 generic parts. Ambiguous or structural-only targets stay in `cda.json` for
 evidence/provenance but cannot be selected for scalar rendering. `decor2hl7
 check` verifies these compiled-model invariants before transformation.
+
+After successful Schematron generation, a bounded error-level datatype subset
+also refines admissibility. Negated direct presence conjunctions can prove that
+one parent value representation necessarily conflicts with fixed or required
+children. Such a target remains visible with its source assertion but is not
+selectable; explicitly named direct datatype alternatives can reopen for human
+review without exposing the whole generic datatype expansion.
 
 ART-DECOR `<choice>` branches are compiled as transparent alternatives of their
 underlying CDA/RIM particle. Abstract `ANY` values expose concrete typed scalar
@@ -508,6 +516,10 @@ contains a pruned dataset tree, a pruned CDA candidate tree and one decision car
 per unmapped datapoint. Each card distinguishes semantic evidence from the
 unproven type-compatible target inventory and shows annotated, generated
 template constraint skeletons where context exists.
+Rows that necessarily violate a compiled datatype co-occurrence assertion are
+marked unavailable. A reviewed physical datatype descendant may be selected
+directly even when no generated logical proposal datapoint names it; the normal
+physical, datatype, occurrence, claim and conformance checks still apply.
 `cda-mapping-details.md` records every accepted datapoint-to-leaf mapping with
 the established entity tables, abridged JSON and contextual CDA previews, then
 adds the build summary, evidence chains, scores, template/element identifiers,
@@ -643,6 +655,10 @@ records that dependency, `check-cda-mapping` rejects incomplete reviewed
 selections, and rendering verifies it for every repeated occurrence. For
 example, an `EIVL_TS` offset is not executable without its event; the compiler
 does not infer a TimingEvent code from labels.
+Generated datatype Schematron can independently make a representation
+inadmissible. The supported presence-only subset is parsed and inherited from
+the current generated files, not maintained as a second reviewed datatype-rule
+table. Unsupported XPath is counted and left to complete Schematron validation.
 A formally coded dataset field can also map directly to an unfixed writable
 CDA `hl7:code` element when both sides share an explicit ValueSet. Fixed or
 differently bound structural codes, such as a section's identifying LOINC code,

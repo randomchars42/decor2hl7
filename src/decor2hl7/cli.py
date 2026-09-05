@@ -360,12 +360,22 @@ def cmd_build(args: argparse.Namespace) -> int:
     ):
         attach_constraints(cda, model_dir / "conformance-validation" / "include")
     else:
+        cda["datatype_constraints"] = {
+            "version": 1,
+            "source": "generated-datatype-schematron",
+            "status": "unavailable",
+            "rules": {},
+        }
         cda["schematron_evidence"] = {
             "source": "generated-template-schematron",
             "constraints": 0,
             "matched": 0,
             "kinds": {},
             "status": "unavailable",
+            "datatype_cooccurrence": {
+                "source": "generated-datatype-schematron",
+                "status": "unavailable",
+            },
         }
     cda_mapping = write_mapping_model(
         inputs["mapping_evidence"], model_dir, model, cda

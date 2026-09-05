@@ -465,20 +465,24 @@ in audit version 2. It is grouped by the concrete contained-template occurrence
 and shows the IG-facing template identity, CDA path, datatype, cardinality,
 conformance, description and ValueSet bindings, plus `non_null_requires`,
 repeat ancestors, occurrence-rule mismatch, exact target claims and claims in
-the same template occurrence.
+the same template occurrence. It also shows source-derived datatype
+co-occurrence conflicts that make a row unavailable.
 
 This table is an admissibility inventory, not another candidate-evidence tier.
 Rows do not receive confidence or scores, do not enter `primary` or
 `alternatives`, and never change `cda-mapping.proposed.json` or the coverage
-headline. An `available` row is only unclaimed; a reviewer must still establish
-its semantics. An `already_claimed` row is retained so target reuse cannot be
-missed, including structured selections whose logical and physical target names
-differ.
+headline. An `available` row is unclaimed and has no unavoidable compiled
+datatype conflict; a reviewer must still establish its semantics. An
+`already_claimed` or datatype-conflicting row is retained so the reason it
+cannot be reused is visible, including structured selections whose logical and
+physical target names differ.
 
 The document-wide pool and per-field narrowing follow `DEC-011`. In particular,
 genericity is determined by the fixed CDA-infrastructure role deny-list, never
 by path frequency: frequent payload roles such as `hl7:value` must remain
-reviewable.
+reviewable. Pure datatype expansion remains excluded except for a direct scalar
+part explicitly named beside an already inadmissible parent representation in
+a supported current-build datatype Schematron co-occurrence clause.
 
 After each contained-template candidate table, render a compact annotated
 XML-like constraint skeleton. It is a navigation aid, not an instance document.
