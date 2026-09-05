@@ -39,6 +39,7 @@ is not necessarily an accepted clinical policy.
 | DEC-022 | Reviewed malformed artifact-identity aliases | accepted | verified |
 | DEC-023 | Generated Schematron as supporting mapping evidence | accepted | verified |
 | DEC-024 | Datatype Schematron co-occurrence admissibility | accepted | verified |
+| DEC-025 | Conservative ordinal evidence extraction | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -965,6 +966,28 @@ Evidence: `src/decor2hl7/compile/schematron.py`,
 `tests/test_conformance.py`, `tests/test_cda_datatypes.py`,
 `tests/test_core.py`,
 `docs/analyses/2026-09-05-datatype-schematron-cooccurrence.md`.
+
+## DEC-025 — Conservative ordinal evidence extraction
+
+**Decision:** accepted
+**Implementation:** verified
+
+A bare leading integer is ordinal evidence only in an option's primary label,
+and only when it is not the prefix of a hyphenated identifier. An unqualified
+numeric synonym is code or classification evidence, not rank evidence. A label
+or synonym may still supply an ordinal when the number is explicitly associated
+with `rank`, `Rankin`, `Rang`, `score`, or `Punkt(e)` wording.
+
+Extracted ordinal values must also be injective across the option list. A
+collision removes ordinal metadata from every option in that list. These rules
+retain genuine GCS leading ranks and modified-Rankin synonyms while excluding
+LOINC identifiers, CEDIS classification numbers, and measurements such as fall
+height. Explicit reviewed ordinal maps remain authoritative and do not depend
+on generated evidence surviving a later rebuild.
+
+Evidence: `src/decor2hl7/compile/transaction.py`,
+`src/decor2hl7/compile/mapping.py`, `tests/test_core.py`,
+`docs/analyses/2026-09-05-ordinal-evidence-correction.md`.
 
 ## Maintenance rule
 

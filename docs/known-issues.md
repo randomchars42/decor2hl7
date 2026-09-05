@@ -112,10 +112,12 @@ configuration remains executable for compatibility.
 
 The selected CEDIS ValueSet is a presenting-complaint taxonomy, not an ordered
 scale. Its hierarchy therefore does not justify an `ordinal` transform. Dataset
-option extraction now accepts only a leading rank or an explicitly labelled
-rank/score and drops ordinal metadata for the whole option list when extracted
-values collide. LOINC-shaped synonyms, fall-height measurements and duplicate
-CEDIS classification prefixes therefore cannot become ordinal evidence.
+option extraction accepts a bare leading rank only from the option's primary
+label; unqualified numeric synonyms remain code/classification evidence. A
+label or synonym may supply an ordinal when an explicit rank/score word
+accompanies its number. Ordinal metadata is dropped from the whole option list
+when extracted values collide. LOINC-shaped synonyms, fall-height measurements
+and CEDIS classification numbers therefore cannot become ordinal evidence.
 
 A future concept whose ART-DECOR representation needs a different structural or
 computed transformation remains evidence-linked but non-executable until an

@@ -28,6 +28,16 @@ TYPE_NAMES = {
     "duration": "duration",
 }
 
+LEADING_OPTION_RANK = re.compile(
+    r"^\s*([0-9]+)(?![0-9-])(?:\s*(?:punkte?|score))?\b",
+    re.I,
+)
+EXPLICIT_OPTION_RANK = re.compile(
+    r"\b(?:rank(?:in)?|rang|score)\s*[:=#-]?\s*([0-9]+)\b"
+    r"|\b([0-9]+)\s*(?:punkte?|score)\b",
+    re.I,
+)
+
 
 def _number(raw: str | None) -> int | float | None:
     if raw in (None, ""):
@@ -37,6 +47,20 @@ def _number(raw: str | None) -> int | float | None:
     except (TypeError, ValueError):
         return None
     return int(value) if value.is_integer() else value
+
+
+def _option_ordinal(label: str, synonyms: Iterable[str]) -> int | None:
+    """Return rank evidence without treating unqualified synonyms as ranks."""
+    leading = LEADING_OPTION_RANK.match(label)
+    if leading:
+        return int(leading.group(1))
+    for text in [label, *synonyms]:
+        explicit = EXPLICIT_OPTION_RANK.search(text)
+        if explicit:
+            return int(next(
+                group for group in explicit.groups() if group is not None
+            ))
+    return None
 
 
 def _dominant_code_system(entry: Mapping[str, Any]) -> str | None:
@@ -353,23 +377,11 @@ def _value_domain(domain: ET.Element, node: dict[str, Any]) -> None:
                     for part in list(item) if local(part.tag) == "synonym"
                 ]
                 info: dict[str, Any] = {"synonyms": [value for value in synonyms if value]}
-                ordinal = None
-                for text in info["synonyms"] + [label]:
-                    # A bare number is ordinal evidence only at the start of a
-                    # label.  Elsewhere, require an explicit rank/score word.
-                    # This deliberately excludes terminology identifiers such
-                    # as LOINC ``30745-4`` and measurements such as ``>= 3 m``.
-                    leading = re.match(r"^\s*([0-9]+)(?![0-9-])(?:\s*(?:punkte?|score))?\b", text, re.I)
-                    explicit = re.search(
-                        r"\b(?:rank(?:in)?|rang|score)\s*[:=#-]?\s*([0-9]+)\b"
-                        r"|\b([0-9]+)\s*(?:punkte?|score)\b",
-                        text,
-                        re.I,
-                    )
-                    match = leading or explicit
-                    if match:
-                        ordinal = int(next(group for group in match.groups() if group is not None))
-                        break
+                # A bare number is ordinal evidence only at the start of the
+                # option's label. Unqualified synonyms are commonly codes or
+                # taxonomy numbers. An explicit rank/score phrase remains
+                # admissible in either the label or a synonym.
+                ordinal = _option_ordinal(label, info["synonyms"])
                 if ordinal is not None:
                     info["ordinal"] = ordinal
                 details[label] = info

@@ -4718,7 +4718,15 @@ class CoreTests(unittest.TestCase):
                   <concept><name>Sturz mit Fallhöhe &lt; 3 m</name></concept>
                 </conceptList></valueDomain>
               </concept>
-              <concept type="item" shortName="taxonomy" id="taxonomy"><name>Taxonomie</name>
+              <concept type="item" shortName="cedis" id="cedis"><name>CEDIS</name>
+                <valueDomain type="code"><conceptList>
+                  <concept><name>HNO (Mund, Rachen, Hals)</name><synonym>101-150</synonym></concept>
+                  <concept><name>Zahn-/Zahnfleischprobleme</name><synonym>101</synonym></concept>
+                  <concept><name>Gastrointestinal</name><synonym>251-300</synonym></concept>
+                  <concept><name>Bauchschmerzen</name><synonym>251</synonym></concept>
+                </conceptList></valueDomain>
+              </concept>
+              <concept type="item" shortName="duplicate_ranks" id="duplicate_ranks"><name>Duplicate ranks</name>
                 <valueDomain type="code"><conceptList>
                   <concept><name>101 Hauptgruppe</name></concept>
                   <concept><name>101 Untergruppe</name></concept>
@@ -4734,7 +4742,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(
             [explicit[label]["ordinal"] for label in explicit], [4, 5]
         )
-        for path in ("xray", "fall", "taxonomy"):
+        for path in ("xray", "fall", "cedis", "duplicate_ranks"):
             options = model["fields"][path]["logical_domain"]["options"]
             self.assertFalse(any("ordinal" in info for info in options.values()))
 

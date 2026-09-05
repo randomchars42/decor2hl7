@@ -1563,7 +1563,10 @@ def _semantic_transform_candidates(
                     ["TERM/TEMPLATE", "TRANSFORM(ordinal→score)"],
                     "MEDIUM" if locator_confidence in {"MEDIUM", "STRONG"} else "WEAK",
                     76, kind="TRANSFORM", actionable=True, mapping=rule,
-                    warnings=["ordinal score derived from dataset option synonyms"]
+                    warnings=[
+                        "ordinal score derived from leading option ranks or "
+                        "explicit rank/score wording"
+                    ]
                 ))
                 break
     return result

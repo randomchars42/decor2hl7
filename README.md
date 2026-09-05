@@ -692,6 +692,13 @@ intentionally small (`identity`, `enum`, `ordinal`, `not`, `code_system`,
 `coded_fallback`) and remains data
 rather than clinical Python code.
 
+Generated ordinal evidence is conservative. A bare leading integer counts only
+when it appears in the option's primary label and is not part of a hyphenated
+identifier. A number elsewhere in a label or synonym requires explicit
+rank/score wording, and duplicate extracted ranks suppress ordinal evidence for
+the complete option list. Unqualified numeric synonyms remain coded-domain
+evidence; they do not create score transforms.
+
 A boolean coded act uses inverse `negationInd` when that attribute is the target
 representation. Separately, `mode: "presence"` may activate an optional
 ART-DECOR statement whose complete payload is fixed and whose template is

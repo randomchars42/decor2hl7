@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-05-ordinal-evidence-correction.md`](2026-09-05-ordinal-evidence-correction.md)
+  corrects the phase-7 CEDIS regression blind spot: unqualified numeric
+  synonyms are no longer treated as leading ranks, while GCS labels and
+  explicit modified-Rankin synonyms remain usable ordinal evidence.
 - [`2026-09-05-datatype-schematron-cooccurrence.md`](2026-09-05-datatype-schematron-cooccurrence.md)
   records the source-derived, narrowly parsed datatype co-occurrence
   admissibility rule, its conservative enforcement boundary, and why required
