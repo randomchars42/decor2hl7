@@ -22,7 +22,6 @@ import xml.etree.ElementTree as ET
 
 from ..retrieval.xml import child_text, clean, local, parse_file
 from ..assertions import schematron
-from ..compile.structural import value_set_members
 from ..workspace import write_json
 from .datatypes import (
     POLYMORPHIC_COMPLEX_ROOTS,
@@ -378,203 +377,6 @@ def _description(element: ET.Element) -> str | None:
             if value:
                 return value
     return None
-
-
-def _normalized_xml_path(value: str) -> tuple[str, ...]:
-    """Return a prefix/predicate-independent CDA path for evidence matching."""
-    return tuple(
-        part.split(":", 1)[-1].split("[", 1)[0]
-        for part in value.split("/")
-        if part and not part.startswith("@")
-    )
-
-
-def _neutral_coded_examples(
-    reachable: Mapping[TemplateKey, ET.Element],
-) -> dict[tuple[TemplateKey, tuple[str, ...]], list[dict[str, str]]]:
-    """Index coded neutral examples by exact template revision and CDA path.
-
-    ART-DECOR examples may sit at template level or inside the element they
-    illustrate.  Nested examples commonly repeat their enclosing element as
-    their XML root, so that duplicate segment is removed when the paths join.
-    """
-    result: dict[
-        tuple[TemplateKey, tuple[str, ...]], list[dict[str, str]]
-    ] = defaultdict(list)
-
-    def example_values(
-        node: ET.Element, prefix: tuple[str, ...] = (),
-    ) -> Iterable[tuple[tuple[str, ...], dict[str, str]]]:
-        if not isinstance(node.tag, str):
-            return
-        current = prefix + (local(node.tag),)
-        if node.get("code"):
-            yield current, {
-                "code": node.get("code") or "",
-                "code_system": node.get("codeSystem") or "",
-                "display_name": clean(node.get("displayName") or ""),
-            }
-        for child in list(node):
-            yield from example_values(child, current)
-
-    def walk(
-        node: ET.Element, template_key: TemplateKey,
-        constraint_path: tuple[str, ...] = (),
-    ) -> None:
-        kind = local(node.tag) if isinstance(node.tag, str) else ""
-        current = constraint_path
-        if kind == "element" and node.get("name"):
-            current += _normalized_xml_path(node.get("name") or "")
-        if kind == "example":
-            if (node.get("type") or "").casefold() != "neutral":
-                return
-            for root in list(node):
-                for example_path, value in example_values(root):
-                    if current and example_path and current[-1] == example_path[0]:
-                        path = current[:-1] + example_path
-                    else:
-                        path = current + example_path
-                    key = (template_key, path)
-                    if value not in result[key]:
-                        result[key].append(value)
-            return
-        for child in list(node):
-            walk(child, template_key, current)
-
-    for template_key, template in reachable.items():
-        walk(template, template_key)
-    return dict(result)
-
-
-def _allowed_coded_values(
-    node: Mapping[str, Any],
-    members: Mapping[str | tuple[str, str], list[dict[str, Any]]],
-) -> tuple[list[tuple[str, str]], dict[str, str] | None]:
-    """Return the exact allowed coded set that can prove an example default."""
-    bindings = [
-        item for item in node.get("value_set_bindings", [])
-        if isinstance(item, Mapping) and item.get("id")
-    ]
-    if len(bindings) == 1:
-        value_set = str(bindings[0].get("id") or "")
-        effective = str(bindings[0].get("effective_date") or "")
-        if effective:
-            allowed = {
-                (str(item.get("code") or ""), str(item.get("codeSystem") or ""))
-                for item in members.get((value_set, effective), [])
-                if item.get("code") and item.get("codeSystem")
-            }
-            if allowed:
-                return sorted(allowed), {
-                    "id": value_set, "effective_date": effective,
-                }
-
-    explicit = {
-        (str(item.get("code") or ""), str(item.get("code_system") or ""))
-        for item in node.get("codes", [])
-        if isinstance(item, Mapping) and item.get("code")
-    }
-    # One explicit code is already a fixed template constraint.  Two or more
-    # codes form an allowed set against which a neutral example can be checked.
-    if len(explicit) > 1:
-        return sorted(explicit), None
-    return [], None
-
-
-def _apply_neutral_example_defaults(
-    nodes: list[dict[str, Any]],
-    examples: Mapping[
-        tuple[TemplateKey, tuple[str, ...]], list[dict[str, str]]
-    ],
-    members: Mapping[str | tuple[str, str], list[dict[str, Any]]],
-) -> None:
-    """Compile strong, terminology-checked neutral-example fallbacks."""
-    for node in nodes:
-        if node.get("kind") == "element":
-            representation = value_representation(
-                node.get("representation_datatype") or node.get("datatype")
-            )
-            required = bool(node.get("mandatory")) or int(node.get("min") or 0) >= 1
-            raw_origin = node.get("origin")
-            origin: Mapping[str, Any] = (
-                raw_origin if isinstance(raw_origin, Mapping) else {}
-            )
-            template_key = (
-                str(origin.get("template_id") or ""),
-                str(origin.get("template_effective_date") or ""),
-            )
-            path = _normalized_xml_path(str(origin.get("path") or ""))
-            candidates = examples.get((template_key, path), [])
-            for explicit in node.get("codes", []):
-                if not isinstance(explicit, dict):
-                    continue
-                labels = {
-                    str(candidate.get("display_name") or "")
-                    for candidate in candidates
-                    if candidate.get("display_name")
-                    and candidate.get("code") == explicit.get("code")
-                    and (
-                        not candidate.get("code_system")
-                        or not explicit.get("code_system")
-                        or candidate.get("code_system") == explicit.get("code_system")
-                    )
-                }
-                if len(labels) == 1:
-                    explicit["display_name"] = next(iter(labels))
-            allowed, binding = _allowed_coded_values(node, members)
-            resolved: set[tuple[str, str]] = set()
-            if (
-                required and representation is not None
-                and representation.kind.value == "coded"
-                and candidates and allowed
-                and not node.get("fixed") and len(node.get("codes", [])) != 1
-            ):
-                for candidate in candidates:
-                    code = str(candidate.get("code") or "")
-                    code_system = str(candidate.get("code_system") or "")
-                    matches = {
-                        item for item in allowed
-                        if item[0] == code and (not code_system or item[1] == code_system)
-                    }
-                    if len(matches) == 1:
-                        resolved.update(matches)
-            if len(resolved) == 1:
-                code, code_system = next(iter(resolved))
-                display_names = {
-                    str(candidate.get("display_name") or "")
-                    for candidate in candidates
-                    if candidate.get("display_name")
-                    and candidate.get("code") == code
-                    and (
-                        not candidate.get("code_system")
-                        or candidate.get("code_system") == code_system
-                    )
-                }
-                evidence: dict[str, Any] = {
-                    "source": "template-example",
-                    "evidence": "STRONG",
-                    "template_id": template_key[0],
-                    "template_effective_date": template_key[1],
-                    "path": str(origin.get("path") or ""),
-                }
-                if binding is not None:
-                    evidence["value_set"] = binding
-                node["compiled_default"] = {
-                    "value": {
-                        "code": code,
-                        **({"codeSystem": code_system} if code_system else {}),
-                        **(
-                            {"displayName": next(iter(display_names))}
-                            if len(display_names) == 1 else {}
-                        ),
-                    },
-                    **evidence,
-                }
-                node.setdefault("provenance", []).append(evidence)
-        _apply_neutral_example_defaults(
-            list(node.get("children", [])), examples, members
-        )
-
 
 
 def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any]]:
@@ -2001,10 +1803,6 @@ def _annotate_targets(
                         "min", "max", "mandatory", "system_value", "content_role",
                     ):
                         target[key] = deepcopy(node.get(key))
-                    if node.get("compiled_default") is not None:
-                        target["compiled_default"] = deepcopy(
-                            node.get("compiled_default")
-                        )
                     target["has_children"] = bool(node.get("children"))
                     target["provenance"] = deepcopy(node.get("provenance", []))
                 if own_name:
@@ -2389,6 +2187,9 @@ def compile_cda(
     value_set_paths: Iterable[Path] = (),
     cda_extensions: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
+    # Retained for API compatibility. ValueSet resources no longer turn
+    # ART-DECOR example members into executable construction defaults.
+    del value_set_paths
     template_id = str(model.get("meta", {}).get("template_id") or "")
     if not template_id:
         raise ValueError("model has no representing CDA template")
@@ -2444,11 +2245,6 @@ def compile_cda(
     if definitions:
         _materialize_polymorphic_structure(document, definitions)
     _normalize_prohibited_subtrees(document)
-    _apply_neutral_example_defaults(
-        document,
-        _neutral_coded_examples(reachable),
-        value_set_members([*xml_paths, *list(value_set_paths)]),
-    )
     _compiled_content_roles(document)
     targets = _name_targets(
         _raw_targets(reachable) + _raw_datatype_targets(document)
@@ -2522,9 +2318,7 @@ def compile_cda(
             "definitions": len(definitions),
             "source": "HL7 CDA R2 normative XSD" if definitions else None,
         },
-        "compiled_defaults": sum(
-            bool(target.get("compiled_default")) for target in targets.values()
-        ),
+        "compiled_defaults": 0,
         "stats": {
             "reachable_templates": len(reachable),
             "reviewed_extensions": len(applied_extensions),

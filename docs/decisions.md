@@ -40,6 +40,7 @@ is not necessarily an accepted clinical policy.
 | DEC-023 | Generated Schematron as supporting mapping evidence | accepted | verified |
 | DEC-024 | Datatype Schematron co-occurrence admissibility | accepted | verified |
 | DEC-025 | Conservative ordinal evidence extraction | accepted | verified |
+| DEC-026 | ART-DECOR examples are non-executable instance data | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -514,13 +515,12 @@ source identity also includes the effective date and template-local path,
 preventing fixed constraints from distinct revisions or sibling branches from
 being overlaid or verified against each other.
 
-Neutral example codes become construction fallbacks only when scoped to that
-same exact template/path identity and uniquely admitted by the exact effective
-terminology constraint. Coded source wording and other companion content are
-carried by compiled roles. ART-DECOR XPath predicates remain constraint
-identity, never serialized QName text. These rules preserve the compiled-model
-boundary: the renderer consumes representations, fallbacks and roles without
-class-, datatype- or template-specific dispatch.
+ART-DECOR example fragments are excluded from executable constraint compilation
+under DEC-026. Coded source wording and other companion content are carried by
+compiled roles. ART-DECOR XPath predicates remain constraint identity, never
+serialized QName text. These rules preserve the compiled-model boundary: the
+renderer consumes representations and roles without class-, datatype- or
+template-specific dispatch.
 
 Generated target identifiers retain their flattened form as stable mapping and
 runtime keys. This does not flatten the compiled CDA model: physical `path` and
@@ -988,6 +988,37 @@ on generated evidence surviving a later rebuild.
 Evidence: `src/decor2hl7/compile/transaction.py`,
 `src/decor2hl7/compile/mapping.py`, `tests/test_core.py`,
 `docs/analyses/2026-09-05-ordinal-evidence-correction.md`.
+
+## DEC-026 — ART-DECOR examples are non-executable instance data
+
+**Decision:** accepted
+**Implementation:** verified
+
+An ART-DECOR `<example>` is an instance fragment, not a constraint or a source
+of default clinical facts. Neither `type="neutral"` nor exact membership of an
+example code in a constrained ValueSet establishes that the code is true when
+source data is absent. CDA compilation therefore does not copy example codes,
+display names, timestamps, identifiers, or other instance content into
+executable defaults or fixed-value provenance. Runtime also ignores the former
+`compiled_default` property in an older compiled model.
+
+Executable construction values must instead come from an actual fixed template
+constraint, a normative CDA XSD default, a compiler-owned system role, a mapped
+source value, or an explicit reviewed mapping default. An active required leaf
+without one of those sources uses the configured null flavor when the template
+permits it; a mandatory non-nullable leaf remains an error. When the CDA model
+declares the particle as abstract `ANY` but ART-DECOR constrains a concrete
+datatype, null-flavor completion retains that compiled `xsi:type` so the result
+remains schema-valid.
+
+This decision removes generic example-derived construction defaults. It does
+not settle DEC-018, whose generated allergy occurrence rules use exact example
+captions and discriminator codes as mapping evidence. That separate use remains
+implemented pending the policy review recorded in `docs/known-issues.md`.
+
+Evidence: `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
+`src/decor2hl7/bindings.py`, `tests/test_cda_datatypes.py`, `tests/test_core.py`,
+`docs/analyses/2026-09-06-template-examples-are-not-defaults.md`.
 
 ## Maintenance rule
 

@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-06-template-examples-are-not-defaults.md`](2026-09-06-template-examples-are-not-defaults.md)
+  records why neutral ART-DECOR instance examples cannot establish clinical
+  defaults, removes the 34 example-derived fallbacks in the reference model,
+  preserves typed null-flavor completion, and leaves DEC-018 as a separate
+  explicit policy review.
 - [`2026-09-05-ordinal-evidence-correction.md`](2026-09-05-ordinal-evidence-correction.md)
   corrects the phase-7 CEDIS regression blind spot: unqualified numeric
   synonyms are no longer treated as leading ranks, while GCS labels and

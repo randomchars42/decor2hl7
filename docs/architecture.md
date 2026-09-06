@@ -333,13 +333,12 @@ remain as provenance/evidence but are configuration/runtime errors when
 selected as scalar destinations. `validate.verify_compiled_cda()` checks these
 invariants before transformation.
 
-Required coded construction values may be compiled from neutral ART-DECOR
-examples only after exact template/path scoping and unique validation against
-the exact bound ValueSet revision or explicit allowed-code set. The value and
-STRONG `template-example` provenance stay in the compiled model; an explicit
-assignment always has precedence. Expanded coded datatypes also identify their
-source-wording companion through a compiled content role, allowing normalized
-`raw` text to populate that child without renderer knowledge of CD/CE layout.
+ART-DECOR examples remain non-executable instance data. They do not create
+compiled defaults, enrich fixed values with emitted example content, or satisfy
+required descendants for presence-mode mappings. Expanded coded datatypes
+identify their source-wording companion through a compiled content role,
+allowing normalized `raw` text to populate that child without renderer
+knowledge of CD/CE layout.
 
 Names used by ART-DECOR constraints can contain XPath predicates that select a
 sibling constraint. Predicates remain part of compiled path identity and
@@ -460,7 +459,8 @@ cardinality, terminology, and template evidence:
   clinical payload. False omits it. The structural target does not become a
   scalar writable endpoint;
 - `defaults.required_unmapped` fills an otherwise empty required leaf in an
-  active template branch with `nullFlavor="NI"` by default;
+  active template branch with `nullFlavor="NI"` by default. A concrete compiled
+  `xsi:type` is retained when the CDA particle is polymorphic;
 - `target_defaults` records reviewed target-specific completion, such as
   `nullFlavor="UNK"` for the required diagnosis onset that this transaction does
   not provide. A real mapped onset wins in its own occurrence.
