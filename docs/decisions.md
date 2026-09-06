@@ -41,6 +41,7 @@ is not necessarily an accepted clinical policy.
 | DEC-024 | Datatype Schematron co-occurrence admissibility | accepted | verified |
 | DEC-025 | Conservative ordinal evidence extraction | accepted | verified |
 | DEC-026 | ART-DECOR examples are non-executable instance data | accepted | verified |
+| DEC-027 | Bounded association identity-lineage closure | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -1019,6 +1020,35 @@ implemented pending the policy review recorded in `docs/known-issues.md`.
 Evidence: `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
 `src/decor2hl7/bindings.py`, `tests/test_cda_datatypes.py`, `tests/test_core.py`,
 `docs/analyses/2026-09-06-template-examples-are-not-defaults.md`.
+
+## DEC-027 — Bounded association identity-lineage closure
+
+**Decision:** accepted
+**Implementation:** verified
+
+The exact concepts named by selected-template `templateAssociation/concept` and
+legacy/profile `staticAssociations/origconcept` declarations are mapping-evidence
+dependencies. `fetch` retrieves their analysis forms as concept-scoped artifacts
+and recursively closes only identity-style concept relationships: `SPEC`,
+`INHERIT`, `ORIGINAL`, `EQUIV`, `VERSION`, and `COPY`. It does not turn `ADAPT`,
+other derivation, template, terminology, or sibling-dataset evidence into a new
+recursive crawl. Exact concept scoping bounds both acquisition and the semantic
+graph consumed by `build`.
+
+A recovered static association proves a concept-to-legacy-template bridge, not
+that the legacy node is the selected active CDA occurrence. When its direct
+target lies outside an already selected occurrence, the candidate remains
+review-only. A separate explicit template association remains independently
+actionable, while the existing DEC-015 rule may project the static association
+into the selected occurrence only when one CDA/RIM owner-particle slot and one
+in-context target are unique. Schematron support and transform generation cannot
+revive an occurrence-mismatch candidate. Missing lineage remains missing
+evidence; it never causes a guessed association.
+
+Evidence: `src/decor2hl7/retrieval/references.py`,
+`src/decor2hl7/retrieval/fetch.py`, `src/decor2hl7/retrieval/artifacts.py`,
+`src/decor2hl7/compile/mapping.py`, `tests/test_core.py`,
+`docs/analyses/2026-09-06-association-identity-lineage.md`.
 
 ## Maintenance rule
 

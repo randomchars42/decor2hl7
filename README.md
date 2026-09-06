@@ -226,9 +226,15 @@ cached; otherwise the offline fetch is not build-ready.
 
 The live main-project file is read directly for local history and associations,
 while external evidence is fetched only for concepts/templates already relevant
-to the selected transaction. `project-evidence.xml` is mapping evidence only: it
-never satisfies the representing template or another build dependency. A
-statically dated reference must resolve to that exact revision.
+to the selected transaction. Exact concepts named by selected-template
+`templateAssociation` or `staticAssociations/origconcept` declarations are
+retrieved as analysis-only mapping evidence. Their transitive closure follows
+only identity-style concept relationships (`SPEC`, `INHERIT`, `ORIGINAL`,
+`EQUIV`, `VERSION`, `COPY`); `ADAPT`, other derivations, templates, terminology,
+and unrelated dataset siblings do not expand this evidence crawl.
+`project-evidence.xml` is mapping evidence only: it never satisfies the
+representing template or another build dependency. A statically dated reference
+must resolve to that exact revision.
 
 Known cross-project references are data-driven. The bundled source catalog, plus
 an optional `config/sources.json` override with the same shape, can supply an API
@@ -649,6 +655,12 @@ projected to an active target when both constraints resolve to one unique common
 CDA/RIM XSD slot inside the mapped context. XSD mixed-content metadata supplies
 element-text writability for complex roots; neither mapping nor rendering uses
 datatype- or medication-specific leaf rules.
+A static association recovered through identity ancestry does not by itself
+identify the active CDA occurrence. A direct target outside an already selected
+occurrence is shown as a review-only alternative; a separate explicit
+`templateAssociation` remains independent evidence, and only the same unique
+in-context CDA/RIM-slot projection described above can make the static
+association executable.
 A structurally writable datatype component can still be review-only when a
 normative compound datatype requires a companion value. The compiled target
 records that dependency, `check-cda-mapping` rejects incomplete reviewed

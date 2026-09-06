@@ -41,7 +41,7 @@ from .expansion import expansion_status
 from .xml import local, parse_text
 from .references import (
     KIND_ORDER, KINDS, Want, display_references, hard_references,
-    references, soft_references,
+    identity_references, references, soft_references,
 )
 from .resolution import (
     candidate_projects as _candidate_projects,
@@ -485,7 +485,7 @@ def _requests(
     }
     resolved["project"] = project
     base_url = str(want.get("api_base") or default_api_base)
-    return [
+    rows = [
         {
             "project": project,
             "api_base": base_url,
@@ -501,6 +501,9 @@ def _requests(
             base_url=base_url,
         )
     ]
+    if want.get("analysis_only"):
+        rows = [row for row in rows if row["form"] == "analysis"]
+    return rows
 
 
 def _existing_cache_payload(
@@ -2169,72 +2172,108 @@ def fetch_spec(
                 checkpoint(complete=False)
 
         def resolve_evidence(queue: deque[Want], embedded_roots: list[ET.Element | None]) -> None:
-            """Resolve soft dependencies directly and deliberately stop there."""
+            """Resolve direct evidence and transitively close identity lineage."""
             nonlocal resources_considered, budget_exhausted, phase
             phase = "evidence"
-            rows = [
-                cast(Want, apply_source_hint(item, source_hints or {}))
-                for item in queue
-            ]
-            queue.clear()
-            rows.sort(key=lambda item: (
-                KIND_ORDER.get(item["kind"], 9),
-                item.get("project", ""),
-                item["id"],
-            ))
-            _emit(progress, f"fetch: resolving direct evidence ({len(rows)} reference(s), non-recursive)")
-            pending_batch["evidence"] = list(rows)
-            for row_index, want in enumerate(rows):
-                pending_batch["evidence"] = rows[row_index:]
-                key = _key(want)
-                resource_roles.setdefault(key, set()).add(
-                    want.get("role") or "mapping-evidence"
-                )
-                if key in visited["evidence"] or key in visited["build"]:
-                    continue
-                if _satisfied(want, have_by_role["evidence"]):
-                    visited["evidence"].add(key)
-                    continue
-                # The complete main-project evidence snapshot is already local;
-                # use an exact/direct embedded resource before making a request.
-                if _matching_embedded(embedded_roots, want):
-                    visited["evidence"].add(key)
-                    continue
 
-                resources_considered += 1
-                try:
-                    path = _fetch_want(
-                        release_dir, manifest, want, owners=owners,
-                        repositories=repositories, language=language,
-                        ipv4=ipv4, retry_missing=retry_missing, offline=offline,
-                        request_budget=request_budget, progress=progress,
-                        save_manifest=save_manifest,
-                        main_project=prefix, release=release_date,
-                        api_base=api_base, source_hints=source_hints,
-                        configured_oid_owners=configured_owners,
-                        artifact_owners=artifact_owners,
-                        save_artifact_owners=save_artifact_owners,
+            def next_identity(root: ET.Element, want: Want) -> list[Want]:
+                if want.get("kind") != "concept":
+                    return []
+                return identity_references(root, {want["id"]})
+
+            _emit(
+                progress,
+                "fetch: resolving direct evidence and identity lineage "
+                f"({len(queue)} initial reference(s))",
+            )
+            while queue and not budget_exhausted:
+                merged: dict[str, Want] = {}
+                for item in queue:
+                    want = cast(
+                        Want, apply_source_hint(item, source_hints or {})
                     )
-                except RequestBudgetExceeded:
-                    for pending in reversed(rows[row_index:]):
-                        queue.appendleft(pending)
-                    pending_batch["evidence"] = []
-                    budget_exhausted = True
-                    checkpoint(complete=False)
-                    return
-                visited["evidence"].add(key)
-                roles["evidence"].add(key)
-                if path is not None:
-                    root = _parse(path)
-                    if root is not None:
-                        if _seed_artifact_owners(artifact_owners, root):
-                            save_artifact_owners()
-                        observe_optional(root)
-                        have_by_role["evidence"].update(_inventory(root))
-                # Crucially: no references(root) here. Soft evidence stops at the
-                # directly resolved resource and cannot turn into another crawl.
-            pending_batch["evidence"] = []
-            checkpoint(complete=False)
+                    key = _key(want)
+                    resource_roles.setdefault(key, set()).add(
+                        want.get("role") or "mapping-evidence"
+                    )
+                    current = merged.get(key)
+                    if (
+                        current is None
+                        or (
+                            current.get("analysis_only")
+                            and not want.get("analysis_only")
+                        )
+                    ):
+                        # A broader request satisfies both consumers; retain
+                        # every role above even though the HTTP work is shared.
+                        merged[key] = want
+                rows = list(merged.values())
+                queue.clear()
+                rows.sort(key=lambda item: (
+                    KIND_ORDER.get(item["kind"], 9),
+                    item.get("project", ""),
+                    item["id"],
+                ))
+                pending_batch["evidence"] = list(rows)
+                for row_index, want in enumerate(rows):
+                    pending_batch["evidence"] = rows[row_index:]
+                    key = _key(want)
+                    if key in visited["evidence"] or key in visited["build"]:
+                        continue
+                    embedded = _matching_embedded(embedded_roots, want)
+                    if _satisfied(want, have_by_role["evidence"]):
+                        visited["evidence"].add(key)
+                        for node in embedded:
+                            queue.extend(next_identity(node, want))
+                        continue
+                    # The complete main-project evidence snapshot is already
+                    # local; use an exact embedded resource before requesting.
+                    if embedded:
+                        visited["evidence"].add(key)
+                        for node in embedded:
+                            queue.extend(next_identity(node, want))
+                        continue
+
+                    resources_considered += 1
+                    try:
+                        path = _fetch_want(
+                            release_dir, manifest, want, owners=owners,
+                            repositories=repositories, language=language,
+                            ipv4=ipv4, retry_missing=retry_missing, offline=offline,
+                            request_budget=request_budget, progress=progress,
+                            save_manifest=save_manifest,
+                            main_project=prefix, release=release_date,
+                            api_base=api_base, source_hints=source_hints,
+                            configured_oid_owners=configured_owners,
+                            artifact_owners=artifact_owners,
+                            save_artifact_owners=save_artifact_owners,
+                        )
+                    except RequestBudgetExceeded:
+                        for pending in reversed(rows[row_index:]):
+                            queue.appendleft(pending)
+                        pending_batch["evidence"] = []
+                        budget_exhausted = True
+                        checkpoint(complete=False)
+                        return
+                    visited["evidence"].add(key)
+                    roles["evidence"].add(key)
+                    if path is not None:
+                        root = _parse(path)
+                        if root is not None:
+                            # A concept response may contain a parent/sibling
+                            # subtree. Keep it available so a later exact
+                            # endpoint satisfied by that inventory still gets
+                            # its own targeted identity ancestry inspected.
+                            embedded_roots.append(root)
+                            if _seed_artifact_owners(artifact_owners, root):
+                                save_artifact_owners()
+                            observe_optional(root)
+                            have_by_role["evidence"].update(_inventory(root))
+                            # Identity is transitive.  Do not recursively follow
+                            # ADAPT/derivation, template or terminology evidence.
+                            queue.extend(next_identity(root, want))
+                pending_batch["evidence"] = []
+                checkpoint(complete=False)
 
         crawl_build(build_queue, build_roots)
 

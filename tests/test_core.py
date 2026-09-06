@@ -38,7 +38,8 @@ from decor2hl7.retrieval.catalog import parse_releases, parse_transactions, tran
 from decor2hl7.retrieval.fetch import (
     RequestBudgetExceeded, _candidate_projects, _evidence_references, _fetch_want,
     _inventory, _payload_matches_request, _resolved_effective_date,
-    display_references, fetch_spec, hard_references, soft_references,
+    display_references, fetch_spec, hard_references, identity_references,
+    soft_references,
 )
 from decor2hl7.retrieval.api import REQUIRED_PATHS, artifact_representations
 from decor2hl7.retrieval.sources import apply_source_hint, load_source_hints
@@ -2510,6 +2511,157 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(code.get("code"), "01234567")
             self.assertEqual(code.get("codeSystem"), "1.2.3.4")
             self.assertEqual(name.text, "Example drug")
+
+    def test_static_association_outside_selected_occurrence_is_review_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp) / "project.xml"
+            evidence.write_text('''<project>
+  <templateAssociation templateId="active" effectiveDate="2026">
+    <concept ref="root" elementId="active-root"/>
+  </templateAssociation>
+  <templateAssociation templateId="legacy" effectiveDate="2020">
+    <concept ref="unrelated-identifier" elementId="legacy-id"/>
+  </templateAssociation>
+  <concept id="insurance"><inherit ref="common-group"/></concept>
+  <concept id="legacy-insurance"><inherit ref="common-group"/></concept>
+  <concept id="identifier"><inherit ref="common-id"/></concept>
+  <concept id="legacy-identifier"><inherit ref="common-id"/></concept>
+  <template id="legacy" effectiveDate="2020" name="LegacyParticipant">
+    <staticAssociations>
+      <origconcept ref="legacy-insurance" elementId="legacy-container"
+          templateId="legacy" templateEffectiveDate="2020"/>
+      <origconcept ref="legacy-identifier" elementId="legacy-id"
+          templateId="legacy" templateEffectiveDate="2020"/>
+    </staticAssociations>
+  </template>
+</project>''', encoding="utf-8")
+            model = {
+                "meta": {"dataset_id": "ds", "transaction_id": "tx"},
+                "groups": {
+                    "root": {
+                        "name": "Root", "concept": "root", "parent": None,
+                        "repeating": False, "repeat_chain": [],
+                    },
+                    "root.insurance": {
+                        "name": "Insurance", "concept": "insurance",
+                        "parent": "root", "repeating": False,
+                        "repeat_chain": [],
+                    },
+                },
+                "fields": {
+                    "root.insurance.identifier": {
+                        "name": "Insurance identifier",
+                        "short_name": "insurance_identifier",
+                        "concept": "identifier", "type": "identifier",
+                        "parent": "root.insurance", "repeat_chain": [],
+                        "value_sets": [], "codes": [],
+                    },
+                },
+            }
+            common_root = {
+                "kind": "element", "renderable": True, "writable": False,
+                "repeat_ancestors": [], "has_children": True,
+            }
+            common_id = {
+                "kind": "element", "datatype": "II", "renderable": True,
+                "writable": True, "repeat_ancestors": [],
+                "logical_types": ["identifier"], "value_representation": {
+                    "kind": "identifier", "logical_types": ["identifier"],
+                }, "schematron_constraints": [{"kind": "required"}],
+            }
+            cda_model = {
+                "document_template": {"name": "Document"},
+                "assertions": [], "unresolved_templates": [],
+                "source_index": {
+                    "active|ID:active-root": ["Active.root"],
+                    "legacy|ID:legacy-container": ["Legacy.container"],
+                    "legacy|ID:legacy-id": ["Legacy.identifier"],
+                },
+                "targets": {
+                    "Active.root": {
+                        **common_root, "template_id": "active",
+                        "element_id": "active-root", "path": "hl7:participant",
+                        "locations": ["0"],
+                    },
+                    "Active.identifier": {
+                        **common_id, "template_id": "active",
+                        "path": "hl7:participant/hl7:id", "locations": ["0.0"],
+                    },
+                    "Legacy.container": {
+                        **common_root, "template_id": "legacy",
+                        "element_id": "legacy-container",
+                        "path": "hl7:participant", "locations": ["1"],
+                    },
+                    "Legacy.identifier": {
+                        **common_id, "template_id": "legacy",
+                        "element_id": "legacy-id",
+                        "path": "hl7:participant/hl7:id", "locations": ["1.0"],
+                    },
+                },
+            }
+            proposal, audit, _, _ = mapping_compiler.cda_mapping_audit(
+                model, cda_model, [evidence]
+            )
+
+            self.assertIsNone(
+                proposal["fields"]["root.insurance.identifier"]
+            )
+            child = audit["groups"]["root.insurance"]
+            self.assertIsNone(child["selected"])
+            self.assertEqual(child["context"]["target"], "Active.root")
+            candidate = audit["fields"][
+                "root.insurance.identifier"
+            ]["alternatives"][0]
+            self.assertEqual(candidate["target"], "Legacy.identifier")
+            self.assertFalse(candidate["actionable"])
+            self.assertTrue(candidate["occurrence_mismatch"])
+            self.assertIn(
+                "outside the selected CDA occurrence",
+                candidate["warnings"][0],
+            )
+
+    def test_template_association_does_not_revive_static_occurrence_mismatch(self) -> None:
+        field = {
+            "name": "Narrative", "concept": "source", "type": "text",
+            "value_sets": [], "codes": [], "repeat_chain": [],
+        }
+        context_node = {
+            "path": "hl7:section", "locations": ["0"],
+        }
+        target = {
+            "template_id": "other", "template_effective_date": "2020",
+            "element_id": "text", "kind": "element",
+            "path": "hl7:section/hl7:text", "locations": ["1.0"],
+            "datatype": "ST", "renderable": True, "writable": True,
+            "repeat_ancestors": [], "logical_types": ["text"],
+            "value_representation": {
+                "kind": "element_text", "logical_types": ["text"],
+            },
+        }
+        associations = [
+            {
+                "concept": "source", "template_id": "other",
+                "effective_date": "2020", "element_id": "text",
+                "kind": "templateAssociation", "code_systems": [],
+            },
+            {
+                "concept": "source", "template_id": "other",
+                "effective_date": "2020", "element_id": "text",
+                "kind": "staticAssociation", "code_systems": [],
+            },
+        ]
+        rows = mapping_compiler._ta_candidates(
+            field, {}, associations, {}, {
+                "source_index": {"other|ID:text": ["Other.text"]},
+                "targets": {"Other.text": target},
+            }, {"target": "Active.section", "node": context_node},
+        )
+        direct = next(row for row in rows if row["kind"] == "TA")
+        static = next(row for row in rows if row["kind"] == "STATIC_ASSOC")
+        self.assertTrue(direct["actionable"])
+        self.assertFalse(static["actionable"])
+        self.assertTrue(static["occurrence_mismatch"])
+
     def test_transaction_model_keeps_human_explanations_and_synonyms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transaction = Path(tmp) / "transaction.xml"
@@ -3185,6 +3337,84 @@ class CoreTests(unittest.TestCase):
         self.assertEqual({row["id"] for row in hard if row["kind"] == "dataset"}, {"external-dataset"})
         self.assertNotIn("old-dataset", {row["id"] for row in hard})
         self.assertEqual({row["id"] for row in soft if row["kind"] == "concept"}, {"old-concept"})
+
+    def test_association_endpoints_and_identity_lineage_are_typed(self) -> None:
+        root = ET.fromstring('''<project>
+          <concept id="child">
+            <inherit ref="parent" effectiveDate="2020" prefix="base-"
+              originalId="original" originalEffectiveDate="2019"
+              originalPrefix="original-"/>
+            <relationship type="SPEC" ref="spec" flexibility="2018"
+              prefix="base-"/>
+            <relationship type="ADAPT" ref="adapted" flexibility="2017"
+              prefix="weak-"/>
+          </concept>
+          <templateAssociation templateId="active" effectiveDate="2026">
+            <concept ref="dynamic-endpoint" effectiveDate="2025"
+              elementId="active-element" prefix="source-"/>
+          </templateAssociation>
+          <template id="legacy" effectiveDate="2020" name="Legacy">
+            <staticAssociations>
+              <origconcept ref="static-endpoint" effectiveDate="2016"
+                ident="external-" datasetId="dataset"
+                datasetEffectiveDate="2015" elementId="legacy-element"/>
+              <origconcept ref="second-static-endpoint" effectiveDate="2016"
+                ident="external-" datasetId="dataset"
+                datasetEffectiveDate="2015" elementId="second-legacy-element"/>
+              <origconcept ref="bare-static-endpoint" effectiveDate="2014"
+                ident="bare-" elementId="other-legacy-element"/>
+            </staticAssociations>
+          </template>
+        </project>''')
+        soft = soft_references(root)
+        self.assertEqual(
+            {
+                (row["id"], row["effective_date"], row["project"], row["role"])
+                for row in soft if row["kind"] == "concept"
+            },
+            {
+                ("parent", "2020", "base-", "mapping-evidence"),
+                ("original", "2019", "original-", "mapping-evidence"),
+                ("spec", "2018", "base-", "mapping-evidence"),
+                ("adapted", "2017", "weak-", "mapping-evidence"),
+                ("dynamic-endpoint", "2025", "source-", "association-lineage"),
+                ("static-endpoint", "2016", "external-", "association-lineage"),
+                ("second-static-endpoint", "2016", "external-", "association-lineage"),
+                ("bare-static-endpoint", "2014", "bare-", "association-lineage"),
+            },
+        )
+        self.assertEqual(
+            {
+                (
+                    row["id"], row.get("dataset"),
+                    row.get("dataset_effective_date"),
+                )
+                for row in soft if row.get("dataset") == "dataset"
+            },
+            {
+                ("static-endpoint", "dataset", "2015"),
+                ("second-static-endpoint", "dataset", "2015"),
+            },
+        )
+        self.assertEqual(
+            {
+                (row["id"], row["effective_date"], row["role"])
+                for row in identity_references(root)
+            },
+            {
+                ("parent", "2020", "identity-lineage"),
+                ("original", "2019", "identity-lineage"),
+                ("spec", "2018", "identity-lineage"),
+            },
+        )
+        self.assertTrue(all(
+            row.get("analysis_only")
+            for row in soft
+            if row.get("role") == "association-lineage"
+        ))
+        self.assertTrue(all(
+            row.get("analysis_only") for row in identity_references(root)
+        ))
 
     def test_known_owner_stops_broad_repository_probe(self) -> None:
         want = {"kind": "dataset", "id": "1.2.3.4", "effective_date": "2020-01-01", "project": "aktin-"}
@@ -4332,7 +4562,7 @@ class CoreTests(unittest.TestCase):
                 for url in calls
             ))
 
-    def test_soft_evidence_resolution_is_non_recursive(self) -> None:
+    def test_soft_evidence_closes_identity_but_not_weak_relationships(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp) / "spec" / "2026.1.2"
             tx_dir = release_dir / "transactions" / "tx"
@@ -4350,9 +4580,11 @@ class CoreTests(unittest.TestCase):
                 if path.endswith("/project/aktin-/$extract") or path.endswith("/project/aktin-"):
                     return b'<project><transaction id="t"/></project>'
                 if "/concept/9.1/" in path:
-                    return b'<return><concept id="9.1" effectiveDate="2020-01-01"><inherit ref="9.2" effectiveDate="2019-01-01" prefix="ext-"/></concept></return>'
+                    return b'<return><concept id="9.1" effectiveDate="2020-01-01"><inherit ref="9.2" effectiveDate="2019-01-01" prefix="ext-"/><relationship type="ADAPT" ref="9.3" flexibility="2018-01-01" prefix="ext-"/></concept></return>'
                 if "/concept/9.2/" in path:
-                    raise AssertionError("soft evidence must not recurse")
+                    return b'<return><concept id="9.2" effectiveDate="2019-01-01"/></return>'
+                if "/concept/9.3/" in path:
+                    raise AssertionError("weak evidence must not recurse")
                 raise AssertionError(url)
 
             with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
@@ -4362,8 +4594,82 @@ class CoreTests(unittest.TestCase):
                     max_requests=20,
                 )
             self.assertTrue(any("/concept/9.1/" in api_path(url) for url in calls))
-            self.assertFalse(any("/concept/9.2/" in api_path(url) for url in calls))
+            self.assertTrue(any("/concept/9.2/" in api_path(url) for url in calls))
+            self.assertFalse(any("/concept/9.3/" in api_path(url) for url in calls))
+            self.assertTrue(all(
+                "$extract" in api_path(url)
+                for url in calls if "/concept/9.2/" in api_path(url)
+            ))
             self.assertIn("concept:9.1@2020-01-01", result["closure"]["evidence_resources"])
+            self.assertIn("concept:9.2@2019-01-01", result["closure"]["evidence_resources"])
+
+    def test_static_association_endpoint_closes_to_shared_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp) / "spec" / "2026.1.2"
+            tx_dir = release_dir / "transactions" / "tx"
+            calls: list[str] = []
+
+            def fake_get(url: str, **_: object) -> bytes:
+                calls.append(url)
+                path = api_path(url)
+                if path.endswith("/modules/library/api.json"):
+                    return API_CONTRACT
+                if path.endswith("/project"):
+                    return b'<return><project id="9" prefix="ext-"/></return>'
+                if "/transaction/t/" in path:
+                    return b'<dataset id="d" transactionId="t" templateId="doc" templateEffectiveDate="2026"><concept id="selected"><inherit ref="common" effectiveDate="2015" prefix="base-"/></concept></dataset>'
+                if path.endswith("/project/aktin-/$extract"):
+                    return b'<project><transaction id="t"/></project>'
+                if path.endswith("/project/aktin-"):
+                    return b'<project><buildingBlockRepository ident="assoc-"/><buildingBlockRepository ident="base-"/></project>'
+                if "/template/doc/" in path:
+                    return b'<return><template id="doc" effectiveDate="2026" name="Doc"><element name="hl7:ClinicalDocument" id="root"/><staticAssociations><origconcept ref="association" effectiveDate="2016" ident="assoc-" datasetId="association-dataset" datasetEffectiveDate="2016" elementId="legacy-id" templateId="legacy" templateEffectiveDate="2014"/><origconcept ref="association-sibling" effectiveDate="2016" ident="assoc-" datasetId="association-dataset" datasetEffectiveDate="2016" elementId="legacy-sibling" templateId="legacy" templateEffectiveDate="2014"/></staticAssociations></template></return>'
+                if "/concept/association/" in path:
+                    return b'<return><concept id="association" effectiveDate="2016"><inherit ref="common" effectiveDate="2015" prefix="base-"/></concept><concept id="association-sibling" effectiveDate="2016"><inherit ref="sibling-common" effectiveDate="2015" prefix="base-"/></concept></return>'
+                if "/concept/common/" in path:
+                    return b'<return><concept id="common" effectiveDate="2015"/></return>'
+                if "/concept/sibling-common/" in path:
+                    return b'<return><concept id="sibling-common" effectiveDate="2015"/></return>'
+                raise AssertionError(url)
+
+            with patch("decor2hl7.retrieval.fetch.get", side_effect=fake_get):
+                result = fetch_spec(
+                    release_dir, tx_dir, prefix="aktin-",
+                    release=RELEASE,
+                    transaction={**TRANSACTION, "id": "t", "key": "tx"},
+                    max_requests=30,
+                )
+
+            self.assertTrue(any(
+                "/concept/association/" in api_path(url) for url in calls
+            ))
+            self.assertTrue(all(
+                "$extract" in api_path(url)
+                for url in calls
+                if "/concept/association/" in api_path(url)
+            ))
+            self.assertIn(
+                "concept:association@2016|context=association-dataset@2016",
+                result["closure"]["evidence_resources"],
+            )
+            self.assertIn(
+                "association-lineage",
+                result["closure"]["resource_roles"][
+                    "concept:association@2016|context=association-dataset@2016"
+                ],
+            )
+            self.assertIn(
+                "concept:common@2015",
+                result["closure"]["evidence_resources"],
+            )
+            self.assertIn(
+                "concept:sibling-common@2015",
+                result["closure"]["evidence_resources"],
+            )
+            self.assertFalse(any(
+                "/concept/association-sibling/" in api_path(url)
+                for url in calls
+            ))
 
 
     def test_fetch_progress_does_not_claim_nonexistent_next_source(self) -> None:

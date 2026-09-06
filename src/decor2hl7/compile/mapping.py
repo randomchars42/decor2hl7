@@ -421,10 +421,16 @@ def _association_slots(
         _xpath_shape(str(target.get("path") or ""))
         for target in references if target.get("path")
     }
-    reference_types = {
-        base_datatype(target.get("datatype"))
-        for target in references if target.get("datatype")
-    }
+    reference_types: set[str] = set()
+    for target in references:
+        if not target.get("datatype"):
+            continue
+        try:
+            reference_types.add(base_datatype(target.get("datatype")))
+        except KeyError:
+            # Structural CDA/RIM classes are not HL7 V3 scalar datatypes and
+            # cannot establish a scalar projection slot on their own.
+            continue
     for target in cda.get("targets", {}).values():
         target_path = _xpath_shape(str(target.get("path") or ""))
         if not target_path or not any(
@@ -561,11 +567,12 @@ def _ta_candidates(
         association_index[str(association.get("concept") or "")].append(
             association
         )
+    concept_id = str(field.get("concept") or "")
+    lineage = _lineage(concept_id, graph)
     source_index = cda.get("source_index", {})
     targets = cda.get("targets", {})
-    concept_id = str(field.get("concept") or "")
     result: list[dict[str, Any]] = []
-    for related, path in _lineage(concept_id, graph):
+    for related, path in lineage:
         for association in association_index.get(related, []):
             template_id = str(association.get("template_id") or "")
             effective = str(association.get("effective_date") or "")
@@ -583,6 +590,24 @@ def _ta_candidates(
                 and not targets.get(name, {}).get("prohibited")
                 and len(targets.get(name, {}).get("locations", [])) == 1
             ]
+            association_kind = str(association.get("kind") or "")
+            context_node = (
+                context.get("node", {})
+                if isinstance(context, Mapping) else {}
+            )
+            outside_context: list[tuple[str, Mapping[str, Any]]] = []
+            if (
+                association_kind == "staticAssociation"
+                and context_node
+            ):
+                outside_context = [
+                    item for item in direct
+                    if not _is_same_or_descendant_target(item[1], context_node)
+                ]
+                direct = [
+                    item for item in direct
+                    if _is_same_or_descendant_target(item[1], context_node)
+                ]
             projected = False
             selected = direct
             if not selected:
@@ -590,7 +615,7 @@ def _ta_candidates(
                     association, cda, context
                 )
                 projected = bool(selected)
-            for name, target in selected:
+            for name, target in selected + outside_context:
                 specialization = (
                     projected
                     or str(target.get("template_id") or "") != template_id
@@ -609,7 +634,6 @@ def _ta_candidates(
                 if specialization:
                     score -= 6
                 chain = [edge for edge, _ in path]
-                association_kind = str(association.get("kind") or "")
                 if association_kind == "staticAssociation":
                     chain.append("STATIC_ASSOC")
                 else:
@@ -641,8 +665,18 @@ def _ta_candidates(
                     transform=transform,
                 )
                 warnings: list[str] = list(direct_warnings)
+                occurrence_mismatch = (name, target) in outside_context
+                if occurrence_mismatch:
+                    actionable = False
+                    warnings.insert(
+                        0,
+                        "static association resolves outside the selected "
+                        "CDA occurrence; explicit occurrence evidence required",
+                    )
                 if not actionable:
-                    warnings.insert(0, "requires transform or a different CDA payload")
+                    warning = "requires transform or a different CDA payload"
+                    if warning not in warnings and not occurrence_mismatch:
+                        warnings.insert(0, warning)
                 if any(edge in WEAK_EDGES for edge, _ in path) and not _names_agree(
                     str(field.get("name") or ""), concept_names.get(related)
                 ):
@@ -654,7 +688,7 @@ def _ta_candidates(
                     {"target": name, "transform": transform}
                     if transform is not None else None
                 )
-                result.append(_candidate(
+                candidate = _candidate(
                     name,
                     target,
                     chain,
@@ -670,7 +704,10 @@ def _ta_candidates(
                     via_name=concept_names.get(related),
                     warnings=warnings,
                     mapping=mapping,
-                ))
+                )
+                if occurrence_mismatch:
+                    candidate["occurrence_mismatch"] = True
+                result.append(candidate)
     return result
 
 
@@ -991,7 +1028,10 @@ def _schematron_constraint_candidates(
             "confidence": "MEDIUM" if confidence == "WEAK" else "STRONG",
             "score": int(candidate.get("score") or 0) + 5,
             "kind": "SCHEMATRON_CONSTRAINT",
-            "actionable": bool(candidate.get("actionable") or compatible),
+            "actionable": bool(
+                not candidate.get("occurrence_mismatch")
+                and (candidate.get("actionable") or compatible)
+            ),
             "warnings": list(dict.fromkeys(
                 list(candidate.get("warnings", []))
                 + ([] if candidate.get("actionable") else warnings)
@@ -1326,6 +1366,8 @@ def _template_ids_for_transform(
     # Existing formal/terminology evidence is the preferred template locator.
     ordered: list[tuple[str, str]] = []
     for candidate in candidates:
+        if candidate.get("occurrence_mismatch"):
+            continue
         target = candidate.get("node", {})
         tid = str(target.get("template_id") or "")
         if tid and all(item[0] != tid for item in ordered):
@@ -1859,6 +1901,23 @@ def _is_descendant_target(
     root_path = str(context_node.get("path") or "").rstrip("/")
     target_path = str(target.get("path") or "")
     return bool(root_path and target_path.startswith(root_path + "/"))
+
+
+def _is_same_or_descendant_target(
+    target: Mapping[str, Any], context_node: Mapping[str, Any],
+) -> bool:
+    """Return whether two compiled nodes belong to one selected occurrence."""
+    context_locations = [str(value) for value in context_node.get("locations", [])]
+    target_locations = [str(value) for value in target.get("locations", [])]
+    if len(context_locations) == 1 and len(target_locations) == 1:
+        root, location = context_locations[0], target_locations[0]
+        return location == root or location.startswith(root + ".")
+    root_path = str(context_node.get("path") or "").rstrip("/")
+    target_path = str(target.get("path") or "").rstrip("/")
+    return bool(
+        root_path
+        and (target_path == root_path or target_path.startswith(root_path + "/"))
+    )
 
 
 def _candidate_source_roles(target: Mapping[str, Any]) -> set[str]:
@@ -2732,9 +2791,18 @@ def _cda_mapping_analysis(
 
     # Groups are not written to cda-mapping.json, but they are real dataset
     # datapoints and provide structural evidence/context for their descendants.
-    for group_path, group in groups.items():
+    # Resolve parents first so a historical static association cannot silently
+    # move a child group into a sibling CDA occurrence.
+    for group_path in sorted(
+        groups, key=lambda value: (value.count("."), value),
+    ):
+        group = groups[group_path]
+        inherited_context = _context_for_node(
+            group, groups, group_results,
+        )
         group_candidates = _candidates(
-            group_path, group, graph, associations, concept_names, implementations, cda, indexes
+            group_path, group, graph, associations, concept_names,
+            implementations, cda, indexes, inherited_context,
         )
         actionable = [row for row in group_candidates if row["actionable"]]
         # Dataset groups are navigation/occurrence concepts, not scalar values.
@@ -2744,20 +2812,14 @@ def _cda_mapping_analysis(
             row for row in group_candidates
             if row.get("node", {}).get("renderable")
             and len(row.get("node", {}).get("locations", [])) == 1
+            and not row.get("occurrence_mismatch")
         ), None)
         group_results[group_path] = {
             "selected": placement["target"] if placement else None,
             "primary": placement,
             "alternatives": [row for row in group_candidates if row is not placement][:8],
-            "context": None,
+            "context": inherited_context if placement is None else None,
         }
-
-    # Context is inherited structurally from the nearest mapped group.  Process
-    # shallow groups first so a child may use its parent's contextual placement.
-    for group_path in sorted(groups, key=lambda value: value.count(".")):
-        result = group_results[group_path]
-        if result["primary"] is None:
-            result["context"] = _context_for_node(groups[group_path], groups, group_results)
 
     preliminary_structures = _for_each_rules(
         model, cda, {}, group_results
