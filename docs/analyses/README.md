@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-06-association-identity-lineage.md`](2026-09-06-association-identity-lineage.md)
+  recovers exact static-association endpoint ancestry without crawling foreign
+  datasets, proves the historical insurance-number bridge, keeps it review-only
+  across the active-occurrence boundary, and inventories the similar chains and
+  unresolved publication endpoints found by the complete workspace audit.
 - [`2026-09-06-template-examples-are-not-defaults.md`](2026-09-06-template-examples-are-not-defaults.md)
   records why neutral ART-DECOR instance examples cannot establish clinical
   defaults, removes the 34 example-derived fallbacks in the reference model,

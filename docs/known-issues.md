@@ -196,13 +196,20 @@ unresolved. The dated analyses below explain the clinical history; their
 counts may drift without superseding the audit.
 
 Seven non-medication datapoints remain without a suitable target after the
-fresh-snapshot audit. A formally identified insurance-number
-`associatedEntity/id` is active and writable, but it belongs to a sibling
-participant rather than the participant already selected for the dataset's
-Kostenträger occurrence. The selected concept has no identity edge or static
-association to that leaf. Reopening therefore requires both a formal concept
-association and an explicit occurrence-identity decision; historical `SPEC`
-refinement or open-model expansion alone cannot supply either.
+fresh-snapshot audit. The insurance-number concept does have a formal historical
+chain: selected concept `.60.3.2.9.21582` identifies the HL7-DE concept
+`.77.2.2.60210`; eVent concept `.60.12.2.358` inherits that concept; and template
+`.10.2022` statically associates the eVent concept with its
+`associatedEntity/id`. DEC-027 now acquires and reports this chain.
+
+That chain ends in historical participant template `.10.2022`, however, while
+the selected Kostenträger occurrence is active template `.3.1.195.10.4`.
+Concept ancestry therefore establishes semantic relatedness but not occurrence
+identity. The historical identifier has no unique CDA/RIM owner-particle
+provenance that would permit a DEC-015 projection into `.10.4`, so the candidate
+remains review-only and the active `associatedEntity/id` remains unselected.
+Reopening requires an explicit occurrence association or sufficient structural
+provenance for one unique in-context projection.
 
 General event onset has no uniquely owned active event/problem statement. The
 MRI statement is reachable, correcting the earlier residual wording, but it

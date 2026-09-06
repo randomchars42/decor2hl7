@@ -34,9 +34,13 @@ class Want(TypedDict, total=False):
     dataset: str
     dataset_effective_date: str
     role: str
+    analysis_only: str
 
 
 KINDS = {"dataset", "concept", "template", "valueset", "codesystem"}
+IDENTITY_RELATIONSHIPS = {
+    "SPEC", "INHERIT", "ORIGINAL", "EQUIV", "VERSION", "COPY",
+}
 KIND_ORDER = {
     "dataset": 0,
     "template": 1,
@@ -46,7 +50,13 @@ KIND_ORDER = {
 }
 
 
-def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
+def collect_references(
+    root: ET.Element,
+    *,
+    soft: bool,
+    identity_only: bool = False,
+    selected_concepts: set[str] | None = None,
+) -> list[Want]:
     """Extract recursive dependencies or direct mapping-evidence references."""
     found: dict[tuple[str, str, str, str, str, str], Want] = {}
     project_context = ""
@@ -59,6 +69,7 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
         dataset: str | None = None,
         dataset_effective_date: str | None = None,
         role: str | None = None,
+        analysis_only: bool = False,
     ) -> None:
         if not ident or kind not in KINDS:
             return
@@ -67,12 +78,18 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
             "id": ident,
             "effective_date": "" if effective in (None, "dynamic") else str(effective),
             "project": project or project_context,
-            "role": role or ("mapping-evidence" if soft else "structure"),
+            "role": role or (
+                "identity-lineage"
+                if identity_only else "mapping-evidence"
+                if soft else "structure"
+            ),
         }
         if dataset:
             want["dataset"] = dataset
         if dataset_effective_date:
             want["dataset_effective_date"] = dataset_effective_date
+        if analysis_only:
+            want["analysis_only"] = "true"
         identity = (
             kind,
             ident,
@@ -91,12 +108,18 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
         found[identity] = want
 
     stack: list[
-        tuple[ET.Element, tuple[str, ...], ET.Element | None, ET.Element | None]
+        tuple[
+            ET.Element, tuple[str, ...], ET.Element | None,
+            ET.Element | None, str,
+        ]
     ] = [
-        (root, (), None, None)
+        (root, (), None, None, "")
     ]
     while stack:
-        node, ancestors, enclosing_value_domain, enclosing_member_scope = stack.pop()
+        (
+            node, ancestors, enclosing_value_domain, enclosing_member_scope,
+            enclosing_concept,
+        ) = stack.pop()
         tag = local(node.tag)
         parent_tag = ancestors[-1] if ancestors else ""
         project_context = reference_project(node)
@@ -106,12 +129,16 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
             if tag in {"conceptList", "valueDomain"}
             else enclosing_member_scope
         )
+        child_concept = (
+            (node.get("id") or "") if tag == "concept" else enclosing_concept
+        )
         for child in node:
             stack.append((
                 child,
                 ancestors + (tag,),
                 child_value_domain,
                 child_member_scope,
+                child_concept,
             ))
 
         if not soft:
@@ -257,8 +284,14 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
                 )
             continue
 
-        # Mapping evidence is fetched directly and never recursively closed.
-        if tag == "inherit":
+        # Mapping evidence is fetched directly.  The caller may subsequently
+        # close only the identity subset through ``identity_references``.
+        identity_selected = (
+            not identity_only
+            or not selected_concepts
+            or enclosing_concept in selected_concepts
+        )
+        if tag == "inherit" and identity_selected:
             add(
                 "concept",
                 node.get("ref"),
@@ -266,15 +299,25 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
                 node.get("prefix"),
                 node.get("datasetId"),
                 node.get("datasetEffectiveDate"),
+                analysis_only=identity_only,
             )
             add(
                 "concept",
                 node.get("originalId"),
                 node.get("originalEffectiveDate"),
                 node.get("originalPrefix"),
+                analysis_only=identity_only,
             )
         elif tag == "relationship":
-            if node.get("ref") and parent_tag == "concept":
+            if (
+                node.get("ref")
+                and parent_tag == "concept"
+                and identity_selected
+                and (
+                    not identity_only
+                    or (node.get("type") or "") in IDENTITY_RELATIONSHIPS
+                )
+            ):
                 add(
                     "concept",
                     node.get("ref"),
@@ -282,9 +325,11 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
                     node.get("prefix"),
                     node.get("datasetId"),
                     node.get("datasetEffectiveDate"),
+                    analysis_only=identity_only,
                 )
             if (
-                node.get("template")
+                not identity_only
+                and node.get("template")
                 and (node.get("type") or "") not in {"SPEC", "VERSION", "COPY"}
             ):
                 add(
@@ -293,6 +338,36 @@ def collect_references(root: ET.Element, *, soft: bool) -> list[Want]:
                     node.get("flexibility"),
                     node.get("prefix"),
                 )
+        elif not identity_only and tag == "origconcept":
+            # Association evidence needs the exact endpoint and its identity
+            # ancestry, not every sibling in its containing dataset. Keeping
+            # this request concept-scoped bounds both the crawl and the graph
+            # later indexed by the mapping compiler.
+            add(
+                "concept",
+                node.get("ref"),
+                node.get("effectiveDate") or node.get("flexibility"),
+                node.get("ident") or node.get("prefix"),
+                node.get("datasetId"),
+                node.get("datasetEffectiveDate"),
+                role="association-lineage",
+                analysis_only=True,
+            )
+        elif (
+            not identity_only
+            and tag == "concept"
+            and parent_tag == "templateAssociation"
+        ):
+            add(
+                "concept",
+                node.get("ref"),
+                node.get("effectiveDate") or node.get("flexibility"),
+                node.get("prefix"),
+                node.get("datasetId"),
+                node.get("datasetEffectiveDate"),
+                role="association-lineage",
+                analysis_only=True,
+            )
 
     rows = list(found.values())
     dated_code_systems = {
@@ -321,8 +396,18 @@ def hard_references(root: ET.Element) -> list[Want]:
 
 
 def soft_references(root: ET.Element) -> list[Want]:
-    """Direct, non-recursive semantic evidence references."""
+    """Direct semantic-evidence and association-endpoint references."""
     return collect_references(root, soft=True)
+
+
+def identity_references(
+    root: ET.Element, selected_concepts: set[str] | None = None,
+) -> list[Want]:
+    """Identity-only concept ancestry safe for transitive evidence closure."""
+    return collect_references(
+        root, soft=True, identity_only=True,
+        selected_concepts=selected_concepts,
+    )
 
 
 def display_references(root: ET.Element) -> list[Want]:

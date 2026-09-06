@@ -21,7 +21,8 @@ ArtifactFormName = Literal[
 ]
 DependencyRole = Literal[
     "structure", "formal-terminology", "expansion-support",
-    "mapping-evidence", "display-evidence",
+    "mapping-evidence", "display-evidence", "association-lineage",
+    "identity-lineage",
 ]
 
 REQUIRED_ROLES: frozenset[str] = frozenset({

@@ -167,6 +167,13 @@ Important rules retained from the prototype:
     incomplete ValueSets. Admit only a complete, non-empty response as an
     `expansion` compiler form; retain a capped response separately as
     `expansion-evidence` and crawl-degradation evidence.
+20. Treat exact concepts named by `templateAssociation/concept` and
+    `staticAssociations/origconcept` as analysis-only mapping evidence. Close
+    their ancestry transitively through `SPEC`, `INHERIT`, `ORIGINAL`, `EQUIV`,
+    `VERSION`, and `COPY`, but not through `ADAPT`, other derivations, template
+    references, terminology references, or a whole external dataset. A concept
+    response may contain siblings; only a separately requested association
+    endpoint causes that sibling's own identity ancestry to be traversed.
 
 `manifest.json` answers “what is cached for this release?”; transaction
 `closure.json` answers “which cached resources belong to this transaction?” It
@@ -402,6 +409,14 @@ executable only when the slot and the nearest occurrence inside the already
 mapped context are both unique. This is structural identity supplied by the
 pinned model, not a leaf-name match; ambiguous slots remain report-only
 evidence.
+
+Concept identity and CDA occurrence identity remain separate. If a recovered
+static association resolves directly to a node outside an already selected CDA
+occurrence, it is retained as an `occurrence_mismatch` alternative but is not
+executable. An independently resolved `templateAssociation` remains a separate
+candidate; only the unique in-context CDA/RIM-slot projection above may make the
+static association cross template revisions. Generated Schematron can strengthen
+compatible evidence but cannot override this guard.
 
 The XSD graph also carries `complexType/@mixed`. A mixed-content root receives
 an element-text value representation during compilation, so mappings such as a
