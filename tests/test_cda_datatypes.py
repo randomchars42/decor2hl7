@@ -568,7 +568,7 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(status.get("code"), "completed")
             self.assertNotIn("codeSystem", status.attrib)
 
-    def test_neutral_example_default_requires_exact_allowed_terminology(self) -> None:
+    def test_neutral_example_is_not_an_executable_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "template.xml"
             source.write_text('''<project>
@@ -599,28 +599,16 @@ class CdaDatatypeTests(unittest.TestCase):
             }
             compiled = compile_cda([source], model)
             target_name, target = target_at(compiled, "/hl7:statusCode")
-            self.assertEqual(target["compiled_default"]["value"], {
-                "code": "active", "codeSystem": "1.2.3",
-            })
-            self.assertEqual(target["compiled_default"]["evidence"], "STRONG")
-            self.assertEqual(target["compiled_default"]["value_set"], {
-                "id": "act-status", "effective_date": "2024-01-01",
-            })
-            self.assertTrue(any(
+            self.assertNotIn("compiled_default", target)
+            self.assertFalse(any(
                 item.get("source") == "template-example"
                 for item in target["provenance"]
             ))
-
-            payload, problems = cda.emit(
-                {"key": "P1", "values": {}, "instances": {}},
-                model, compiled, {"fields": {}}, {},
-            )
-            self.assertEqual(problems, [])
-            status = find_required(ET.fromstring(payload), f".//{{{HL7}}}statusCode")
-            self.assertEqual(
-                (status.get("code"), status.get("codeSystem")),
-                ("active", "1.2.3"),
-            )
+            with self.assertRaisesRegex(ValueError, "mandatory CDA element"):
+                cda.emit(
+                    {"key": "P1", "values": {}, "instances": {}},
+                    model, compiled, {"fields": {}}, {},
+                )
 
             payload, problems = cda.emit(
                 {
@@ -746,7 +734,7 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertIsNotNone(identifier)
             self.assertNotIn("[", payload.decode("utf-8"))
 
-    def test_neutral_example_can_select_from_multiple_explicit_codes(self) -> None:
+    def test_neutral_example_cannot_select_from_multiple_explicit_codes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "template.xml"
             source.write_text('''<project>
@@ -772,16 +760,81 @@ class CdaDatatypeTests(unittest.TestCase):
             _, target = target_at(compiled, "/hl7:statusCode")
             self.assertEqual(target["value_sets"], [])
             self.assertEqual(target["value_set_bindings"], [])
-            self.assertEqual(
-                target["compiled_default"]["value"], {"code": "active"}
-            )
+            self.assertNotIn("compiled_default", target)
+            with self.assertRaisesRegex(ValueError, "mandatory CDA element"):
+                cda.emit(
+                    {"key": "P1", "values": {}, "instances": {}},
+                    model, compiled, {"fields": {}}, {},
+                )
+
+    def test_required_polymorphic_null_flavor_retains_xsi_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:value" datatype="CE" minimumMultiplicity="1"
+             maximumMultiplicity="1" conformance="R"/>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {}, "fields": {},
+            }
+            compiled = compile_cda([source], model)
+            target_name, target = target_at(compiled, "/hl7:value")
+
             payload, problems = cda.emit(
                 {"key": "P1", "values": {}, "instances": {}},
                 model, compiled, {"fields": {}}, {},
             )
             self.assertEqual(problems, [])
-            status = find_required(ET.fromstring(payload), f".//{{{HL7}}}statusCode")
-            self.assertEqual(status.get("code"), "active")
+            value = find_required(ET.fromstring(payload), f"{{{HL7}}}value")
+            self.assertEqual(value.get("nullFlavor"), "NI")
+            self.assertEqual(
+                value.get("{http://www.w3.org/2001/XMLSchema-instance}type"),
+                "CE",
+            )
+            self.assertNotIn("code", value.attrib)
+
+            # A stale compiled model may still carry the former metadata. The
+            # renderer must ignore it rather than emit example instance data.
+            example_default = {
+                "value": {"code": "OPB", "codeSystem": "1.2.3"},
+                "source": "template-example",
+            }
+            target["compiled_default"] = example_default
+            compiled["document"][0]["children"][0]["compiled_default"] = (
+                example_default
+            )
+            payload, _ = cda.emit(
+                {"key": "P1", "values": {}, "instances": {}},
+                model, compiled, {"fields": {}}, {},
+            )
+            value = find_required(ET.fromstring(payload), f"{{{HL7}}}value")
+            self.assertEqual(value.get("nullFlavor"), "NI")
+            self.assertEqual(
+                value.get("{http://www.w3.org/2001/XMLSchema-instance}type"),
+                "CE",
+            )
+            self.assertNotIn("code", value.attrib)
+
+            payload, _ = cda.emit(
+                {"key": "P1", "values": {}, "instances": {}},
+                model, compiled,
+                {
+                    "fields": {},
+                    "target_defaults": {
+                        target_name: {"nullFlavor": "UNK", "reason": "No source"},
+                    },
+                },
+                {},
+            )
+            value = find_required(ET.fromstring(payload), f"{{{HL7}}}value")
+            self.assertEqual(value.get("nullFlavor"), "UNK")
+            self.assertEqual(
+                value.get("{http://www.w3.org/2001/XMLSchema-instance}type"),
+                "CE",
+            )
 
     def test_xsd_default_completes_explicit_artdecor_attribute(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

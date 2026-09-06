@@ -128,11 +128,11 @@ def _write_value(
         raise ValueError(
             f"CDA value target {target.get('path') or node.get('name')} has no compiled value representation"
         )
+    _set_xsi_type(element, representation)
     if isinstance(value, Mapping) and value.get("nullFlavor"):
         element.set("nullFlavor", str(value["nullFlavor"]))
         return
     kind = ValueRepresentationKind(str(representation["kind"]))
-    _set_xsi_type(element, representation)
     if kind == ValueRepresentationKind.ELEMENT_TEXT:
         element.text = str(value)
         return
@@ -685,20 +685,6 @@ def _render_node_once(
         _write_value(
             element, default, cda.get("targets", {}).get(default_name, {}), node
         )
-    elif isinstance(node.get("compiled_default"), Mapping):
-        compiled_default = node.get("compiled_default", {})
-        target = next(
-            (
-                cda.get("targets", {}).get(str(name), {})
-                for name in node.get("targets", [])
-                if cda.get("targets", {}).get(str(name), {}).get(
-                    "value_representation"
-                )
-            ),
-            {},
-        )
-        _write_value(element, compiled_default.get("value"), target, node)
-
     for attr in node.get("attributes", []):
         name = str(attr.get("name") or "")
         if (
@@ -738,7 +724,20 @@ def _render_node_once(
         # nullFlavor fallback.  A complex structural value is stricter: its
         # compiled datatype/model expansion must expose @nullFlavor before the
         # renderer may use it in place of required child content.
-        element.set("nullFlavor", null_flavor)
+        target = next(
+            (
+                cda.get("targets", {}).get(str(name), {})
+                for name in node.get("targets", [])
+                if cda.get("targets", {}).get(str(name), {}).get(
+                    "value_representation"
+                )
+            ),
+            None,
+        )
+        if target is not None:
+            _write_value(element, {"nullFlavor": null_flavor}, target, node)
+        else:
+            element.set("nullFlavor", null_flavor)
     return [element]
 
 

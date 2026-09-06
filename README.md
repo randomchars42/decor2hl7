@@ -721,6 +721,12 @@ provide. Actual mapped values always win in the same occurrence. Null defaults
 cannot be applied to attributes, optional targets, complex elements, or mandatory
 constraints that prohibit null flavors.
 
+ART-DECOR `<example>` fragments never supply automatic values or display
+metadata. They are instance illustrations, not fixed template constraints. For
+a required polymorphic CDA leaf without source content, null-flavor completion
+retains the concrete datatype—for example `<value xsi:type="CE"
+nullFlavor="NI"/>`—instead of copying a clinical assertion from an example.
+
 ## Runtime
 
 ```bash

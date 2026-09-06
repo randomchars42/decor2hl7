@@ -2017,6 +2017,9 @@ class CoreTests(unittest.TestCase):
         cda_model["targets"]["direct_contact.value"] = {
             **root, "path": "hl7:observation/hl7:value", "datatype": "ST",
             "writable": True, "has_children": False, "locations": ["0.0.1"],
+            "compiled_default": {
+                "value": "Example content", "source": "template-example",
+            },
             "value_representation": {
                 "kind": "element_text", "logical_types": ["text"],
             },
@@ -2025,6 +2028,9 @@ class CoreTests(unittest.TestCase):
             "kind": "element", "name": "hl7:value", "datatype": "ST",
             "min": 1, "mandatory": True, "fixed": {}, "attributes": [],
             "codes": [], "targets": ["direct_contact.value"], "children": [],
+            "compiled_default": {
+                "value": "Example content", "source": "template-example",
+            },
         })
         incomplete, _ = mapping_compiler.cda_mapping_proposal(
             model, cda_model, []

@@ -110,7 +110,7 @@ class ReferenceClosureTests(unittest.TestCase):
         self.assertTrue(all(value["items"] for value in inventories.values()))
         self.assertEqual(
             {value["document_pool_size"] for value in inventories.values()},
-            {848},
+            {873},
         )
 
         xray_path = (

@@ -37,6 +37,15 @@ boolean is inverted into `negationInd`, an absent source emits no occurrence,
 and an equal explicit `Agens` code/code-system occurrence is coalesced rather
 than duplicated.
 
+DEC-018 still requires a separate policy review after DEC-026 removed generic
+example-derived construction defaults. Its allergy rules do not use
+`compiled_default`, but they do automatically obtain the `A07AA` and `V08`
+discriminator constants from exact neutral examples. If examples are to remain
+strictly non-executable even as mapping evidence, these two generated mappings
+must be demoted to review candidates or replaced by a non-example formal
+association. This follow-up is deliberately not resolved by the default-value
+correction.
+
 The complete allergy occurrence is not yet executable from this transaction by
 itself. Activating any of these structured allergy values also activates Allergy
 Concern Act `1.2.276.0.76.10.4065`, where ART-DECOR requires

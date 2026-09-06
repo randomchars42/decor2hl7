@@ -342,9 +342,6 @@ def cmd_build(args: argparse.Namespace) -> int:
     cda = write_cda_model(
         inputs["templates"], model_dir, model,
         core_definition_paths=core_paths(release_spec_dir(root, release)),
-        value_set_paths=[
-            *inputs["model_resources"], *inputs["terminology_resources"],
-        ],
         cda_extensions=inputs.get("cda_extensions", []),
     )
     from .conformance import build_conformance_artifacts

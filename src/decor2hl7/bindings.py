@@ -80,7 +80,6 @@ def presence_target_complete(
         scalar_fixed = bool(
             node.get("fixed_text") is not None
             or len(codes) == 1
-            or node.get("compiled_default") is not None
             or node.get("system_value")
             or any(name in fixed for name in scalar_attributes)
             or (
