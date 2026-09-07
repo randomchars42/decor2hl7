@@ -14,13 +14,21 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
 from copy import deepcopy
+import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
 
-from ..retrieval.xml import child_text, clean, local, parse_file
+from ..retrieval.xml import (
+    KNOWN_PREFIXES,
+    child_text,
+    clean,
+    local,
+    parse_text,
+    template_namespace_maps,
+)
 from ..assertions import schematron
 from ..workspace import write_json
 from .datatypes import (
@@ -141,6 +149,35 @@ def _particle_key(value: str) -> str:
     return _xml_key(value).partition("[")[0]
 
 
+def _template_namespaces(template: ET.Element) -> dict[str, str]:
+    raw = template.get("_decor2hl7_namespaces") or "{}"
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = {}
+    return {
+        str(prefix): str(uri)
+        for prefix, uri in value.items()
+        if isinstance(prefix, str) and isinstance(uri, str)
+    } if isinstance(value, Mapping) else {}
+
+
+def _namespace_identity(
+    design_name: str, template: ET.Element,
+) -> tuple[str | None, str | None]:
+    lexical = design_name.lstrip("@").split("[", 1)[0]
+    prefix, separator, _ = lexical.partition(":")
+    if not separator:
+        return None, None
+    uri = _template_namespaces(template).get(prefix) or KNOWN_PREFIXES.get(prefix)
+    if not uri:
+        raise ValueError(
+            f"ART-DECOR design name {design_name!r} uses undeclared namespace "
+            f"prefix {prefix!r} in template {template.get('id') or '<unknown>'}"
+        )
+    return prefix, uri
+
+
 def _int(value: str | None) -> int | None:
     return int(value) if value and value.isdigit() else None
 
@@ -200,7 +237,9 @@ def collect_templates(
     def ingest(paths: Iterable[Path]) -> None:
         for path in sorted(set(paths)):
             try:
-                root, _ = parse_file(path)
+                text = path.read_text(encoding="utf-8", errors="replace")
+                root, _ = parse_text(text)
+                namespace_maps = template_namespace_maps(text)
             except ET.ParseError:
                 continue
             for node in root.iter():
@@ -212,6 +251,10 @@ def collect_templates(
                 key = _key(node)
                 if key in seen:
                     continue
+                node.set(
+                    "_decor2hl7_namespaces",
+                    json.dumps(namespace_maps.get(key, {}), sort_keys=True),
+                )
                 seen.add(key)
                 templates[key[0]].append(node)
 
@@ -399,6 +442,9 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                 current = path
                 if kind == "element":
                     name = child.get("name") or "element"
+                    namespace_prefix, namespace_uri = _namespace_identity(
+                        name, template
+                    )
                     current = path + (name,)
                     value_sets, value_set_bindings, codes, fixed, unit = _constraints(child)
                     rows.append({
@@ -410,6 +456,8 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                         "kind": "element",
                         "element_id": child.get("id"),
                         "element_name": name,
+                        "namespace_prefix": namespace_prefix,
+                        "namespace_uri": namespace_uri,
                         "path": "/".join(current),
                         "datatype": child.get("datatype"),
                         "value_sets": value_sets,
@@ -436,6 +484,9 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                         if local(direct.tag) != "attribute" or not direct.get("name"):
                             continue
                         aname = "@" + (direct.get("name") or "attribute")
+                        attribute_prefix, attribute_uri = _namespace_identity(
+                            aname, template
+                        )
                         attribute_value = _attribute_fixed_value(direct)
                         rows.append({
                             "template_id": tkey[0],
@@ -446,6 +497,8 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                             "kind": "attribute",
                             "element_id": direct.get("id"),
                             "element_name": aname,
+                            "namespace_prefix": attribute_prefix,
+                            "namespace_uri": attribute_uri,
                             "path": "/".join(current + (aname,)),
                             "datatype": direct.get("datatype"),
                             "value_sets": [
@@ -515,6 +568,8 @@ def _source(template: ET.Element, path: str, element_id: str | None) -> dict[str
 
 
 def _parse_attribute(attribute: ET.Element, template: ET.Element, path: str) -> dict[str, Any]:
+    name = attribute.get("name") or "attribute"
+    namespace_prefix, namespace_uri = _namespace_identity(name, template)
     bindings = [
         binding for node in list(attribute)
         if local(node.tag) == "vocabulary"
@@ -523,7 +578,9 @@ def _parse_attribute(attribute: ET.Element, template: ET.Element, path: str) -> 
     valuesets = list(dict.fromkeys(binding["id"] for binding in bindings))
     return {
         "kind": "attribute",
-        "name": attribute.get("name") or "attribute",
+        "name": name,
+        "namespace_prefix": namespace_prefix,
+        "namespace_uri": namespace_uri,
         "id": attribute.get("id"),
         "datatype": attribute.get("datatype"),
         "value": _attribute_fixed_value(attribute),
@@ -549,6 +606,7 @@ def _parse_element(
     inherited_closed: bool = False,
 ) -> dict[str, Any]:
     name = element.get("name") or "hl7:element"
+    namespace_prefix, namespace_uri = _namespace_identity(name, template)
     current = path + (name,)
     current_path = "/".join(current)
     is_closed = inherited_closed or _xml_true(element.get("isClosed"))
@@ -589,6 +647,8 @@ def _parse_element(
     return {
         "kind": "element",
         "name": name,
+        "namespace_prefix": namespace_prefix,
+        "namespace_uri": namespace_uri,
         "template_name": _ascii_name(
             template.get("name") or template.get("displayName")
             or (template.get("id") or "").split(".")[-1]
@@ -606,6 +666,7 @@ def _parse_element(
         "conformance": element.get("conformance"),
         "is_closed": is_closed,
         "reviewed_extension": source_kind == "reviewed-extension",
+        "reviewed_spec_branch": source_kind == "reviewed-spec-branch",
         "fixed": fixed,
         "fixed_text": _fixed_text(element),
         "description": _description(element),
@@ -631,7 +692,8 @@ def _parse_element(
             **_source(template, current_path, element.get("id")),
             **(
                 {"reason": element.get("_decor2hl7_reason") or ""}
-                if source_kind == "reviewed-extension" else {}
+                if source_kind in {"reviewed-extension", "reviewed-spec-branch"}
+                else {}
             ),
         }],
         "targets": [],
@@ -672,7 +734,10 @@ def _direct_template(template: ET.Element) -> list[dict[str, Any]]:
 
 def _merge_attribute(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str, Any]:
     result = deepcopy(dict(parent))
-    for key in ("id", "datatype", "value", "optional"):
+    for key in (
+        "id", "datatype", "value", "optional", "namespace_prefix",
+        "namespace_uri",
+    ):
         if child.get(key) is not None:
             result[key] = child.get(key)
     if child.get("value_sets"):
@@ -738,7 +803,8 @@ def _merge_node(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str
     for key in (
         "name", "id", "datatype", "min", "max", "mandatory", "conformance",
         "fixed_text", "unit", "origin", "description", "template_name",
-        "template_display_name", "template_description",
+        "template_display_name", "template_description", "namespace_prefix",
+        "namespace_uri",
     ):
         if child.get(key) is not None:
             result[key] = deepcopy(child.get(key))
@@ -880,6 +946,148 @@ def _compiled_element_matches(
     return result
 
 
+def _direct_source_elements(
+    parent: ET.Element,
+) -> list[tuple[ET.Element, int, ET.Element]]:
+    """Return direct ART-DECOR element children, flattening one choice."""
+    result: list[tuple[ET.Element, int, ET.Element]] = []
+    for index, child in enumerate(list(parent)):
+        if local(child.tag) == "element":
+            result.append((parent, index, child))
+        elif local(child.tag) == "choice":
+            result.extend(
+                (child, branch_index, branch)
+                for branch_index, branch in enumerate(list(child))
+                if local(branch.tag) == "element"
+            )
+    return result
+
+
+def _resolved_containment_key(
+    element: ET.Element, templates: dict[str, list[ET.Element]],
+) -> TemplateKey | None:
+    reference = element.get("contains") or ""
+    if not reference:
+        return None
+    target = select_template(templates, reference, element.get("flexibility"))
+    return _key(target) if target is not None else None
+
+
+def _spec_choice_branch(
+    parent: ET.Element,
+    templates: dict[str, list[ET.Element]],
+    extension: CdaExtension,
+) -> tuple[ET.Element, TemplateKey]:
+    """Find one exact target/replaced choice pair in the parent's SPEC chain."""
+    wanted = (extension["template_id"], extension["template_effective_date"])
+    replaced = (
+        extension["replaces_template_id"],
+        extension["replaces_template_effective_date"],
+    )
+    matches: list[tuple[ET.Element, TemplateKey]] = []
+    queue = deque(
+        target
+        for relation in _template_relations(parent, {"SPEC"})
+        for target in [select_template(
+            templates,
+            relation.get("template") or "",
+            relation.get("flexibility"),
+        )]
+        if target is not None
+    )
+    seen: set[TemplateKey] = set()
+    while queue:
+        ancestor = queue.popleft()
+        ancestor_key = _key(ancestor)
+        if ancestor_key in seen:
+            continue
+        seen.add(ancestor_key)
+        hosts = [
+            node for node in ancestor.iter()
+            if local(node.tag) == "element"
+            and node.get("id") == extension["parent_element_id"]
+        ]
+        for host in hosts:
+            for choice in list(host):
+                if local(choice.tag) != "choice":
+                    continue
+                branches = [
+                    branch for branch in list(choice)
+                    if local(branch.tag) == "element"
+                    and branch.get("name") == extension["element_name"]
+                ]
+                if not any(
+                    _resolved_containment_key(branch, templates) == replaced
+                    for branch in branches
+                ):
+                    continue
+                matches.extend(
+                    (branch, ancestor_key)
+                    for branch in branches
+                    if _resolved_containment_key(branch, templates) == wanted
+                )
+        queue.extend(
+            target
+            for relation in _template_relations(ancestor, {"SPEC"})
+            for target in [select_template(
+                templates,
+                relation.get("template") or "",
+                relation.get("flexibility"),
+            )]
+            if target is not None
+        )
+    if len(matches) != 1:
+        raise ValueError(
+            "reviewed CDA SPEC branch must resolve one exact sibling choice "
+            f"between {replaced[0]}@{replaced[1]} and "
+            f"{wanted[0]}@{wanted[1]}; found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _select_reviewed_spec_branch(
+    parent: ET.Element,
+    templates: dict[str, list[ET.Element]],
+    extension: CdaExtension,
+) -> None:
+    source_hosts = [
+        node for node in parent.iter()
+        if local(node.tag) == "element"
+        and node.get("id") == extension["parent_element_id"]
+    ]
+    if len(source_hosts) != 1:
+        raise ValueError(
+            f"CDA extension parent element {extension['parent_element_id']} "
+            "must occur directly in the reviewed parent template"
+        )
+    replaced = (
+        extension["replaces_template_id"],
+        extension["replaces_template_effective_date"],
+    )
+    current = [
+        item for item in _direct_source_elements(source_hosts[0])
+        if item[2].get("name") == extension["element_name"]
+        and _resolved_containment_key(item[2], templates) == replaced
+    ]
+    if len(current) != 1:
+        raise ValueError(
+            "reviewed CDA SPEC branch must replace one exact explicit "
+            f"containment {replaced[0]}@{replaced[1]}; found {len(current)}"
+        )
+    prototype, prototype_key = _spec_choice_branch(
+        parent, templates, extension
+    )
+    container, index, old = current[0]
+    replacement = deepcopy(prototype)
+    replacement.set("flexibility", extension["template_effective_date"])
+    replacement.set("_decor2hl7_source", "reviewed-spec-branch")
+    replacement.set("_decor2hl7_reason", extension["reason"])
+    replacement.set("_decor2hl7_spec_template_id", prototype_key[0])
+    replacement.set("_decor2hl7_spec_template_effective_date", prototype_key[1])
+    container.remove(old)
+    container.insert(index, replacement)
+
+
 def _apply_reviewed_extensions(
     templates: dict[str, list[ET.Element]],
     document_id: str,
@@ -887,7 +1095,7 @@ def _apply_reviewed_extensions(
     explicit_reachable: Mapping[TemplateKey, ET.Element],
     extensions: Iterable[CdaExtension],
 ) -> list[CdaExtension]:
-    """Attach reviewed exact templates to explicit open parent elements."""
+    """Apply reviewed exact open-template and SPEC-choice overlays."""
     applied: list[CdaExtension] = []
     memo: dict[TemplateKey, list[dict[str, Any]]] = {}
     for extension in extensions:
@@ -940,6 +1148,11 @@ def _apply_reviewed_extensions(
                 f"{parent_key[0]}@{parent_key[1]}#"
                 f"{extension['parent_element_id']}"
             )
+        if extension.get("operation") == "select_spec_branch":
+            _select_reviewed_spec_branch(parent, templates, extension)
+            applied.append(extension)
+            memo.clear()
+            continue
         if any(
             child.get("kind") == "element"
             and child.get("name") == extension["element_name"]
@@ -1696,11 +1909,13 @@ def _annotate_targets(
 ) -> dict[str, list[str]]:
     lookup = _target_lookup(targets)
     source_index: dict[str, list[str]] = defaultdict(list)
+    physical_occurrences: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     def annotate(
         nodes: list[dict[str, Any]],
         location: tuple[int, ...] = (),
         repeat_ancestors: tuple[tuple[int, ...], ...] = (),
+        target_ancestors: tuple[str, ...] = (),
     ) -> None:
         for index, node in enumerate(nodes):
             here = location + (index,)
@@ -1708,9 +1923,9 @@ def _annotate_targets(
             repeats_here = maximum is None or (isinstance(maximum, int) and maximum > 1)
             node_repeat_ancestors = repeat_ancestors + ((here,) if repeats_here else ())
             node_repeatable = bool(node_repeat_ancestors)
+            own_name: str | None = None
             if node.get("kind") == "element":
                 names: list[str] = []
-                own_name: str | None = None
                 origin = node.get("origin") or {}
                 origin_key = _source_key(origin) if origin else ""
                 for source in node.get("sources", []):
@@ -1806,6 +2021,16 @@ def _annotate_targets(
                     target["has_children"] = bool(node.get("children"))
                     target["provenance"] = deepcopy(node.get("provenance", []))
                 if own_name:
+                    physical_occurrences[own_name].append({
+                        "node": node,
+                        "target": deepcopy(targets[own_name]),
+                        "location": ".".join(map(str, here)),
+                        "repeatable": bool(node_repeatable),
+                        "repeat_ancestors": [
+                            ".".join(map(str, item)) for item in repeat_ancestors
+                        ],
+                        "target_ancestors": target_ancestors,
+                    })
                     for source in node.get("sources", []):
                         key = _source_key(source)
                         if own_name not in source_index[key]:
@@ -1887,6 +2112,20 @@ def _annotate_targets(
                         target["has_children"] = False
                         target["provenance"] = deepcopy(attr.get("provenance", []))
                     if own_attr:
+                        physical_occurrences[own_attr].append({
+                            "node": attr,
+                            "target": deepcopy(targets[own_attr]),
+                            "location": ".".join(
+                                map(str, here + (100000 + attr_index,))
+                            ),
+                            "repeatable": bool(node_repeatable),
+                            "repeat_ancestors": [
+                                ".".join(map(str, item))
+                                for item in node_repeat_ancestors
+                            ],
+                            "target_ancestors": target_ancestors
+                            + ((own_name,) if own_name else ()),
+                        })
                         for source in attr.get("sources", []):
                             key = _source_key(source)
                             if own_attr not in source_index[key]:
@@ -1898,9 +2137,58 @@ def _annotate_targets(
                             if tolerant:
                                 if own_attr not in source_index[tolerant]:
                                     source_index[tolerant].append(own_attr)
-            annotate(list(node.get("children", [])), here, node_repeat_ancestors)
+            annotate(
+                list(node.get("children", [])),
+                here,
+                node_repeat_ancestors,
+                target_ancestors + ((own_name,) if own_name else ()),
+            )
 
     annotate(document)
+
+    # A reusable included/contained template may occur at several physical
+    # positions in one effective document.  Its template-local target remains
+    # intentionally ambiguous, but each occurrence can still be addressed
+    # safely when a distinct containing-template target anchors it.  These
+    # aliases are compiled facts: runtime and mapping policy do not inspect XML
+    # paths or know particular template ids.
+    for base_name, occurrences in physical_occurrences.items():
+        if len(occurrences) <= 1 or base_name not in targets:
+            continue
+        base = targets[base_name]
+        base_template_id = str(base.get("template_id") or "")
+        aliases: list[tuple[str, dict[str, Any]]] = []
+        seen: set[str] = set()
+        for occurrence in occurrences:
+            anchor = next((
+                ancestor for ancestor in reversed(
+                    tuple(str(item) for item in occurrence["target_ancestors"])
+                )
+                if str(targets.get(ancestor, {}).get("template_id") or "")
+                != base_template_id
+            ), "")
+            if not anchor:
+                aliases = []
+                break
+            alias = f"{anchor}::{base_name}"
+            if alias in seen or alias in targets:
+                aliases = []
+                break
+            seen.add(alias)
+            aliases.append((alias, occurrence))
+        if len(aliases) != len(occurrences):
+            continue
+        for alias, occurrence in aliases:
+            target = deepcopy(occurrence["target"])
+            target.update({
+                "locations": [occurrence["location"]],
+                "repeatable": occurrence["repeatable"],
+                "repeat_ancestors": occurrence["repeat_ancestors"],
+                "occurrence_of": base_name,
+                "occurrence_anchor": alias.split("::", 1)[0],
+            })
+            targets[alias] = target
+            occurrence["node"].setdefault("targets", []).append(alias)
     return dict(source_index)
 
 
@@ -1978,6 +2266,22 @@ def _annotate_non_null_requirements(
 
     for node in document:
         visit_node(node, ())
+
+    # Occurrence-qualified aliases are created before datatype companion
+    # requirements are attached. Preserve the base target's conservative
+    # dependency on each alias as well. A required ambiguous base target may
+    # make such an alias review-only, but it must never become less constrained
+    # merely because its physical occurrence was qualified.
+    for target in targets.values():
+        base_name = str(target.get("occurrence_of") or "")
+        base = targets.get(base_name, {})
+        if not isinstance(base, Mapping):
+            continue
+        for key in (
+            "non_null_requires", "non_null_requirement_owners",
+        ):
+            if key in base:
+                target[key] = deepcopy(base[key])
 
 
 def _annotate_quantity_range_targets(

@@ -3750,6 +3750,15 @@ def _mapping_configuration_notes(
             )
             if isinstance(target, Mapping) and target.get("template_id"):
                 selected_templates[str(target["template_id"])].append(str(field))
+                anchor_name = str(target.get("occurrence_anchor") or "")
+                anchor = (
+                    targets.get(anchor_name, {})
+                    if anchor_name and isinstance(targets, Mapping) else {}
+                )
+                if isinstance(anchor, Mapping) and anchor.get("template_id"):
+                    selected_templates[str(anchor["template_id"])].append(
+                        str(field)
+                    )
 
     notes: list[dict[str, Any]] = []
     reviewed = cda.get("reviewed_extensions", [])
@@ -3767,7 +3776,7 @@ def _mapping_configuration_notes(
             "generated": True,
             "source": "config/cda-extensions.json",
             "note": (
-                "Uses reviewed CDA attachment configuration for "
+                "Uses reviewed CDA profile-overlay configuration for "
                 f"{len(extension_templates)} template(s) in {len(fields)} mapped field(s)."
             ),
             "templates": extension_templates,

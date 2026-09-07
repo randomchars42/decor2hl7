@@ -31,6 +31,10 @@ from .workspace import write_json
 
 SVRL = "{http://purl.oclc.org/dsdl/svrl}"
 SCHEMATRON = "{http://purl.oclc.org/dsdl/schematron}"
+HL7_NAMESPACE = "urn:hl7-org:v3"
+SDTC_NAMESPACE = "urn:hl7-org:sdtc"
+XSI_NAMESPACE = "http://www.w3.org/2001/XMLSchema-instance"
+XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace"
 
 
 @dataclass(frozen=True)
@@ -464,6 +468,164 @@ def validate_xsd(schema: Path, documents: Sequence[Path], *, phase: str) -> list
             "message": base64.b64decode(encoded).decode("utf-8", "replace"),
         })
     return diagnostics
+
+
+def _compiled_element_qname(node: Mapping[str, Any]) -> str:
+    name = str(node.get("name") or "element").split("[", 1)[0]
+    uri = str(node.get("namespace_uri") or "")
+    if not uri and name.startswith(("hl7:", "cda:")):
+        uri = HL7_NAMESPACE
+    # Generated CDA/RIM and datatype particles are unprefixed in the compiled
+    # model but serialize below the default CDA namespace.
+    if not uri and ":" not in name:
+        uri = HL7_NAMESPACE
+    local_name = name.split(":", 1)[-1]
+    return f"{{{uri}}}{local_name}" if uri else local_name
+
+
+def _compiled_profile_paths(
+    cda: Mapping[str, Any],
+) -> tuple[set[tuple[str, ...]], set[tuple[tuple[str, ...], str]], set[str]]:
+    """Return exact foreign-namespace placements selected by the CDA model."""
+    elements: set[tuple[str, ...]] = set()
+    attributes: set[tuple[tuple[str, ...], str]] = set()
+    namespaces: set[str] = set()
+
+    def walk(nodes: Sequence[Mapping[str, Any]], path: tuple[str, ...]) -> None:
+        for node in nodes:
+            here = path
+            if node.get("kind") == "element":
+                qname = _compiled_element_qname(node)
+                here = path + (qname,)
+                uri = str(node.get("namespace_uri") or "")
+                if uri and uri not in {HL7_NAMESPACE, SDTC_NAMESPACE}:
+                    elements.add(here)
+                    namespaces.add(uri)
+                for attribute in node.get("attributes", []):
+                    attribute_uri = str(attribute.get("namespace_uri") or "")
+                    if (
+                        attribute_uri
+                        and attribute_uri not in {
+                            HL7_NAMESPACE, SDTC_NAMESPACE, XSI_NAMESPACE,
+                            XML_NAMESPACE,
+                        }
+                    ):
+                        name = str(attribute.get("name") or "attribute")
+                        attributes.add((
+                            here,
+                            f"{{{attribute_uri}}}{name.split(':', 1)[-1]}",
+                        ))
+                        namespaces.add(attribute_uri)
+            walk(list(node.get("children", [])), here)
+
+    walk(list(cda.get("document", [])), ())
+    return elements, attributes, namespaces
+
+
+def _namespace_uri(qname: str) -> str:
+    return qname[1:].split("}", 1)[0] if qname.startswith("{") else ""
+
+
+def _profile_extension_projection(
+    model_dir: Path,
+    documents: Sequence[Path],
+    destination: Path,
+) -> tuple[list[Path], list[dict[str, Any]], int, set[str]]:
+    """Strip only exact compiled profile-extension subtrees for CDA-core XSD.
+
+    CDA R2 core does not declare the Pharmacy extension model.  The complete
+    document remains the input to the exact transaction Schematron; this
+    projection is solely the base CDA/SDTC XSD gate. Unknown foreign elements
+    and attributes, or foreign nodes in an uncompiled location, are reported as
+    errors.
+    """
+    cda_path = model_dir / "cda.json"
+    if not cda_path.is_file():
+        return list(documents), [], 0, set()
+    cda = json.loads(cda_path.read_text(encoding="utf-8"))
+    if not isinstance(cda, Mapping):
+        raise ValueError("compiled cda.json must contain an object")
+    allowed_elements, allowed_attributes, namespaces = _compiled_profile_paths(cda)
+    if not namespaces:
+        return list(documents), [], 0, set()
+
+    destination.mkdir(parents=True, exist_ok=True)
+    diagnostics: list[dict[str, Any]] = []
+    projected: list[Path] = []
+    removed = 0
+    core_namespaces = {
+        "", HL7_NAMESPACE, SDTC_NAMESPACE, XSI_NAMESPACE, XML_NAMESPACE,
+    }
+    for document_index, document in enumerate(documents):
+        tree = ET.parse(document)
+        root = tree.getroot()
+
+        def inspect(element: ET.Element, path: tuple[str, ...]) -> None:
+            here = path + (element.tag,)
+            uri = _namespace_uri(element.tag)
+            if uri not in core_namespaces and here not in allowed_elements:
+                diagnostics.append({
+                    "phase": "cda-profile-extension-structure",
+                    "severity": "error",
+                    "kind": "profile-extension",
+                    "rule_id": "compiled-foreign-element-location",
+                    "test": "compiled foreign-namespace path",
+                    "location": "/" + "/".join(
+                        item.rsplit("}", 1)[-1] for item in here
+                    ),
+                    "document": str(document),
+                    "message": (
+                        f"foreign element {element.tag!r} is not selected by "
+                        "the compiled reviewed CDA profile overlay"
+                    ),
+                })
+            for attribute_name in element.attrib:
+                attribute_uri = _namespace_uri(attribute_name)
+                if (
+                    attribute_uri not in core_namespaces
+                    and (here, attribute_name) not in allowed_attributes
+                ):
+                    diagnostics.append({
+                        "phase": "cda-profile-extension-structure",
+                        "severity": "error",
+                        "kind": "profile-extension",
+                        "rule_id": "compiled-foreign-attribute-location",
+                        "test": "compiled foreign-namespace attribute path",
+                        "location": "/" + "/".join(
+                            item.rsplit("}", 1)[-1] for item in here
+                        ),
+                        "document": str(document),
+                        "message": (
+                            f"foreign attribute {attribute_name!r} is not "
+                            "selected by the compiled reviewed CDA profile overlay"
+                        ),
+                    })
+            for child in list(element):
+                inspect(child, here)
+
+        inspect(root, ())
+        projected_root = copy.deepcopy(root)
+
+        def strip(element: ET.Element) -> None:
+            nonlocal removed
+            for attribute_name in list(element.attrib):
+                if _namespace_uri(attribute_name) in namespaces:
+                    del element.attrib[attribute_name]
+                    removed += 1
+            for child in list(element):
+                if _namespace_uri(child.tag) in namespaces:
+                    element.remove(child)
+                    removed += 1
+                else:
+                    strip(child)
+
+        strip(projected_root)
+        output = destination / f"document-{document_index + 1}.xml"
+        ET.ElementTree(projected_root).write(
+            output, encoding="utf-8", xml_declaration=True
+        )
+        projected.append(output)
+    return projected, diagnostics, removed, namespaces
 
 
 def _copy_children(
@@ -1168,9 +1330,21 @@ def validate_cda_documents(
             "generated CDA validator checksum does not match its manifest; "
             "rerun `decor2hl7 build`"
         )
-    diagnostics = validate_xsd(
-        cda_schema_path(release_dir, sdtc=True), documents, phase="cda-sdtc-xsd"
-    )
+    with tempfile.TemporaryDirectory(prefix="decor2hl7-cda-profile-") as temporary:
+        (
+            xsd_documents,
+            profile_diagnostics,
+            removed_extension_subtrees,
+            profile_namespaces,
+        ) = _profile_extension_projection(
+            model_dir, documents, Path(temporary)
+        )
+        xsd_diagnostics = validate_xsd(
+            cda_schema_path(release_dir, sdtc=True),
+            xsd_documents,
+            phase="cda-sdtc-xsd",
+        )
+    diagnostics = profile_diagnostics + xsd_diagnostics
     validator_executable = bool(validator_manifest.get("executable"))
     generation_complete = bool(validator_manifest.get("complete"))
     if not validator_executable:
@@ -1187,15 +1361,40 @@ def validate_cda_documents(
         "phase": "template-validator-provenance",
         "status": "passed" if generation_complete else "failed",
         "detail": provenance_detail,
-    }, {
+    }]
+    if profile_namespaces:
+        stages.append({
+            "phase": "cda-profile-extension-structure",
+            "status": (
+                "failed"
+                if any(
+                    item["severity"] == "error"
+                    for item in profile_diagnostics
+                )
+                else "passed"
+            ),
+            "detail": (
+                f"{len(profile_namespaces)} reviewed namespace(s); "
+                f"{removed_extension_subtrees} extension node(s) "
+                "projected out only for the CDA-core XSD gate"
+            ),
+        })
+    stages.append({
         "phase": "cda-sdtc-xsd",
         "status": (
             "failed"
-            if any(item["severity"] == "error" for item in diagnostics)
+            if any(item["severity"] == "error" for item in xsd_diagnostics)
             else "passed"
         ),
-        "detail": f"{len(documents)} document(s)",
-    }]
+        "detail": (
+            f"{len(documents)} document(s)"
+            + (
+                "; base CDA/SDTC projection; full document remains subject "
+                "to the exact template Schematron"
+                if profile_namespaces else ""
+            )
+        ),
+    })
     if validator_executable:
         template_diagnostics = validate_schematron(
             release_dir, validator, documents, phase="cda-template-schematron",

@@ -21,6 +21,7 @@ from decor2hl7.conformance import (
     _complete_schematron_namespaces,
     _generation_message_scope,
     _normalize_generated_see_uris,
+    _profile_extension_projection,
     _repair_generated_stylesheet,
     _safe_member,
     _extract_cda,
@@ -36,6 +37,74 @@ from decor2hl7.retrieval.fetch import _fetch_direct
 
 
 class ConformanceTests(unittest.TestCase):
+    def test_profile_extension_projection_is_exact_and_cda_core_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model_dir = root / "model"
+            model_dir.mkdir()
+            (model_dir / "cda.json").write_text(json.dumps({
+                "document": [{
+                    "kind": "element", "name": "hl7:ClinicalDocument",
+                    "namespace_uri": "urn:hl7-org:v3", "children": [{
+                        "kind": "element", "name": "hl7:manufacturedMaterial",
+                        "namespace_uri": "urn:hl7-org:v3", "children": [{
+                            "kind": "element", "name": "pharmhl7:formCode",
+                            "namespace_prefix": "pharmhl7",
+                            "namespace_uri": "urn:hl7-org:pharm",
+                            "children": [], "attributes": [],
+                        }], "attributes": [{
+                            "kind": "attribute",
+                            "name": "pharmhl7:classification",
+                            "namespace_prefix": "pharmhl7",
+                            "namespace_uri": "urn:hl7-org:pharm",
+                        }],
+                    }], "attributes": [],
+                }],
+            }), encoding="utf-8")
+            valid = root / "valid.xml"
+            valid.write_text(
+                '''<ClinicalDocument xmlns="urn:hl7-org:v3"
+ xmlns:pharmhl7="urn:hl7-org:pharm">
+ <manufacturedMaterial pharmhl7:classification="direct">
+ <pharmhl7:formCode code="TAB"/></manufacturedMaterial></ClinicalDocument>''',
+                encoding="utf-8",
+            )
+            projected, diagnostics, removed, namespaces = (
+                _profile_extension_projection(
+                    model_dir, [valid], root / "projected"
+                )
+            )
+            self.assertEqual(diagnostics, [])
+            self.assertEqual(removed, 2)
+            self.assertEqual(namespaces, {"urn:hl7-org:pharm"})
+            self.assertIsNone(
+                ET.parse(projected[0]).find(".//{urn:hl7-org:pharm}formCode")
+            )
+            projected_material = ET.parse(projected[0]).find(
+                ".//{urn:hl7-org:v3}manufacturedMaterial"
+            )
+            assert projected_material is not None
+            self.assertNotIn(
+                "{urn:hl7-org:pharm}classification",
+                projected_material.attrib,
+            )
+            self.assertIsNotNone(
+                ET.parse(valid).find(".//{urn:hl7-org:pharm}formCode")
+            )
+
+            invalid = root / "invalid.xml"
+            invalid.write_text(
+                valid.read_text(encoding="utf-8").replace(
+                    "formCode", "unexpected"
+                ),
+                encoding="utf-8",
+            )
+            _, invalid_diagnostics, _, _ = _profile_extension_projection(
+                model_dir, [invalid], root / "invalid-projected"
+            )
+            self.assertEqual(len(invalid_diagnostics), 1)
+            self.assertIn("not selected", invalid_diagnostics[0]["message"])
+
     def test_datatype_presence_cooccurrences_are_strict_and_inherited(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             include = Path(temporary)

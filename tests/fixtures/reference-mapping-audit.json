@@ -8,7 +8,7 @@
     "suggested_datapoints": 5,
     "suggested_leaves": 5,
     "no_target_datapoints": 20,
-    "no_source_leaves": 368
+    "no_source_leaves": 574
   },
   "fields": {
     "patient.anschrift.postleitzahl": {

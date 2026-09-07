@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
-import json
+from email.message import Message
 from pathlib import Path
 from typing import Any, Mapping
-from email.message import Message
-from urllib.parse import urlsplit
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 from decor2hl7 import assertions, cda, data, state, validate
 from decor2hl7.bindings import build_assignments
@@ -287,8 +288,35 @@ class CoreTests(unittest.TestCase):
                     {"id": "tx", "effective_date": "2026"},
                 )
 
+            branch = {
+                "operation": "select_spec_branch",
+                "transaction_id": "tx", "transaction_effective_date": "2026",
+                "document_template_id": "doc",
+                "document_template_effective_date": "2026.1",
+                "parent_template_id": "medication",
+                "parent_template_effective_date": "2024",
+                "parent_element_id": "medication-root",
+                "element_name": "hl7:consumable",
+                "template_id": "detail", "template_effective_date": "2024",
+                "replaces_template_id": "simple",
+                "replaces_template_effective_date": "2023",
+                "reason": "Reviewed richer branch",
+            }
+            path.write_text(json.dumps({
+                "format": 1, "attachments": [branch],
+            }), encoding="utf-8")
+            self.assertEqual(
+                load_extensions(
+                    path, {"id": "tx", "effective_date": "2026"}
+                ),
+                [branch],
+            )
+
     def test_mapping_notes_only_report_configured_rules_in_selected_use(self) -> None:
-        proposal = {"fields": {"field": "Attached.value"}}
+        proposal = {"fields": {
+            "field": "Attached.value",
+            "anchored": "Attached.host::Child.value",
+        }}
         audit = {"fields": {
             "field": {"selected": "Attached.value", "primary": {"via": "entry"}}
         }}
@@ -305,7 +333,14 @@ class CoreTests(unittest.TestCase):
             },
         ]}}
         cda_model = {
-            "targets": {"Attached.value": {"template_id": "entry"}},
+            "targets": {
+                "Attached.value": {"template_id": "entry"},
+                "Attached.host": {"template_id": "entry"},
+                "Attached.host::Child.value": {
+                    "template_id": "child",
+                    "occurrence_anchor": "Attached.host",
+                },
+            },
             "reviewed_extensions": [{"template_id": "entry"}],
         }
         notes = mapping_compiler._mapping_configuration_notes(
@@ -314,6 +349,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(notes), 2)
         self.assertTrue(all(note["generated"] for note in notes))
         self.assertFalse(any("unused" in str(note) for note in notes))
+        self.assertIn("anchored", notes[0]["fields"])
 
         unselected = mapping_compiler._mapping_configuration_notes(
             {"fields": {"field": None}}, audit, model, cda_model
@@ -3198,6 +3234,57 @@ class CoreTests(unittest.TestCase):
             )
             self.assertEqual(mocked.call_count, 0)
 
+    def test_exact_request_reuses_matching_frozen_dynamic_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            release_dir = Path(tmp)
+            target = release_dir / "templates" / "detail_resource.xml"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                '<return><template id="detail" effectiveDate="2025" '
+                'name="Detail"><element name="hl7:observation"/></template></return>',
+                encoding="utf-8",
+            )
+            payload = target.read_bytes()
+            manifest: dict[str, Any] = {"resources": {
+                "template:detail": {
+                    "status": "ok",
+                    "file": "templates/detail_resource.xml",
+                    "project": "profile-",
+                    "bytes": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "requested_effective_date": "dynamic",
+                    "resolved_effective_date": "2025",
+                    "representations": {
+                        "analysis": {
+                            "status": "ok",
+                            "file": "templates/detail_resource.xml",
+                            "bytes": len(payload),
+                            "sha256": hashlib.sha256(payload).hexdigest(),
+                        },
+                    },
+                    "identity": {
+                        "type": "template", "id": "detail",
+                        "effective_date": "2025", "project": "profile-",
+                    },
+                },
+            }}
+            want = {
+                "kind": "template", "id": "detail",
+                "effective_date": "2025", "project": "profile-",
+            }
+            with patch("decor2hl7.retrieval.fetch.get") as mocked:
+                path = _fetch_want(
+                    release_dir, manifest, want, owners={},
+                    repositories=["profile-"], language="de-DE", ipv4=True,
+                    retry_missing=False, offline=True,
+                )
+            self.assertEqual(path, target)
+            self.assertEqual(mocked.call_count, 0)
+            exact = manifest["resources"]["template:detail@2025"]
+            self.assertEqual(exact["status"], "ok")
+            self.assertEqual(exact["file"], "templates/detail_resource.xml")
+            self.assertEqual(exact["resolved_effective_date"], "2025")
+
     def test_referenced_codesystem_cache_is_adopted_offline(self) -> None:
         """A cached reference declaration is a cache hit for its own identity.
 
@@ -3740,9 +3827,45 @@ class CoreTests(unittest.TestCase):
                 [item["element_id"] for item in parity["unexpected_missing"]],
                 ["missing"],
             )
+            self.assertEqual(parity["reviewed_branch_replacements"], [])
             self.assertEqual(
                 [item["element_id"] for item in parity["compiler_only"]],
                 ["decor2hl7-extension:x"],
+            )
+
+    def test_declared_endpoint_parity_accepts_reviewed_spec_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text(
+                """<templates><template id="parent" name="Parent" effectiveDate="2026">
+                <element id="host" name="hl7:consumable" contains="simple"
+                         flexibility="2025"/>
+                </template></templates>""",
+                encoding="utf-8",
+            )
+            cda_model = {
+                "targets": {},
+                "reviewed_extensions": [{
+                    "operation": "select_spec_branch",
+                    "parent_template_id": "parent",
+                    "parent_template_effective_date": "2026",
+                    "parent_element_id": "host",
+                    "element_name": "hl7:consumable",
+                    "template_id": "detail",
+                    "replaces_template_id": "simple",
+                    "replaces_template_effective_date": "2025",
+                }],
+            }
+            parity = declared_endpoint_parity(
+                [source], cda_model, {"parent"}
+            )
+            self.assertEqual(parity["unexpected_missing"], [])
+            self.assertEqual(
+                [
+                    item["element_id"]
+                    for item in parity["reviewed_branch_replacements"]
+                ],
+                ["host"],
             )
 
     def test_possible_targets_are_contextual_typed_and_claim_aware(self) -> None:

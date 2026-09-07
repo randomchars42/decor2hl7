@@ -62,28 +62,30 @@ The medication section `1.2.276.0.76.3.1.195.10.64` and Medikation template
 `for_each` correctly binds each repeated source medication to one section
 `entry` and remains required occurrence semantics.
 
-Static ART-DECOR associations now project through unique common CDA/RIM slots
-from the associated legacy/profile constraints to the effective UV Medication
-Information branch. Combined with the existing `for_each`, this makes four
-source fields executable without a medication-specific rule: manufactured
-material name, product code with its declared open code system, dosage
-narrative, and route.
+DEC-028 now applies one reviewed exact `SPEC`-choice overlay at the Medikation
+`hl7:consumable` host. The exact UV Medication Statement parent declares the
+previously selected simple branch and UV Medication Information (detail)
+`2.16.840.1.113883.10.21.4.11@2023-02-03T13:03:38` as siblings. Selecting the
+detail branch preserves the established product name/code mappings and exposes
+the `urn:hl7-org:pharm` dose-form and ingredient model plus CDA
+`lotNumberText`. Namespace bindings are compiled and rendered; the URI by
+itself is not treated as a template relationship.
 
-Predicate-aware structural overlay recovers the associated medication
-`sequenceNumber`. The event-related timing `offset` remains a strong structural
-candidate, but is no longer executable by itself. The compiled datatype policy
-now records that a non-null `EIVL_TS` requires `event`; proposal generation,
-configuration validation and occurrence-aware rendering enforce that companion
-dependency. Source concept 528 has no proven correspondence to a target
-TimingEvent code, so the generated field remains `null` and no event code is
-invented. This leaves five executable medication mappings, four medication
-suggestions and sixteen medication datapoints without an executable target. See
-[`analyses/2026-09-02-medication-compound-dependency.md`](analyses/2026-09-02-medication-compound-dependency.md).
+The reviewed mapping now adds dose form, lot number, direct ingredient name and
+code, and the exact Boolean ingredient-role crosswalk `true → ACTI`,
+`false → IACT` from ValueSet
+`2.16.840.1.113883.1.11.10430@2014-03-26`. The direct ingredient is addressed
+through an occurrence-qualified target because the contained UV Ingredient
+template is reused below three optional packaging paths as well. Together with
+product name/code, medication `sequenceNumber`, dosage narrative and route,
+this yields ten executable medication mappings and raises the reviewed
+reference mapping from 95/120 to 100/120 fields. See
+[`analyses/2026-09-06-medication-pharmacy-profile.md`](analyses/2026-09-06-medication-pharmacy-profile.md).
 
-The remaining medication boundary is narrower but still important. No formal
-source association has been found for lot number, so `chargennummer` remains
-unmapped even though a general manufactured-material model can expose such a
-slot. The active UV Subordinate administration template
+Ingredient strength remains deliberately unmapped: the source is unconstrained
+text while the detail profile requires structured `RTO_PQ_PQ` numerator and
+denominator semantics. No grammar, unit normalization or denominator policy is
+published. The active UV Subordinate administration template
 `2.16.840.1.113883.10.21.4.6` exposes alternatives for timing plus
 `doseQuantity` and `rateQuantity`. Quantity normalization now preserves scalar
 magnitudes, ranges and units, and compiled interval quantities expose exact
@@ -95,6 +97,24 @@ the materialized `IVL_TS`/`PIVL_TS` branches and their compound occurrence
 constraints. They remain unmapped instead of being resolved by German/English
 path vocabulary or positional guessing. See
 [`analyses/2026-09-02-residual-mapping-boundaries.md`](analyses/2026-09-02-residual-mapping-boundaries.md).
+
+The event-related timing `offset` remains a strong structural candidate, but is
+not executable by itself: non-null `EIVL_TS` requires `event`, and source
+concept 528 has no proven correspondence to a target TimingEvent code. The
+outer Medikation `effectiveTime` is `NP`; start/stop therefore cannot be placed
+there as `low`/`high`. Subordinate interval leaves do not become start/stop
+semantics until an explicit association or reviewed rule selects one exact
+timing branch and its compound occurrence behavior.
+
+The reviewed mappings and their occurrence-shaped assignments validate, but
+the current synthetic whole-document fixture cannot yet exercise the rendered
+pharmacy subtree. Independent mandatory structural values have no executable
+source or reviewed default after DEC-026 correctly removed example-derived
+defaults: the fixture first stops at the required Act template
+`statusCode`, and a medication-only construction stops at Medikation
+`moodCode`. Reopening full rendering requires explicit profile policy or source
+evidence for those values; neither is inferred from ART-DECOR examples merely
+to make the fixture pass.
 
 The subordinate `SXPR_TS/comp` now exposes its XSD-defined `IVL_TS`, `PIVL_TS`,
 `EIVL_TS`, and recursive `SXPR_TS` choices. This closes the missing-physical-leaf
@@ -303,19 +323,20 @@ so neither can be filled.
 All three messages belong to rules on the C-CDA Medication Activity templates
 `2.16.840.1.113883.10.20.22.4.16` (`MedicationActivity` and
 `MedicationActivityV2`). Those templates are reachable in the assembled closure
-but hold no document location in the selected AKTIN document, whose effective
-medication branch is `UV Medication Information (simple)`. They are therefore
-classified as outside the selected closure: they stay listed in
+but hold no document location in the selected AKTIN document, whose reviewed
+effective medication branch is `UV Medication Information (detail)`. They are
+therefore classified as outside the selected closure: they stay listed in
 `generation_messages` and counted in
 `generation_messages_outside_selected_closure`, and they neither degrade the
 build nor deny `complete` (`DEC-010`, `DEC-019`). The generated stylesheet is
 executable, has no compilation errors and now reports `complete: true`.
 
-The reference mapping stays at 95/120 with no lost or gained mapped fields. The
-build diagnostics report 56 crawl-degraded artifacts, of which 3 affect the
-selected build: the AKTIN ValueSet `1.2.276.0.76.11.53`, its waived intension
-CodeSystem `1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00`, and the waived SPEC
-parent `template:2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00`.
+The reference mapping is now 100/120 after the five DEC-028 medication
+additions. The build diagnostics report 56 crawl-degraded artifacts, of which 3
+affect the selected build: the AKTIN ValueSet `1.2.276.0.76.11.53`, its waived
+intension CodeSystem
+`1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00`, and the waived SPEC parent
+`template:2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00`.
 
 The assembler restores the QName-string namespace declarations omitted by the
 publication transform, including the two distinct pharmaceutical namespaces.
@@ -424,7 +445,7 @@ The exact IHE Medicine Entry analysis artifact
 external-artifact blocker and must not be duplicated as a builtin. In the
 selected AKTIN document its 49 named constraints are registry evidence only:
 none has a CDA location or is renderable. The effective medication branch uses
-`UV Medication Information (simple)` instead, so forcing the IHE constraints
+the reviewed `UV Medication Information (detail)` choice instead, so forcing the IHE constraints
 onto that branch would invent a template relationship.
 
 The exact AKTIN/DIVI CodeSystem

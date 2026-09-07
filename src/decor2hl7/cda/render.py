@@ -30,16 +30,64 @@ ET.register_namespace("", HL7)
 ET.register_namespace("xsi", XSI)
 
 
-def _qname(name: str) -> str:
+def _qname(name: str, namespace_uri: str | None = None) -> str:
     # ART-DECOR uses XPath-like predicates to distinguish sibling constraint
     # branches (for example ``hl7:id[1]`` or a coded qualifier).  The predicate
     # selects the effective constraint; it is never part of the XML QName.
     name = name.split("[", 1)[0]
+    if namespace_uri:
+        return f"{{{namespace_uri}}}{name.split(':', 1)[-1]}"
     if name.startswith(("hl7:", "cda:")):
         return f"{{{HL7}}}{name.split(':', 1)[1]}"
+    if name.startswith("xsi:"):
+        return f"{{{XSI}}}{name.split(':', 1)[1]}"
     if name.startswith("xml:"):
         return f"{{http://www.w3.org/XML/1998/namespace}}{name.split(':', 1)[1]}"
     return name
+
+
+def _register_compiled_namespaces(document: list[Mapping[str, Any]]) -> None:
+    """Register stable prefixes carried by the compiled ART-DECOR QNames."""
+    claimed = {
+        "": HL7,
+        "xsi": XSI,
+        "xml": "http://www.w3.org/XML/1998/namespace",
+    }
+    pairs: set[tuple[str, str]] = set()
+
+    def collect(nodes: list[Mapping[str, Any]]) -> None:
+        for node in nodes:
+            prefix = str(node.get("namespace_prefix") or "")
+            uri = str(node.get("namespace_uri") or "")
+            if prefix and uri:
+                pairs.add((prefix, uri))
+            for attribute in node.get("attributes", []):
+                prefix = str(attribute.get("namespace_prefix") or "")
+                uri = str(attribute.get("namespace_uri") or "")
+                if prefix and uri:
+                    pairs.add((prefix, uri))
+            collect(list(node.get("children", [])))
+
+    collect(document)
+    registered_uris = set(claimed.values())
+    ET.register_namespace("", HL7)
+    ET.register_namespace("xsi", XSI)
+    for preferred, uri in sorted(pairs):
+        if uri in registered_uris:
+            continue
+        prefix = preferred
+        suffix = 2
+        while prefix in claimed and claimed[prefix] != uri:
+            prefix = f"{preferred}{suffix}"
+            suffix += 1
+        try:
+            ET.register_namespace(prefix, uri)
+        except ValueError:
+            # Invalid/reserved lexical prefixes do not affect expanded QName
+            # correctness; ElementTree will allocate a safe synthetic prefix.
+            continue
+        claimed[prefix] = uri
+        registered_uris.add(uri)
 
 
 def _cda_timestamp(value: str) -> str:
@@ -541,9 +589,15 @@ def _render_node_once(
         node_identity += f" [{source.get('template_id')}@{source.get('template_effective_date') or 'dynamic'}]"
 
     element = (
-        ET.Element(_qname(str(node.get("name") or "element")))
+        ET.Element(_qname(
+            str(node.get("name") or "element"),
+            str(node.get("namespace_uri") or "") or None,
+        ))
         if parent is None
-        else ET.SubElement(parent, _qname(str(node.get("name") or "element")))
+        else ET.SubElement(parent, _qname(
+            str(node.get("name") or "element"),
+            str(node.get("namespace_uri") or "") or None,
+        ))
     )
 
     if node.get("asserts"):
@@ -554,11 +608,20 @@ def _render_node_once(
         for attr in node.get("attributes", [])
         if attr.get("conditional_fixed")
     }
+    attribute_namespaces = {
+        str(attr.get("name") or ""): str(attr.get("namespace_uri") or "")
+        for attr in node.get("attributes", [])
+    }
     for key, value in node.get("fixed", {}).items():
         if str(key) in conditional_fixed_attributes:
             continue
         if value is not None:
-            element.set(_qname(str(key)), str(value))
+            element.set(
+                _qname(
+                    str(key), attribute_namespaces.get(str(key)) or None,
+                ),
+                str(value),
+            )
     if node.get("fixed_text") is not None:
         element.text = str(node.get("fixed_text"))
 
@@ -622,7 +685,12 @@ def _render_node_once(
                 and "boolean" in representation.get("logical_types", [])
             ):
                 value = "true" if bool(value) else "false"
-            element.set(_qname(name), str(value))
+            element.set(
+                _qname(
+                    name, str(attr.get("namespace_uri") or "") or None,
+                ),
+                str(value),
+            )
 
     assigned, target_name = _value_for_node(node, assignments)
     physical_target: Mapping[str, Any] | None = None
@@ -689,7 +757,9 @@ def _render_node_once(
         name = str(attr.get("name") or "")
         if (
             name and attr.get("optional") is False
-            and _qname(name) not in element.attrib
+            and _qname(
+                name, str(attr.get("namespace_uri") or "") or None,
+            ) not in element.attrib
         ):
             raise ValueError(
                 f"required CDA attribute @{name} on {node_identity} has no "
@@ -814,6 +884,7 @@ def emit(
     document = cda.get("document", [])
     if not document:
         raise ValueError("compiled CDA model contains no document element")
+    _register_compiled_namespaces(list(document))
 
     physical_values: dict[
         tuple[int, ...], tuple[Any, Mapping[str, Any]]

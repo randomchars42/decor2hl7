@@ -1022,6 +1022,30 @@ def _fetch_want(
     requested_key = _key(requested_want)
     key = _key(resolved_want)
     old = manifest.setdefault("resources", {}).get(key, {})
+    # An earlier dynamic request may already have frozen the exact revision
+    # now named by a reviewed profile rule. Reuse that checksum-verified
+    # representation instead of requiring a duplicate network fetch or file.
+    if not old.get("file"):
+        wanted_identity = _identity(resolved_want)
+        wanted_date = str(wanted_identity.get("effective_date") or "")
+        if wanted_date:
+            for candidate in manifest.setdefault("resources", {}).values():
+                if not isinstance(candidate, Mapping):
+                    continue
+                identity = candidate.get("identity", {})
+                if not isinstance(identity, Mapping):
+                    continue
+                if (
+                    candidate.get("status") == "ok"
+                    and candidate.get("file")
+                    and str(identity.get("type") or "")
+                    == str(wanted_identity.get("type") or "")
+                    and str(identity.get("id") or "")
+                    == str(wanted_identity.get("id") or "")
+                    and str(identity.get("effective_date") or "") == wanted_date
+                ):
+                    old = candidate
+                    break
     relative = str(old.get("file") or _filename(resolved_want))
     target = release_dir / relative
     display = _resource_label(resolved_want)

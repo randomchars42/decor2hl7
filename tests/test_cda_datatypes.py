@@ -1131,6 +1131,68 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(find_required(org, f"{{{HL7}}}id").get("root"), "1.2.3.4")
             self.assertEqual(find_required(org, f"{{{HL7}}}name").text, "Example ED")
 
+    def test_reused_template_exposes_occurrence_qualified_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "templates.xml"
+            source.write_text('''<decor>
+<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:left" minimumMultiplicity="0" maximumMultiplicity="1">
+      <include ref="leaf" flexibility="2026"/>
+    </element>
+    <element name="hl7:right" minimumMultiplicity="0" maximumMultiplicity="1">
+      <include ref="leaf" flexibility="2026"/>
+    </element>
+  </element>
+</template>
+<template id="leaf" effectiveDate="2026" name="Leaf">
+  <element name="hl7:name" datatype="ST" minimumMultiplicity="1"
+           maximumMultiplicity="1"/>
+</template>
+</decor>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {},
+                "fields": {
+                    "value": {"type": "text", "repeat_chain": []},
+                },
+            }
+            compiled = compile_cda([source], model)
+            shared = compiled["targets"]["Leaf.name"]
+            self.assertEqual(len(shared["locations"]), 2)
+            self.assertFalse(shared["writable"])
+            aliases = [
+                (name, target)
+                for name, target in compiled["targets"].items()
+                if target.get("occurrence_of") == "Leaf.name"
+            ]
+            self.assertEqual(len(aliases), 2)
+            self.assertTrue(all(target["writable"] for _, target in aliases))
+            left_name = next(
+                name for name, target in aliases
+                if compiled["targets"][target["occurrence_anchor"]].get(
+                    "element_name"
+                ) == "hl7:left"
+            )
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P1", "values": {"value": "left only"},
+                    "instances": {},
+                },
+                model,
+                compiled,
+                {"fields": {"value": left_name}},
+                {},
+            )
+            self.assertEqual(problems, [])
+            root = ET.fromstring(payload)
+            self.assertEqual(
+                find_required(root, f"{{{HL7}}}left/{{{HL7}}}name").text,
+                "left only",
+            )
+            self.assertIsNone(root.find(f"{{{HL7}}}right"))
+
     def test_active_section_title_and_narrative_follow_compiled_roles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "template.xml"
@@ -1907,6 +1969,128 @@ class CdaDatatypeTests(unittest.TestCase):
                     core_definition_paths=[bounded_schema],
                     cda_extensions=[{**extension, "maximum_multiplicity": 2}],
                 )
+
+    def test_reviewed_spec_choice_selects_exact_inherited_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "POCD_MT000040.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="ClinicalDocument" type="POCD_MT000040.ClinicalDocument"/>
+  <xs:complexType name="POCD_MT000040.ClinicalDocument"><xs:sequence>
+    <xs:element name="component" type="POCD_MT000040.Component3"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Component3"><xs:sequence>
+    <xs:element name="section" type="POCD_MT000040.Section"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Section"><xs:sequence>
+    <xs:element name="entry" type="POCD_MT000040.Entry" minOccurs="0"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Entry"><xs:sequence>
+    <xs:element name="observation" type="POCD_MT000040.Observation"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.Observation"><xs:sequence>
+    <xs:element name="value" type="ST" minOccurs="0"/>
+  </xs:sequence></xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            source = root / "project.xml"
+            source.write_text('''<project>
+  <template id="old" effectiveDate="2024" name="Old">
+    <element name="hl7:observation"><element name="hl7:value" id="old-value" datatype="ST"/></element>
+  </template>
+  <template id="new" effectiveDate="2025" name="New">
+    <element name="hl7:observation"><element name="hl7:value" id="new-value" datatype="ST"/></element>
+  </template>
+  <template id="base" effectiveDate="2025" name="Base">
+    <element name="hl7:section" id="section-root"><choice>
+      <element name="hl7:entry" contains="old" flexibility="2024" id="old-entry"/>
+      <element name="hl7:entry" contains="new" flexibility="2025" id="new-entry"/>
+    </choice></element>
+  </template>
+  <template id="section" effectiveDate="2026" name="Section">
+    <relationship type="SPEC" template="base" flexibility="2025"/>
+    <element name="hl7:section" id="section-root">
+      <element name="hl7:entry" contains="old" flexibility="2024" id="old-entry"/>
+    </element>
+  </template>
+  <template id="doc" effectiveDate="2026" name="Document">
+    <element name="hl7:ClinicalDocument"><element name="hl7:component" contains="section" flexibility="2026"/></element>
+  </template>
+</project>''', encoding="utf-8")
+            model = {"meta": {
+                "transaction_id": "tx", "transaction_effective_date": "2026",
+                "template_id": "doc", "template_effective_date": "2026",
+            }}
+            rule = {
+                "operation": "select_spec_branch",
+                "transaction_id": "tx", "transaction_effective_date": "2026",
+                "document_template_id": "doc",
+                "document_template_effective_date": "2026",
+                "parent_template_id": "section",
+                "parent_template_effective_date": "2026",
+                "parent_element_id": "section-root", "element_name": "hl7:entry",
+                "template_id": "new", "template_effective_date": "2025",
+                "replaces_template_id": "old",
+                "replaces_template_effective_date": "2024",
+                "reason": "Reviewed selection of the richer SPEC choice",
+            }
+            compiled = compile_cda(
+                [source], model, core_definition_paths=[schema],
+                cda_extensions=[rule],
+            )
+            new_value = next(
+                target for target in compiled["targets"].values()
+                if target.get("element_id") == "new-value"
+            )
+            old_value = next(
+                target for target in compiled["targets"].values()
+                if target.get("element_id") == "old-value"
+            )
+            self.assertTrue(new_value["writable"])
+            self.assertEqual(len(new_value["locations"]), 1)
+            self.assertFalse(old_value["writable"])
+            self.assertEqual(old_value["locations"], [])
+            self.assertEqual(compiled["reviewed_extensions"], [rule])
+
+            with self.assertRaisesRegex(ValueError, "not fetched exactly"):
+                compile_cda(
+                    [source], model, core_definition_paths=[schema],
+                    cda_extensions=[{**rule, "template_id": "missing"}],
+                )
+
+    def test_non_cda_design_namespace_is_preserved_and_rendered(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "project.xml"
+            source.write_text('''<project xmlns:pharmhl7="urn:hl7-org:pharm">
+  <template id="doc" effectiveDate="2026" name="Document">
+    <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+      <element name="pharmhl7:formCode" datatype="CE" minimumMultiplicity="0" maximumMultiplicity="1" id="form"/>
+    </element>
+  </template>
+</project>''', encoding="utf-8")
+            model: dict[str, Any] = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {},
+                "fields": {"form": {
+                    "name": "Form", "concept": "form", "type": "code",
+                    "repeat_chain": [], "value_sets": [], "codes": [],
+                }},
+            }
+            compiled = compile_cda([source], model)
+            target_name, target = target_at(compiled, "/pharmhl7:formCode")
+            self.assertEqual(target["namespace_uri"], "urn:hl7-org:pharm")
+            payload, problems = cda.emit(
+                {
+                    "key": "P1", "instances": {},
+                    "values": {"form": {"code": "TAB"}},
+                },
+                model, compiled, {"fields": {"form": target_name}}, {},
+            )
+            self.assertEqual(problems, [])
+            self.assertIn(b'xmlns:pharmhl7="urn:hl7-org:pharm"', payload)
+            form = find_required(
+                ET.fromstring(payload), ".//{urn:hl7-org:pharm}formCode",
+            )
+            self.assertEqual(form.get("code"), "TAB")
 
     def test_unknown_datatype_fails_with_identity_and_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

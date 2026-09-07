@@ -1,9 +1,9 @@
-"""Reviewed attachments of exact CDA templates to open template slots.
+"""Reviewed exact CDA profile overlays.
 
-ART-DECOR ``context`` metadata and an open template do not identify which
-standalone entry template belongs at a particular document location.  This
-module reads the explicit, transaction-scoped bridge used when that placement
-has been reviewed outside the upstream ART-DECOR containment graph.
+The overlays either attach a standalone template to a reviewed open slot or
+select one exact sibling branch already declared by an inherited ART-DECOR
+``SPEC`` choice.  Both operations are transaction and document scoped; neither
+is inferred from names alone.
 """
 
 from __future__ import annotations
@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, TypedDict
 
 
-class CdaExtension(TypedDict):
+class CdaExtension(TypedDict, total=False):
+    operation: str
     transaction_id: str
     transaction_effective_date: str
     document_template_id: str
@@ -27,10 +28,12 @@ class CdaExtension(TypedDict):
     minimum_multiplicity: int
     maximum_multiplicity: int | str
     conformance: str
+    replaces_template_id: str
+    replaces_template_effective_date: str
     reason: str
 
 
-_REQUIRED_TEXT = (
+_COMMON_REQUIRED_TEXT = (
     "transaction_id",
     "transaction_effective_date",
     "document_template_id",
@@ -41,10 +44,14 @@ _REQUIRED_TEXT = (
     "element_name",
     "template_id",
     "template_effective_date",
-    "conformance",
     "reason",
 )
+_ATTACHMENT_REQUIRED_TEXT = ("conformance",)
+_SPEC_BRANCH_REQUIRED_TEXT = (
+    "replaces_template_id", "replaces_template_effective_date",
+)
 _CONFORMANCE = {"O", "R", "M", "C"}
+_OPERATIONS = {"attach", "select_spec_branch"}
 
 
 def _multiplicity(value: Any, *, maximum: bool, label: str) -> int | str:
@@ -64,43 +71,62 @@ def _multiplicity(value: Any, *, maximum: bool, label: str) -> int | str:
 
 
 def normalize_extensions(rows: Iterable[Mapping[str, Any]]) -> list[CdaExtension]:
-    """Validate and canonicalize reviewed extension attachment records."""
+    """Validate and canonicalize reviewed CDA profile-overlay records."""
     result: list[CdaExtension] = []
     seen: set[tuple[str, ...]] = set()
     for index, raw in enumerate(rows):
+        operation = str(raw.get("operation") or "attach").strip()
+        if operation not in _OPERATIONS:
+            raise ValueError(
+                f"CDA extension rule {index} has unsupported operation "
+                f"{operation!r}"
+            )
+        required_text = list(_COMMON_REQUIRED_TEXT)
+        required_text.extend(
+            _ATTACHMENT_REQUIRED_TEXT
+            if operation == "attach" else _SPEC_BRANCH_REQUIRED_TEXT
+        )
         missing = [
-            name for name in _REQUIRED_TEXT
+            name for name in required_text
             if not str(raw.get(name) or "").strip()
         ]
-        missing.extend(
-            name for name in ("minimum_multiplicity", "maximum_multiplicity")
-            if name not in raw
-        )
+        if operation == "attach":
+            missing.extend(
+                name
+                for name in ("minimum_multiplicity", "maximum_multiplicity")
+                if name not in raw
+            )
         if missing:
             raise ValueError(
-                f"CDA extension attachment {index} is missing: {', '.join(missing)}"
+                f"CDA extension rule {index} is missing: {', '.join(missing)}"
             )
-        minimum = _multiplicity(
-            raw.get("minimum_multiplicity"), maximum=False,
-            label="minimum_multiplicity",
-        )
-        maximum = _multiplicity(
-            raw.get("maximum_multiplicity"), maximum=True,
-            label="maximum_multiplicity",
-        )
-        if not isinstance(minimum, int):
-            raise AssertionError("minimum multiplicity normalization returned '*'")
-        if isinstance(maximum, int) and maximum < minimum:
-            raise ValueError(
-                f"CDA extension attachment {index} has maximum_multiplicity "
-                "below minimum_multiplicity"
+        minimum: int | str | None = None
+        maximum: int | str | None = None
+        conformance = ""
+        if operation == "attach":
+            minimum = _multiplicity(
+                raw.get("minimum_multiplicity"), maximum=False,
+                label="minimum_multiplicity",
             )
-        conformance = str(raw.get("conformance") or "").strip().upper()
-        if conformance not in _CONFORMANCE:
-            raise ValueError(
-                f"CDA extension attachment {index} has unsupported conformance "
-                f"{conformance!r}"
+            maximum = _multiplicity(
+                raw.get("maximum_multiplicity"), maximum=True,
+                label="maximum_multiplicity",
             )
+            if not isinstance(minimum, int):
+                raise AssertionError(
+                    "minimum multiplicity normalization returned '*'"
+                )
+            if isinstance(maximum, int) and maximum < minimum:
+                raise ValueError(
+                    f"CDA extension attachment {index} has "
+                    "maximum_multiplicity below minimum_multiplicity"
+                )
+            conformance = str(raw.get("conformance") or "").strip().upper()
+            if conformance not in _CONFORMANCE:
+                raise ValueError(
+                    f"CDA extension attachment {index} has unsupported "
+                    f"conformance {conformance!r}"
+                )
         row = CdaExtension(
             transaction_id=str(raw.get("transaction_id") or "").strip(),
             transaction_effective_date=str(
@@ -120,21 +146,39 @@ def normalize_extensions(rows: Iterable[Mapping[str, Any]]) -> list[CdaExtension
             template_effective_date=str(
                 raw.get("template_effective_date") or ""
             ).strip(),
-            minimum_multiplicity=minimum,
-            maximum_multiplicity=maximum,
-            conformance=conformance,
             reason=str(raw.get("reason") or "").strip(),
         )
+        if operation == "attach":
+            row.update({
+                "minimum_multiplicity": minimum,
+                "maximum_multiplicity": maximum,
+                "conformance": conformance,
+            })
+            if raw.get("operation"):
+                row["operation"] = operation
+        else:
+            row.update({
+                "operation": operation,
+                "replaces_template_id": str(
+                    raw.get("replaces_template_id") or ""
+                ).strip(),
+                "replaces_template_effective_date": str(
+                    raw.get("replaces_template_effective_date") or ""
+                ).strip(),
+            })
         identity = (
+            operation,
             row["transaction_id"], row["transaction_effective_date"],
             row["document_template_id"], row["document_template_effective_date"],
             row["parent_template_id"], row["parent_template_effective_date"],
             row["parent_element_id"], row["element_name"],
             row["template_id"], row["template_effective_date"],
+            row.get("replaces_template_id", ""),
+            row.get("replaces_template_effective_date", ""),
         )
         if identity in seen:
             raise ValueError(
-                f"duplicate CDA extension attachment for {row['template_id']} "
+                f"duplicate CDA extension rule for {row['template_id']} "
                 f"at {row['parent_template_id']}#{row['parent_element_id']}"
             )
         seen.add(identity)
@@ -145,7 +189,7 @@ def normalize_extensions(rows: Iterable[Mapping[str, Any]]) -> list[CdaExtension
 def load_extensions(
     path: Path | None, transaction: Mapping[str, str],
 ) -> list[CdaExtension]:
-    """Load attachments for the exact selected transaction.
+    """Load profile overlays for the exact selected transaction.
 
     Other transaction records may coexist in the same acquisition-wide file,
     but every record is validated so stale malformed policy is visible.

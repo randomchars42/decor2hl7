@@ -29,9 +29,9 @@ MAX_GENERATION_MESSAGES = 3
 MAX_CRAWL_DEGRADED = 56
 MAX_UNAVAILABLE_ARTIFACTS = 20
 EXPECTED_UNRESOLVED_TEMPLATES = 1
-ASSEMBLED_SHA256 = "dcc0192b2a886ba6787b1b6425f0dd94ef62140dcecd618e5d10e1779bec184c"
+ASSEMBLED_SHA256 = "c8540830e76c9aff7f6ad51d8d5ca596833f41e35f906b859909dcc69f7cc766"
 SCHEMATRON_SHA256 = "05165794709a99ee12ba697b251499e3c3811ebee315344f6b3166039fa4fd99"
-VALIDATOR_SHA256 = "1eab4a36786835500c7a264454de9cc632e64515c7384261389fedc05cdc3a76"
+VALIDATOR_SHA256 = "e85facc96502027591b3b9c6240513f38e286ea4926a043a446985c85ebb9ad5"
 
 
 class ReferenceClosureTests(unittest.TestCase):
@@ -82,10 +82,11 @@ class ReferenceClosureTests(unittest.TestCase):
         parity = declared_endpoint_parity(
             inputs["templates"], cda, selected_closure_templates(cda)
         )
-        self.assertEqual(parity["declared"], 2022)
-        self.assertEqual(parity["compiled"], 2001)
-        self.assertEqual(parity["declared_only"], 24)
-        self.assertEqual(len(parity["fixed_structural_attributes"]), 24)
+        self.assertEqual(parity["declared"], 2234)
+        self.assertEqual(parity["compiled"], 2213)
+        self.assertEqual(parity["declared_only"], 26)
+        self.assertEqual(len(parity["fixed_structural_attributes"]), 25)
+        self.assertEqual(len(parity["reviewed_branch_replacements"]), 1)
         self.assertEqual(parity["unexpected_missing"], [])
 
     def test_unmapped_fields_have_reproducible_possible_targets(self) -> None:
@@ -110,7 +111,7 @@ class ReferenceClosureTests(unittest.TestCase):
         self.assertTrue(all(value["items"] for value in inventories.values()))
         self.assertEqual(
             {value["document_pool_size"] for value in inventories.values()},
-            {873},
+            {1059},
         )
 
         xray_path = (
@@ -176,7 +177,7 @@ class ReferenceClosureTests(unittest.TestCase):
         )
         self.assertIsNotNone(inventory)
         assert inventory is not None
-        self.assertEqual(inventory["document_pool_size"], 873)
+        self.assertEqual(inventory["document_pool_size"], 1059)
         by_name = {item["target"]: item for item in inventory["items"]}
         parent = by_name["Problemobservationcedis.effectiveTime"]
         low = by_name[

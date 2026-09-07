@@ -155,9 +155,13 @@ Important rules retained from the prototype:
     satisfies a required dependency. Waivers are settled but remain
     non-successful and degraded, and never satisfy one (`DEC-012`).
 16. Add a target named by `config/cda-extensions.json` as an exact structural
-    dependency only after the record is scoped to the selected transaction;
-    snapshot the normalized record in `closure.json` for reproducible build
-    input. Generic template context and project evidence never create this edge.
+    dependency only after the profile-overlay record is scoped to the selected
+    transaction; snapshot the normalized record in `closure.json` for
+    reproducible build input. An `attach` operation still requires an open CDA
+    core slot. A `select_spec_branch` operation instead requires that the exact
+    selected and replacement branches are siblings of one inherited `SPEC`
+    choice at the same parent element. Generic context, names and project
+    evidence never create either edge or selection.
 17. Resolve a reviewed malformed identity only through an exact catalog
     `alias`; retain both keys and satisfy the published key only while the
     corrected target is successful (`DEC-022`).
@@ -527,6 +531,15 @@ transaction/datatype Schematron. It verifies validator and package provenance
 before use and treats incomplete Schematron generation as failure. Validation
 results do not select mappings; only the supporting constraint evidence above
 may strengthen an already existing bridge.
+
+For a non-CDA namespace selected by the compiled exact profile, the gate first
+checks every foreign element and attribute against the compiled physical paths.
+The CDA/SDTC XSD phase receives a structural projection with only those
+reviewed foreign elements and attributes removed; the generated exact
+Schematron still receives the unchanged original. This keeps the base-XSD claim
+accurate when the pinned
+package has no Pharmacy schema and does not present projection as validation
+against that missing schema.
 
 Completion rules do not activate optional branches. They cannot nullify
 attributes, optional targets, complex elements, or mandatory constraints that

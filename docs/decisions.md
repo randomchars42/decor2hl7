@@ -42,6 +42,7 @@ is not necessarily an accepted clinical policy.
 | DEC-025 | Conservative ordinal evidence extraction | accepted | verified |
 | DEC-026 | ART-DECOR examples are non-executable instance data | accepted | verified |
 | DEC-027 | Bounded association identity-lineage closure | accepted | verified |
+| DEC-028 | Exact SPEC-choice overlays and namespace-aware profile extensions | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -378,9 +379,10 @@ The IHE Medicine Entry
 builtin: its exact analysis form is already resolved through the `ch-pharm-`
 source hint and satisfies dependency availability under `DEC-004`. The missing
 source form is optional evidence. Its constraints remain unlocated in the
-selected AKTIN document, whose effective medication branch uses
-`UV Medication Information (simple)`; external-artifact handling must not be
-used to alter that template relationship.
+selected AKTIN document. DEC-028 subsequently selects the sibling Universal
+Medication Information detail branch by exact inherited `SPEC` evidence;
+external-artifact handling still must not be used to alter that template
+relationship.
 
 Evidence: `docs/analyses/2026-08-30-external-artifact-phase-1.md`,
 `docs/analyses/2026-08-30-medication-mapping-plan.md`,
@@ -560,11 +562,12 @@ compatibility for a scalar candidate, using the same occurrence check as
 mapping validation. This retains one shared medication section and one entry per
 source medication while making formally associated payload fields actionable.
 
-Applied to the fetched medication evidence, the generic mechanism selects
-manufactured-material name, product code, dosage narrative and route. It does
-not select lot number because no source association to that target has been
-found. The mapping and renderer contain no medication-class, template-OID or
-field-name exception.
+Applied to the then-effective simple medication branch, the generic mechanism
+selects manufactured-material name, product code, dosage narrative and route.
+It did not select lot number because that branch supplied no proven target.
+DEC-028 subsequently makes the exact detail branch and its reviewed lot mapping
+available without changing this generic projection rule. The mapping and
+renderer contain no medication-class, template-OID or field-name exception.
 
 A 2026-09-03 active-profile re-review found no candidate withheld by the
 one-slot or unique-nearest-occurrence gates. Sixty relevant static-association
@@ -807,7 +810,8 @@ The first applied rule is the normative `EIVL_TS` constraint
 `@nullFlavor or hl7:event`. It downgrades the medication event offset from an
 executable selection to a review-required candidate because source concept 528
 has no proven correspondence to the target TimingEvent domain. No event code or
-date is invented. The five unaffected medication mappings remain executable.
+date is invented. The five mappings present when this decision was accepted
+remain executable; DEC-028 later adds five independent detail-product mappings.
 
 This decision encodes one verified datatype invariant. DEC-019 now provides
 the independent package gate; its upstream source and terminology findings do
@@ -1049,6 +1053,49 @@ Evidence: `src/decor2hl7/retrieval/references.py`,
 `src/decor2hl7/retrieval/fetch.py`, `src/decor2hl7/retrieval/artifacts.py`,
 `src/decor2hl7/compile/mapping.py`, `tests/test_core.py`,
 `docs/analyses/2026-09-06-association-identity-lineage.md`.
+
+## DEC-028 — Exact SPEC-choice overlays and namespace-aware profile extensions
+
+**Decision:** accepted
+**Implementation:** verified
+
+A reviewed `select_spec_branch` rule may replace one exact branch explicitly
+selected by a specialized template with one exact sibling declared at the same
+host element by an inherited `SPEC` choice. The rule fixes transaction,
+document, parent, host element, old branch and new branch identities and carries
+a review reason. Compilation fails unless the old branch is the one currently
+selected, the new branch was fetched exactly, the parent is explicitly
+reachable and open, and one exact inherited choice proves the sibling
+relationship. The operation does not infer clinical mappings from names or
+combine both choice branches.
+
+ART-DECOR design names retain their in-scope prefix-to-URI declarations in the
+compiled node and target model. The renderer uses those URIs for expanded XML
+names. A template-local target reused at several physical locations remains
+non-writable; when each occurrence has a distinct target from a containing
+template, the compiler exposes an `anchor::target` alias for that one physical
+location. This preserves the no-write-to-ambiguous-target invariant while
+allowing reviewed mappings to address a direct occurrence.
+
+The pinned CDA R2 XSD package has no Pharmacy schema. `validate-cda` therefore
+checks foreign elements and attributes against the exact compiled physical
+paths, validates a projection with only those reviewed foreign nodes
+removed against the CDA/SDTC XSD, and applies the exact generated transaction
+Schematron to the unchanged original document. This is not presented as
+Pharmacy-XSD validation. Supplying and pinning such a schema would permit a
+stronger future gate without changing the mapping decision.
+
+An exact dependency request may reuse an already frozen successful dynamic
+artifact only when kind, id and resolved effective date match and its checksum
+still validates. This avoids a network-only duplicate cache entry without
+weakening exact revision identity.
+
+Evidence: `src/decor2hl7/cda/extensions.py`,
+`src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
+`src/decor2hl7/conformance.py`, `src/decor2hl7/retrieval/xml.py`,
+`src/decor2hl7/retrieval/fetch.py`, `tests/test_cda_datatypes.py`,
+`tests/test_conformance.py`, `tests/test_core.py`,
+`docs/analyses/2026-09-06-medication-pharmacy-profile.md`.
 
 ## Maintenance rule
 

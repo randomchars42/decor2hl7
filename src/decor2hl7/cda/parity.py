@@ -32,7 +32,11 @@ def declared_endpoint_parity(
     Fixed structural attributes are not scalar targets.  The compiler folds
     them into the owning node's ``fixed`` map. Only fixed CDA/RIM structural
     roles are admitted as declared-only records; the reference guide currently
-    uses the three value combinations documented by the standing test.
+    uses the value combinations documented by the standing test. Reviewed
+    ``select_spec_branch`` overlays likewise leave the replaced SPEC choice in
+    the published declaration surface while intentionally removing that host
+    from the compiled document. Both cases are reported explicitly rather than
+    counted as unexpected loss.
     """
     selected = {str(value) for value in selected_template_ids if value}
     templates = collect_templates(template_paths)
@@ -52,6 +56,12 @@ def declared_endpoint_parity(
                     "kind": kind,
                     "name": str(node.get("name") or ""),
                     "value": str(node.get("value") or ""),
+                    "contains": str(node.get("contains") or ""),
+                    "flexibility": str(
+                        node.get("flexibility")
+                        or node.get("tmeffectiveDate")
+                        or ""
+                    ),
                 }
                 if record not in declarations[(template_id, element_id)]:
                     declarations[(template_id, element_id)].append(record)
@@ -72,6 +82,19 @@ def declared_endpoint_parity(
     compiled_keys = set(compiled)
     missing: list[dict[str, Any]] = []
     fixed_structural_attributes: list[dict[str, Any]] = []
+    reviewed_branch_replacements: list[dict[str, Any]] = []
+    reviewed_replaced_branches = {
+        (
+            str(extension.get("parent_template_id") or ""),
+            str(extension.get("parent_template_effective_date") or ""),
+            str(extension.get("element_name") or ""),
+            str(extension.get("replaces_template_id") or ""),
+            str(extension.get("replaces_template_effective_date") or ""),
+        )
+        for extension in cda.get("reviewed_extensions", [])
+        if isinstance(extension, Mapping)
+        and extension.get("operation") == "select_spec_branch"
+    }
     for key in sorted(declared_keys - compiled_keys):
         records = declarations[key]
         item = {
@@ -91,6 +114,15 @@ def declared_endpoint_parity(
             for record in records
         ):
             fixed_structural_attributes.append(item)
+        elif records and any(
+            (
+                key[0], record["effective_date"], record["name"],
+                record["contains"], record["flexibility"],
+            )
+            in reviewed_replaced_branches
+            for record in records
+        ):
+            reviewed_branch_replacements.append(item)
         else:
             missing.append(item)
 
@@ -108,5 +140,6 @@ def declared_endpoint_parity(
         "declared_only": len(declared_keys - compiled_keys),
         "compiler_only": compiler_only,
         "fixed_structural_attributes": fixed_structural_attributes,
+        "reviewed_branch_replacements": reviewed_branch_replacements,
         "unexpected_missing": missing,
     }

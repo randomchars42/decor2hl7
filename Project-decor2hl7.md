@@ -183,7 +183,7 @@ WORKSPACE/
 │
 ├── config/                         acquisition-wide configuration
 │   ├── sources.json                optional repository/source hints
-│   └── cda-extensions.json         reviewed exact open-template attachments
+│   └── cda-extensions.json         reviewed exact CDA profile overlays
 │
 ├── spec/                           downloaded specification cache
 │   └── <release>/
@@ -263,11 +263,13 @@ ART-DECOR access uses IPv4 by default because the observed IPv6 route is substan
 
 Retrieval recursively follows the selected transaction as far as required and sensible, including datasets, templates, ValueSets, CodeSystems, concepts, `include`, `contains`, and template derivation/reference relationships.
 
-A reviewed CDA extension attachment may add one exact template dependency to
-an explicitly reachable open parent. It must be transaction-, document-,
-parent-, element- and revision-specific, include a review reason, and pass CDA
-core slot validation during compilation. Open-template status or generic
-`context="**"` metadata alone never creates a dependency.
+A reviewed CDA profile overlay may add one exact template dependency to an
+explicitly reachable open parent or replace one selected branch with an exact
+sibling declared by the same inherited `SPEC` choice. It must be transaction-,
+document-, parent-, element- and revision-specific, include a review reason,
+and pass its operation-specific structural checks during compilation.
+Open-template status, generic `context="**"` metadata, names and project
+membership alone never create a dependency or select a branch.
 
 Already cached successful artifacts are not fetched again. Settled missing artifacts are remembered so they are not repeatedly probed unless explicitly requested.
 
@@ -358,7 +360,7 @@ A target implementation compiles the selected HL7 output specification into a fo
 
 ### CDA target
 
-The current CDA target compiles exact reachable templates, recursive `SPEC` refinement, `INCLUDE` / `CONTAINS`, fixed constraints, vocabulary, and assertions.
+The current CDA target compiles exact reachable templates, recursive `SPEC` refinement, `INCLUDE` / `CONTAINS`, reviewed exact profile overlays, fixed constraints, vocabulary, and assertions.
 
 It also expands CDA/RIM structural classes and the HL7 V3 datatypes declared by
 that effective template from the pinned CDA R2 XSD graph cached under `spec/`.
@@ -369,6 +371,11 @@ CDA/RIM particle and is not accompanied by a second generic child. Structural
 CDA nodes and explicit writable value targets remain distinct; mapping and
 rendering consume each target's compiled value representation instead of
 guessing from XML path names, class names, or datatype names.
+
+ART-DECOR design-prefix namespace bindings are compiled with their elements and
+attributes. Reused included templates remain ambiguous at template scope, but
+receive occurrence-qualified aliases when a distinct containing-template
+target proves one physical location.
 
 It distinguishes:
 
@@ -605,11 +612,12 @@ access policy are chosen separately.
    mapping made `Agens` executable at the bound allergen `playingEntity/code`:
    decide description/narrative placement and represent the derived diagnosis
    flags without treating them as substance codes.
-2. Continue the remaining medication work after the common-slot projection:
-   retain the now executable product name/code, dosage narrative and route;
-   establish formal lot-number evidence; represent detailed dose/rate/schedule
-   compound values; and align the repeatable subordinate-administration branch
-   while preserving the current section-entry `for_each` rule.
+2. Continue the remaining medication work after the exact detail-branch
+   overlay: retain the ten executable product and medication mappings;
+   establish strength parsing/unit/denominator policy; represent detailed
+   dose/rate/schedule compound values; and align the repeatable
+   subordinate-administration branch while preserving the current
+   section-entry `for_each` rule.
 3. Keep retrieval closure bounded while improving strong owner/project resolution.
 4. Stabilize artifact/form and transaction/terminology compiler contracts.
 5. Keep target-neutral dataset semantics separate from CDA semantics.

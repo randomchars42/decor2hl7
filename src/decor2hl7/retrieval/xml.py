@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from io import StringIO
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -12,6 +13,7 @@ KNOWN_PREFIXES = {
     "xsi": "http://www.w3.org/2001/XMLSchema-instance",
     "xml": "http://www.w3.org/XML/1998/namespace",
     "pharm": "urn:ihe:pharm",
+    "pharmhl7": "urn:hl7-org:pharm",
     "art": "urn:art-decor:example",
 }
 
@@ -62,6 +64,41 @@ def repair_namespaces(text: str) -> tuple[str, list[str]]:
 def parse_text(text: str) -> tuple[ET.Element, list[str]]:
     repaired, repairs = repair_namespaces(text)
     return ET.fromstring(repaired), repairs
+
+
+def template_namespace_maps(text: str) -> dict[tuple[str, str], dict[str, str]]:
+    """Return the in-scope prefix bindings for each exact template.
+
+    ART-DECOR stores XML design names such as ``pharmhl7:formCode`` in
+    attribute values.  ElementTree correctly parses the surrounding XML but
+    does not resolve prefixes embedded in those strings.  Capture the lexical
+    namespace scope before that information is lost so the CDA compiler can
+    retain expanded QName identity for rendering and validation.
+    """
+    repaired, _ = repair_namespaces(text)
+    pending: dict[str, str] = {}
+    scopes: list[dict[str, str]] = []
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    for event, item in ET.iterparse(
+        StringIO(repaired), events=("start-ns", "start", "end")
+    ):
+        if event == "start-ns":
+            prefix, uri = item
+            pending[str(prefix or "")] = str(uri)
+            continue
+        if event == "start":
+            scope = dict(scopes[-1]) if scopes else {}
+            scope.update(pending)
+            pending.clear()
+            scopes.append(scope)
+            if local(item.tag) == "template" and item.get("id"):
+                result[(
+                    item.get("id") or "",
+                    item.get("effectiveDate") or "",
+                )] = dict(scope)
+            continue
+        scopes.pop()
+    return result
 
 
 def parse_file(path: Path) -> tuple[ET.Element, list[str]]:

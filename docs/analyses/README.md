@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-06-medication-pharmacy-profile.md`](2026-09-06-medication-pharmacy-profile.md)
+  records the exact inherited simple/detail medication choice, the reviewed
+  detail-branch selection, Pharmacy namespace and occurrence-qualified target
+  support, the newly executable form/lot/ingredient semantics, and why
+  ingredient strength plus medication start/stop remain unresolved.
 - [`2026-09-06-association-identity-lineage.md`](2026-09-06-association-identity-lineage.md)
   recovers exact static-association endpoint ancestry without crawling foreign
   datasets, proves the historical insurance-number bridge, keeps it review-only
