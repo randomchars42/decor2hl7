@@ -539,6 +539,12 @@ Examples:
 diagnosis row. Values from one row stay in the same CDA occurrence.
 ```
 
+Reviewed scalar target defaults must state their literal value and reason. They
+complete only an already-active required target, repeat in every active
+occurrence, and yield to a mapped value in that occurrence. Generated reports
+must distinguish them from `nullFlavor` defaults and must not count either form
+as dataset evidence.
+
 ```markdown
 `medication-occurrences`: create one medication-section `entry` for every input
 medication occurrence. All entries share one enclosing medication section, and

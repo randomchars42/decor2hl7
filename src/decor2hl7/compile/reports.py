@@ -390,6 +390,11 @@ def _cda_coverage_tree(
                     default = mapping.get("target_defaults", {}).get(row["name"], {})
                     if isinstance(default, Mapping) and default.get("nullFlavor"):
                         consequence += f"; default nullFlavor=\"{default['nullFlavor']}\""
+                    elif isinstance(default, Mapping) and "value" in default:
+                        consequence += (
+                            "; default value="
+                            + json.dumps(default["value"], ensure_ascii=False)
+                        )
                 leaf = _leaf(row["target"].get("path") or row["target"].get("element_name"))
                 lines.append(
                     f"{status:<3}{area_stem}{entity_stem[len(area_stem):]}{branch} "
@@ -1591,10 +1596,17 @@ def _structural_and_completion_lines(
             target = targets.get(str(name), {}) if isinstance(targets, Mapping) else {}
             label = target.get("template_display_name") or target.get("template_name") or "CDA"
             leaf = _leaf(target.get("path")) or str(name).split(".")[-1]
-            flavor = rule.get("nullFlavor") if isinstance(rule, Mapping) else ""
+            if isinstance(rule, Mapping) and "nullFlavor" in rule:
+                rendered_default = f'nullFlavor="{rule.get("nullFlavor") or ""}"'
+            elif isinstance(rule, Mapping) and "value" in rule:
+                rendered_default = (
+                    "value=" + json.dumps(rule.get("value"), ensure_ascii=False)
+                )
+            else:
+                rendered_default = "invalid default"
             reason = rule.get("reason") if isinstance(rule, Mapping) else ""
             lines.append(
-                f"| {label} → {leaf} `{{{name}}}` | `nullFlavor=\"{flavor}\"` | "
+                f"| {label} → {leaf} `{{{name}}}` | `{rendered_default}` | "
                 f"{reason or 'Reviewed target-specific completion rule.'} |"
             )
         lines.append("")

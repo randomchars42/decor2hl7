@@ -179,8 +179,8 @@ def _physical_default_target(cda: Mapping[str, Any], configured: str) -> str:
 
 def target_default_values(
     cda: Mapping[str, Any], mapping: Mapping[str, Any]
-) -> dict[str, dict[str, str]]:
-    """Resolve reviewed per-target null-flavor defaults to physical targets."""
+) -> dict[str, Any]:
+    """Resolve reviewed per-target completion values to physical targets."""
     errors = validate_target_defaults(cda, mapping)
     if errors:
         raise ValueError("invalid CDA target defaults:\n" + "\n".join(errors))
@@ -189,7 +189,7 @@ def target_default_values(
         return {}
     if not isinstance(raw, Mapping):
         raise ValueError("cda-mapping: target_defaults must be an object")
-    result: dict[str, dict[str, str]] = {}
+    result: dict[str, Any] = {}
     owners: dict[str, str] = {}
     for configured, rule in raw.items():
         name = str(configured)
@@ -197,14 +197,11 @@ def target_default_values(
             raise ValueError(
                 f"cda-mapping: target_defaults[{name!r}] must be an object"
             )
-        flavor = str(rule.get("nullFlavor") or "")
-        if flavor not in NULL_FLAVORS:
-            raise ValueError(
-                f"cda-mapping: target_defaults[{name!r}] has invalid "
-                f"nullFlavor {flavor!r}"
-            )
         physical = _physical_default_target(cda, name)
-        value = {"nullFlavor": flavor}
+        value = (
+            {"nullFlavor": str(rule.get("nullFlavor") or "")}
+            if "nullFlavor" in rule else rule.get("value")
+        )
         if physical in result and result[physical] != value:
             raise ValueError(
                 f"cda-mapping: target defaults {owners[physical]!r} and {name!r} "
@@ -213,6 +210,45 @@ def target_default_values(
         result[physical] = value
         owners[physical] = name
     return result
+
+
+def _validate_scalar_default(
+    prefix: str, target: Mapping[str, Any], value: Any,
+) -> list[str]:
+    """Validate one non-null construction value against its compiled slot."""
+    if value is None or isinstance(value, (Mapping, list, tuple, set)):
+        return [f"{prefix}.value must be a non-null JSON scalar"]
+    representation = target.get("value_representation", {})
+    if not isinstance(representation, Mapping) or not representation.get("kind"):
+        return [f"{prefix} target has no scalar value representation"]
+    kind = str(representation.get("kind") or "")
+    logical_types = {str(item) for item in target.get("logical_types", [])}
+    if kind == ValueRepresentationKind.IDENTIFIER.value:
+        return [f"{prefix} cannot use a scalar value for an identifier target"]
+    if kind == ValueRepresentationKind.BOOLEAN.value or (
+        kind == ValueRepresentationKind.XML_ATTRIBUTE.value
+        and "boolean" in logical_types
+    ):
+        if not isinstance(value, bool):
+            return [f"{prefix}.value must be boolean for this CDA target"]
+    elif kind == ValueRepresentationKind.QUANTITY.value:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return [f"{prefix}.value must be numeric for this CDA target"]
+    elif kind == ValueRepresentationKind.CODED.value and not isinstance(value, str):
+        return [f"{prefix}.value must be a code string for this CDA target"]
+    elif kind == ValueRepresentationKind.TIMESTAMP.value and not isinstance(value, str):
+        return [f"{prefix}.value must be a timestamp string for this CDA target"]
+
+    allowed_codes = {
+        str(item.get("code"))
+        for item in target.get("codes", [])
+        if isinstance(item, Mapping) and item.get("code") is not None
+    }
+    if allowed_codes and str(value) not in allowed_codes:
+        return [
+            f"{prefix}.value {value!r} is outside the target's compiled code constraint"
+        ]
+    return []
 
 
 def validate_target_defaults(
@@ -233,34 +269,43 @@ def validate_target_defaults(
         return errors
 
     targets = cda.get("targets", {})
-    resolved: dict[str, tuple[str, str]] = {}
+    resolved: dict[str, tuple[str, Any]] = {}
     for configured, rule in raw.items():
         name = str(configured)
         prefix = f"cda-mapping: target_defaults[{name!r}]"
         if not isinstance(rule, Mapping):
             errors.append(f"{prefix} must be an object")
             continue
+        has_null_flavor = "nullFlavor" in rule
+        has_value = "value" in rule
+        if has_null_flavor == has_value:
+            errors.append(
+                f"{prefix} must contain exactly one of nullFlavor or value"
+            )
         flavor = str(rule.get("nullFlavor") or "")
-        if flavor not in NULL_FLAVORS:
+        if has_null_flavor and flavor not in NULL_FLAVORS:
             errors.append(f"{prefix} has invalid nullFlavor {flavor!r}")
         reason = rule.get("reason")
         if reason is not None and not isinstance(reason, str):
             errors.append(f"{prefix}.reason must be text")
+        if has_value and (not isinstance(reason, str) or not reason.strip()):
+            errors.append(f"{prefix}.reason must be non-empty text for a value default")
 
         physical = _physical_default_target(cda, name)
         target = targets.get(physical)
         if not isinstance(target, Mapping):
             errors.append(f"{prefix} references unknown CDA target {physical!r}")
             continue
+        resolved_value: Any = (
+            {"nullFlavor": flavor} if has_null_flavor else rule.get("value")
+        )
         previous = resolved.get(physical)
-        if previous and previous[1] != flavor:
+        if previous and previous[1] != resolved_value:
             errors.append(
                 f"{prefix} conflicts with target_defaults[{previous[0]!r}]; both "
                 f"resolve to {physical!r}"
             )
-        resolved[physical] = (name, flavor)
-        if target.get("kind") != "element":
-            errors.append(f"{prefix} cannot apply nullFlavor to an attribute")
+        resolved[physical] = (name, resolved_value)
         if target.get("prohibited") or not target.get("writable"):
             errors.append(f"{prefix} references a prohibited/non-renderable target")
         if len(target.get("locations", [])) != 1:
@@ -273,12 +318,22 @@ def validate_target_defaults(
             errors.append(
                 f"{prefix} is optional; omit an unmapped optional element instead"
             )
-        if target.get("mandatory") or str(target.get("conformance") or "").upper() == "M":
-            errors.append(f"{prefix} target does not permit a nullFlavor default")
-        if target.get("has_children"):
-            errors.append(
-                f"{prefix} targets a complex element; default its required leaf instead"
-            )
+        if has_null_flavor:
+            if target.get("kind") != "element":
+                errors.append(f"{prefix} cannot apply nullFlavor to an attribute")
+            if target.get("mandatory") or str(target.get("conformance") or "").upper() == "M":
+                errors.append(f"{prefix} target does not permit a nullFlavor default")
+            if target.get("has_children"):
+                errors.append(
+                    f"{prefix} targets a complex element; default its required leaf instead"
+                )
+        elif has_value:
+            errors.extend(_validate_scalar_default(prefix, target, rule.get("value")))
+            if target.get("non_null_requires"):
+                errors.append(
+                    f"{prefix} target has compound non-null companions and cannot "
+                    "use a scalar value default"
+                )
     return errors
 
 

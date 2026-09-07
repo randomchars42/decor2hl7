@@ -185,7 +185,8 @@ class ReferenceClosureTests(unittest.TestCase):
         ]
         self.assertFalse(parent["available"])
         self.assertTrue(parent["conformance_conflicts"])
-        self.assertTrue(low["available"])
+        self.assertFalse(low["available"])
+        self.assertEqual(low["claimed_by"], [path])
         self.assertEqual(low["conformance_conflicts"], [])
 
     @staticmethod

@@ -2660,7 +2660,7 @@ def _certainty_mapping(
                 "map": {alias: True for alias, code in aliases.items() if code == "A"},
             },
         })
-    target_defaults: dict[str, dict[str, str]] = {}
+    target_defaults: dict[str, dict[str, Any]] = {}
     low = sibling("/hl7:effectiveTime/hl7:low")
     low_target = cda.get("targets", {}).get(low, {}) if low else {}
     low_required = bool(low_target.get("mandatory")) or int(low_target.get("min") or 0) >= 1
@@ -4177,7 +4177,10 @@ def cda_datapoints(
             "dataset_fields": [],
         })
         datapoint["default"] = {
-            "nullFlavor": default.get("nullFlavor"),
+            **(
+                {"nullFlavor": default.get("nullFlavor")}
+                if "nullFlavor" in default else {"value": default.get("value")}
+            ),
             **({"reason": default["reason"]} if default.get("reason") else {}),
         }
     return result

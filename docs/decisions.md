@@ -1097,6 +1097,39 @@ Evidence: `src/decor2hl7/cda/extensions.py`,
 `tests/test_conformance.py`, `tests/test_core.py`,
 `docs/analyses/2026-09-06-medication-pharmacy-profile.md`.
 
+## DEC-029 — Reviewed scalar CDA construction defaults
+
+**Decision:** accepted
+**Implementation:** verified
+
+`target_defaults` may supply either a CDA `nullFlavor` or one reviewed JSON
+scalar `value`, but never both. A scalar default requires a non-empty review
+reason and is limited to one exact, writable, required scalar target. Its type
+must match the compiled value representation, and a compiled finite code
+constraint must admit a coded value. Identifier values and targets with
+compound non-null companions remain excluded because one scalar cannot satisfy
+their construction semantics.
+
+A scalar default is completion policy, not source data: it never activates an
+otherwise unused optional branch. It is applied independently in every active
+occurrence, including repeated medication entries. A real mapped value wins in
+the same occurrence, allowing a later source discriminator to replace the
+default without changing renderer policy.
+
+For the selected emergency-department transaction, the CEDIS Problem Concern
+Act uses `statusCode="active"` while the presenting complaint is tracked;
+`completed` would require explicit closure evidence and would pair with the
+concern's `effectiveTime/high`. Medication currently covers only medication
+given during treatment in the emergency department, so its reviewed
+`moodCode` is `EVN`. Future medication history and future recommendations must
+add a per-medication three-way dataset field. Given-in-ED and medication-history
+entries map to `EVN`; future recommendations map to `INT`. Start/stop timestamps
+do not substitute for that source distinction.
+
+Evidence: `src/decor2hl7/bindings.py`, `src/decor2hl7/cda/render.py`,
+`tests/test_core.py`,
+`docs/analyses/2026-09-07-reviewed-scalar-target-defaults.md`.
+
 ## Maintenance rule
 
 A pull request that changes project semantics must update the affected decision
