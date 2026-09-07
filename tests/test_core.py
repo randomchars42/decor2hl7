@@ -2848,6 +2848,27 @@ class CoreTests(unittest.TestCase):
                     **target("0.0.3", "ST", 0),
                     "path": "hl7:observation/hl7:comment",
                 },
+                "Diagnosis.moodCode": {
+                    **target("0.0.100000", "cs"),
+                    "kind": "attribute", "mandatory": True,
+                    "path": "hl7:observation/@moodCode",
+                },
+                "Diagnosis.statusCode": {
+                    **target("0.0.4", "CS"),
+                    "mandatory": True, "has_children": True,
+                    "path": "hl7:observation/hl7:statusCode",
+                },
+                "Diagnosis.negationInd": {
+                    **target("0.0.100001", "bl"),
+                    "kind": "attribute", "mandatory": True,
+                    "path": "hl7:observation/@negationInd",
+                },
+                "Unused.statusCode": {
+                    **target("0.1.0", "CS"),
+                    "mandatory": True, "has_children": True,
+                    "repeat_ancestors": [],
+                    "path": "hl7:act/hl7:statusCode",
+                },
             },
             "document_template": {
                 "id": "1.2.3", "effective_date": "2026-01-01",
@@ -2858,7 +2879,15 @@ class CoreTests(unittest.TestCase):
                 "max": 1, "mandatory": True, "attributes": [], "codes": [],
                 "fixed": {}, "targets": [], "children": [{
                     "kind": "element", "name": "hl7:observation", "min": 0,
-                    "max": None, "mandatory": False, "attributes": [], "codes": [],
+                    "max": None, "mandatory": False, "attributes": [{
+                        "kind": "attribute", "name": "moodCode", "datatype": "cs",
+                        "optional": False, "value": None,
+                        "targets": ["Diagnosis.moodCode"],
+                    }, {
+                        "kind": "attribute", "name": "negationInd", "datatype": "bl",
+                        "optional": False, "value": None,
+                        "targets": ["Diagnosis.negationInd"],
+                    }], "codes": [],
                     "fixed": {}, "targets": [], "children": [
                         {"kind": "element", "name": "hl7:value", "datatype": "ST",
                          "min": 1, "max": 1, "mandatory": False, "attributes": [],
@@ -2878,7 +2907,22 @@ class CoreTests(unittest.TestCase):
                          "codes": [], "fixed": {}, "children": [],
                          "targets": ["Diagnosis.optionalComment"],
                          "target": "Diagnosis.optionalComment"},
+                        {"kind": "element", "name": "hl7:statusCode", "datatype": "CS",
+                         "min": 1, "max": 1, "mandatory": True, "attributes": [],
+                         "codes": [], "fixed": {}, "children": [],
+                         "targets": ["Diagnosis.statusCode"],
+                         "target": "Diagnosis.statusCode"},
                     ],
+                }, {
+                    "kind": "element", "name": "hl7:act", "min": 0,
+                    "max": 1, "mandatory": False, "attributes": [], "codes": [],
+                    "fixed": {}, "targets": [], "children": [{
+                        "kind": "element", "name": "hl7:statusCode", "datatype": "CS",
+                        "min": 1, "max": 1, "mandatory": True, "attributes": [],
+                        "codes": [], "fixed": {}, "children": [],
+                        "targets": ["Unused.statusCode"],
+                        "target": "Unused.statusCode",
+                    }],
                 }],
             }],
         }
@@ -2886,6 +2930,7 @@ class CoreTests(unittest.TestCase):
             "diagnoses.value": {"type": "text", "repeat_chain": ["diagnoses"]},
             "diagnoses.onset": {"type": "datetime", "repeat_chain": ["diagnoses"]},
             "diagnoses.note": {"type": "text", "repeat_chain": ["diagnoses"]},
+            "diagnoses.mood": {"type": "text", "repeat_chain": ["diagnoses"]},
         }}
         mapping = {
             "version": 5,
@@ -2893,6 +2938,7 @@ class CoreTests(unittest.TestCase):
                 "diagnoses.value": "Diagnosis.value",
                 "diagnoses.onset": "Diagnosis.low",
                 "diagnoses.note": None,
+                "diagnoses.mood": "Diagnosis.moodCode",
             },
             "defaults": {"required_unmapped": {"nullFlavor": "NI"}},
             "target_defaults": {
@@ -2900,12 +2946,29 @@ class CoreTests(unittest.TestCase):
                     "nullFlavor": "UNK",
                     "reason": "No diagnosis-onset datapoint is available.",
                 },
+                "Diagnosis.moodCode": {
+                    "value": "EVN",
+                    "reason": "Absent per-occurrence mood uses the reviewed event policy.",
+                },
+                "Diagnosis.statusCode": {
+                    "value": "active",
+                    "reason": "Every active observation uses the reviewed lifecycle policy.",
+                },
+                "Diagnosis.negationInd": {
+                    "value": False,
+                    "reason": "Exercise canonical boolean attribute rendering.",
+                },
+                "Unused.statusCode": {
+                    "value": "active",
+                    "reason": "A default must not activate this unused optional branch.",
+                },
             },
         }
         record = {"key": "P1", "values": {}, "instances": {"diagnoses": [
             {"values": {
                 "diagnoses.value": "A",
                 "diagnoses.onset": "2026-01-01",
+                "diagnoses.mood": "INT",
             }},
             {"values": {"diagnoses.value": "B"}},
         ]}}
@@ -2916,6 +2979,7 @@ class CoreTests(unittest.TestCase):
                 "diagnoses.value": None,
                 "diagnoses.onset": None,
                 "diagnoses.note": None,
+                "diagnoses.mood": None,
             }},
             mapping,
         )
@@ -2927,12 +2991,19 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(problems, [])
         observations = list(ET.fromstring(payload))
         self.assertEqual(len(observations), 2)
+        self.assertEqual(observations[0].get("moodCode"), "INT")
+        self.assertEqual(observations[1].get("moodCode"), "EVN")
+        self.assertEqual(observations[0].get("negationInd"), "false")
+        self.assertEqual(observations[1].get("negationInd"), "false")
         self.assertEqual(observations[0][1].get("value"), "20260101")
         self.assertEqual(observations[1][1].get("nullFlavor"), "UNK")
         self.assertEqual(observations[0][2].get("nullFlavor"), "NI")
         self.assertEqual(observations[1][2].get("nullFlavor"), "NI")
-        self.assertEqual(len(observations[0]), 3)
-        self.assertEqual(len(observations[1]), 3)
+        self.assertEqual(observations[0][3].get("code"), "active")
+        self.assertEqual(observations[1][3].get("code"), "active")
+        self.assertEqual(len(observations[0]), 4)
+        self.assertEqual(len(observations[1]), 4)
+        self.assertEqual(ET.fromstring(payload).find("{urn:hl7-org:v3}act"), None)
 
         accepted = render_accepted_cda_mappings_markdown(
             model, compiled, mapping
@@ -2944,10 +3015,46 @@ class CoreTests(unittest.TestCase):
         self.assertIn("## Accepted required-CDA completion", accepted)
         self.assertIn('nullFlavor="NI"', accepted)
         self.assertIn('nullFlavor="UNK"', accepted)
+        self.assertIn('value="EVN"', accepted)
+        self.assertIn('value="active"', accepted)
         self.assertIn("No diagnosis-onset datapoint is available", accepted)
         self.assertIn("## Decisions", report)
         self.assertIn("`diagnoses.note`", report)
         self.assertIn("explicit `null` entry in `cda-mapping.json`", report)
+
+    def test_target_default_validation_rejects_unsafe_scalar_values(self) -> None:
+        def target(kind: str, logical_types: list[str]) -> dict[str, object]:
+            return {
+                "kind": "element", "datatype": "ST", "min": 1, "max": 1,
+                "mandatory": True, "has_children": False, "conformance": "M",
+                "renderable": True, "writable": True, "locations": ["0.0"],
+                "fixed": {}, "logical_types": logical_types,
+                "value_representation": {"kind": kind},
+            }
+
+        compiled = {"targets": {
+            "Boolean.value": target("boolean", ["boolean"]),
+            "Coded.value": {
+                **target("coded", ["code"]),
+                "codes": [{"code": "active"}],
+            },
+            "Compound.value": {
+                **target("timestamp", ["datetime"]),
+                "non_null_requires": ["Compound.event"],
+            },
+        }}
+        mapping = {"fields": {}, "target_defaults": {
+            "Boolean.value": {"value": "true", "reason": "Wrong JSON type."},
+            "Coded.value": {"value": "completed"},
+            "Compound.value": {"value": "20260907", "reason": "Incomplete compound."},
+        }}
+        errors = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}}, mapping
+        )
+        self.assertTrue(any("Boolean.value" in error and "must be boolean" in error for error in errors))
+        self.assertTrue(any("Coded.value" in error and "reason must be non-empty" in error for error in errors))
+        self.assertTrue(any("Coded.value" in error and "compiled code constraint" in error for error in errors))
+        self.assertTrue(any("Compound.value" in error and "compound non-null companions" in error for error in errors))
 
     def test_target_default_validation_rejects_unsafe_nullification(self) -> None:
         def target(**changes: object) -> dict[str, object]:

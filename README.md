@@ -641,7 +641,7 @@ Unmapped raw codes become `nullFlavor="OTH"` by default.
 
 ```json
 {
-  "version": 5,
+  "version": 6,
   "fields": {
     "patient.identifikatoren.patienten_id": "PatientIdentifier.id",
     "ersteinschatzung.parameter_der_ersteinschatzung.zeitpunkt_der_ersteinschatzung": "ersteinschatzung.effectiveTime",
@@ -666,6 +666,10 @@ Unmapped raw codes become `nullFlavor="OTH"` by default.
     "Diagnosis.effectiveTime.low": {
       "nullFlavor": "UNK",
       "reason": "The transaction contains no diagnosis-onset datapoint."
+    },
+    "ProblemConcern.statusCode": {
+      "value": "active",
+      "reason": "This profile treats the emitted concern as actively tracked."
     }
   }
 }
@@ -764,11 +768,16 @@ target; otherwise the accepted mapping is left untouched for review.
 Completion belongs to the shareable CDA mapping rather than site configuration.
 `defaults.required_unmapped` supplies `nullFlavor="NI"` to an otherwise empty
 required leaf in an active CDA occurrence; optional unmapped elements are omitted.
-`target_defaults` records reviewed, more specific decisions such as
-`nullFlavor="UNK"` for a required diagnosis onset that the transaction does not
-provide. Actual mapped values always win in the same occurrence. Null defaults
-cannot be applied to attributes, optional targets, complex elements, or mandatory
-constraints that prohibit null flavors.
+`target_defaults` records reviewed, more specific decisions. A rule contains
+exactly one of `nullFlavor` or a JSON scalar `value`. Scalar values require a
+non-empty reason and can complete required non-null elements or attributes;
+they are checked against the compiled scalar datatype and finite code
+constraints. Defaults never activate an otherwise unused optional branch and
+are applied to every active repeated occurrence. Actual mapped values always
+win in the same occurrence. Null defaults cannot be applied to attributes,
+optional targets, complex elements, or mandatory constraints that prohibit
+null flavors. Scalar defaults cannot supply identifiers or compound values
+whose non-null companion semantics require a structural mapping.
 
 ART-DECOR `<example>` fragments never supply automatic values or display
 metadata. They are instance illustrations, not fixed template constraints. For

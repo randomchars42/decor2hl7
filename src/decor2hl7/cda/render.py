@@ -468,7 +468,7 @@ def _render_transparent(
     node: Mapping[str, Any],
     parent: ET.Element | None,
     assignments: Mapping[str, Any],
-    target_defaults: Mapping[str, Mapping[str, str]],
+    target_defaults: Mapping[str, Any],
     active_locations: set[tuple[int, ...]],
     cda: Mapping[str, Any],
     location: tuple[int, ...],
@@ -520,7 +520,7 @@ def _render_node(
     node: Mapping[str, Any],
     parent: ET.Element | None,
     assignments: Mapping[str, Any],
-    target_defaults: Mapping[str, Mapping[str, str]],
+    target_defaults: Mapping[str, Any],
     active_locations: set[tuple[int, ...]],
     cda: Mapping[str, Any],
     location: tuple[int, ...],
@@ -573,7 +573,7 @@ def _render_node(
 
 def _render_node_once(
     node: Mapping[str, Any], parent: ET.Element | None, assignments: Mapping[str, Any],
-    target_defaults: Mapping[str, Mapping[str, str]],
+    target_defaults: Mapping[str, Any],
     active_locations: set[tuple[int, ...]], cda: Mapping[str, Any],
     location: tuple[int, ...], null_flavor: str, problems: list[str],
     assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]],
@@ -653,6 +653,12 @@ def _render_node_once(
         assigned, target_name = _value_for_attribute(attr, assignments)
         if target_name is not None:
             value = _at(assigned, occurrence)
+        if value is None:
+            for target in attr.get("targets", []):
+                if str(target) in target_defaults:
+                    value = target_defaults[str(target)]
+                    target_name = str(target)
+                    break
         if isinstance(value, Mapping) and value.get("nullFlavor"):
             value = None
         if (

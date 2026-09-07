@@ -106,15 +106,28 @@ there as `low`/`high`. Subordinate interval leaves do not become start/stop
 semantics until an explicit association or reviewed rule selects one exact
 timing branch and its compound occurrence behavior.
 
-The reviewed mappings and their occurrence-shaped assignments validate, but
-the current synthetic whole-document fixture cannot yet exercise the rendered
-pharmacy subtree. Independent mandatory structural values have no executable
-source or reviewed default after DEC-026 correctly removed example-derived
-defaults: the fixture first stops at the required Act template
-`statusCode`, and a medication-only construction stops at Medikation
-`moodCode`. Reopening full rendering requires explicit profile policy or source
-evidence for those values; neither is inferred from ART-DECOR examples merely
-to make the fixture pass.
+DEC-029 supplies reviewed scalar construction defaults for the two independent
+mandatory structural values that previously blocked synthetic rendering. The
+CEDIS Problem Concern Act uses `statusCode="active"`, and medication given
+during emergency-department treatment uses `moodCode="EVN"`. These are explicit
+transaction policies, not values recovered from ART-DECOR examples.
+
+Medication history and recommendations for future medication remain outside
+the current dataset scope. Adding them requires a per-medication three-way
+field distinguishing medication given during ED treatment, medication taken at
+home, and future recommendations. The first two categories map to `EVN`; the
+last maps to `INT`. Start/stop timestamps cannot safely derive that distinction,
+because their source descriptions deliberately cover both past and planned
+administration.
+
+With those two defaults present, the whole-document synthetic run advances to
+the next independent mandatory timestamp:
+`Allergyconcernact.effectiveTime/low` in template
+`1.2.276.0.76.10.4065@2015-03-27`. It means when the allergy was first
+documented as a concern. The transaction supplies no such timestamp, and
+encounter time or document-generation time is not an equivalent clinical fact.
+It therefore remains a fail-closed test boundary rather than receiving an
+invented scalar default.
 
 The subordinate `SXPR_TS/comp` now exposes its XSD-defined `IVL_TS`, `PIVL_TS`,
 `EIVL_TS`, and recursive `SXPR_TS` choices. This closes the missing-physical-leaf

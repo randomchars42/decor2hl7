@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-07-reviewed-scalar-target-defaults.md`](2026-09-07-reviewed-scalar-target-defaults.md)
+  records the reviewed non-null completion mechanism, the CEDIS concern-status
+  and ED-medication mood policies, and the future three-way medication source
+  discriminator required before history or recommendations are added.
 - [`2026-09-06-medication-pharmacy-profile.md`](2026-09-06-medication-pharmacy-profile.md)
   records the exact inherited simple/detail medication choice, the reviewed
   detail-branch selection, Pharmacy namespace and occurrence-qualified target
