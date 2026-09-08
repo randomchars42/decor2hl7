@@ -696,6 +696,11 @@ projected to an active target when both constraints resolve to one unique common
 CDA/RIM XSD slot inside the mapped context. XSD mixed-content metadata supplies
 element-text writability for complex roots; neither mapping nor rendering uses
 datatype- or medication-specific leaf rules.
+When such an entry-text target has a required unfixed
+`reference/@value`, the compiler records a linked-narrative role. Runtime writes
+the mapped text into a matching section `content/@ID` fragment and generates a
+distinct local reference for each entry occurrence; the fragment URI is not a
+second clinical mapping value.
 A static association recovered through identity ancestry does not by itself
 identify the active CDA occurrence. A direct target outside an already selected
 occurrence is shown as a review-only alternative; a separate explicit

@@ -177,8 +177,29 @@ def _write_value(
             f"CDA value target {target.get('path') or node.get('name')} has no compiled value representation"
         )
     _set_xsi_type(element, representation)
+    if isinstance(value, Mapping) and value.get("__section_narrative__"):
+        base = str(value.get("text") or "")
+        items = [
+            item for item in value.get("items", [])
+            if isinstance(item, Mapping)
+            and item.get("id")
+            and item.get("text") not in (None, "")
+        ]
+        element.text = base + ("; " if base and items else "") or None
+        for index, narrative_item in enumerate(items):
+            content = ET.SubElement(element, f"{{{HL7}}}content")
+            content.set("ID", str(narrative_item["id"]))
+            content.text = str(narrative_item["text"])
+            if index + 1 < len(items):
+                content.tail = "; "
+        return
     if isinstance(value, Mapping) and value.get("nullFlavor"):
         element.set("nullFlavor", str(value["nullFlavor"]))
+        return
+    if target.get("narrative_link"):
+        # The mapped scalar is rendered once in the containing section's
+        # structured narrative. This entry text carries only the compiled
+        # fragment reference emitted by its required child.
         return
     kind = ValueRepresentationKind(str(representation["kind"]))
     if kind == ValueRepresentationKind.ELEMENT_TEXT:
@@ -271,6 +292,8 @@ def _narrative_scalars(value: Any) -> list[str]:
     if isinstance(value, list):
         return [item for nested in value for item in _narrative_scalars(nested)]
     if isinstance(value, Mapping):
+        if any(str(key).startswith("__") for key in value):
+            return []
         for key in ("displayName", "display", "value", "code", "extension", "root"):
             if value.get(key) not in (None, ""):
                 return [str(value[key])]
@@ -320,12 +343,208 @@ def _complete_content_roles(
                     )
                     values: list[str] = []
                     for name in assigned_names:
+                        if targets.get(name, {}).get("narrative_link"):
+                            continue
                         values.extend(_narrative_scalars(assignments.get(name)))
                     narrative = "; ".join(dict.fromkeys(item for item in values if item))
                     assign_role(node, "section_title", label)
                     assign_role(node, "section_narrative", narrative or label)
             visit(list(node.get("children", [])))
     visit(document)
+
+
+def _narrative_occurrences(
+    value: Any, minimum_depth: int, prefix: tuple[int, ...] = (),
+) -> list[tuple[int, ...]]:
+    """Return present assignment leaves as renderer occurrence tuples."""
+    if isinstance(value, list):
+        return [
+            occurrence
+            for index, item in enumerate(value)
+            for occurrence in _narrative_occurrences(
+                item, minimum_depth, prefix + (index,)
+            )
+        ]
+    if value is None or (
+        isinstance(value, Mapping) and value.get("nullFlavor")
+    ):
+        return []
+    return [prefix + (0,) * max(0, minimum_depth - len(prefix))]
+
+
+def _target_below_location(
+    target: Mapping[str, Any], owner_location: str,
+) -> bool:
+    return any(
+        str(location) == owner_location
+        or str(location).startswith(owner_location + ".")
+        for location in target.get("locations", [])
+    )
+
+
+def _occurrence_assignment(
+    values: Mapping[tuple[int, ...], Any], depth: int,
+) -> Any:
+    """Build the sparse nested-list shape consumed by ``_nested_at``."""
+    if depth == 0:
+        return values.get(())
+
+    def build(prefix: tuple[int, ...]) -> Any:
+        if len(prefix) == depth:
+            return values.get(prefix)
+        indices = {
+            occurrence[len(prefix)]
+            for occurrence in values
+            if occurrence[:len(prefix)] == prefix
+        }
+        if not indices:
+            return None
+        return [
+            build(prefix + (index,))
+            for index in range(max(indices) + 1)
+        ]
+
+    return build(())
+
+
+def _merge_section_fragments(
+    current: Any,
+    fragments: Mapping[tuple[int, ...], list[dict[str, str]]],
+    depth: int,
+) -> Any:
+    """Merge generated ``content`` nodes into a section-shaped assignment."""
+    def merge(prefix: tuple[int, ...], value: Any) -> Any:
+        if len(prefix) == depth:
+            additions = list(fragments.get(prefix, []))
+            if not additions:
+                return value
+            if isinstance(value, Mapping) and value.get("__section_narrative__"):
+                return {
+                    **dict(value),
+                    "items": list(value.get("items", [])) + additions,
+                }
+            text = "; ".join(
+                dict.fromkeys(item for item in _narrative_scalars(value) if item)
+            )
+            return {
+                "__section_narrative__": True,
+                "text": text,
+                "items": additions,
+            }
+
+        matching = {
+            occurrence[len(prefix)]
+            for occurrence in fragments
+            if occurrence[:len(prefix)] == prefix
+        }
+        current_items = value if isinstance(value, list) else []
+        count = max(
+            len(current_items),
+            max(matching) + 1 if matching else 0,
+        )
+        if count == 0:
+            return value
+        result: list[Any] = []
+        for index in range(count):
+            if index < len(current_items):
+                child = current_items[index]
+            elif index == 0 and not isinstance(value, list):
+                child = value
+            else:
+                child = None
+            result.append(merge(prefix + (index,), child))
+        return result
+
+    return merge((), current)
+
+
+def _complete_linked_narratives(
+    targets: Mapping[str, Mapping[str, Any]],
+    assignments: dict[str, Any],
+    explicit_names: set[str],
+    record_key: Any,
+    document_version: int,
+) -> None:
+    """Generate occurrence-local entry references and section narrative IDs."""
+    section_fragments: dict[
+        str, dict[tuple[int, ...], list[dict[str, str]]]
+    ] = {}
+    section_depths: dict[str, int] = {}
+
+    for source_name in sorted(targets):
+        source_target = targets[source_name]
+        relation = source_target.get("narrative_link")
+        if not isinstance(relation, Mapping):
+            continue
+        reference_name = str(relation.get("reference_target") or "")
+        section_name = str(relation.get("section_narrative_target") or "")
+        owner_location = str(relation.get("owner_location") or "")
+        occurrence_depth = int(relation.get("occurrence_depth") or 0)
+        section_depth = int(relation.get("section_occurrence_depth") or 0)
+        if not reference_name or not section_name or not owner_location:
+            continue
+
+        owner_assignments = [
+            name for name in assignments
+            if not targets.get(name, {}).get("system_value")
+            and _target_below_location(targets.get(name, {}), owner_location)
+        ]
+        occurrences = {
+            occurrence[:occurrence_depth]
+            for name in owner_assignments
+            for occurrence in _narrative_occurrences(
+                assignments[name], occurrence_depth
+            )
+        }
+        if not occurrences:
+            continue
+
+        reference_values: dict[tuple[int, ...], str] = {}
+        grouped = section_fragments.setdefault(section_name, {})
+        section_depths[section_name] = section_depth
+        fallback_names = sorted(set(owner_assignments) & explicit_names)
+        for occurrence in sorted(occurrences):
+            direct = _nested_at(assignments.get(source_name), occurrence)
+            wording = _narrative_scalars(direct)
+            if not wording:
+                wording = [
+                    item
+                    for name in fallback_names
+                    for item in _narrative_scalars(
+                        _nested_at(assignments.get(name), occurrence)
+                    )
+                ]
+            text = "; ".join(dict.fromkeys(item for item in wording if item))
+            if not text:
+                text = str(
+                    source_target.get("template_display_name")
+                    or source_target.get("template_name")
+                    or "Entry"
+                )
+            identity = "|".join((
+                str(record_key or ""),
+                str(document_version),
+                source_name,
+                ".".join(map(str, occurrence)),
+            ))
+            fragment_id = "d2h-narrative-" + hashlib.sha256(
+                identity.encode("utf-8")
+            ).hexdigest()[:20]
+            reference_values[occurrence] = "#" + fragment_id
+            grouped.setdefault(occurrence[:section_depth], []).append({
+                "id": fragment_id,
+                "text": text,
+            })
+        assignments[reference_name] = _occurrence_assignment(
+            reference_values, occurrence_depth
+        )
+
+    for section_name, fragments in section_fragments.items():
+        assignments[section_name] = _merge_section_fragments(
+            assignments.get(section_name),
+            fragments,
+            section_depths[section_name],
+        )
 
 
 def _coded_original_text(value: Any) -> Any:
@@ -919,6 +1138,10 @@ def emit(
     _complete_value_companions(list(document), targets, assignments)
     _complete_content_roles(
         list(document), targets, assignments, explicit_assignment_names
+    )
+    _complete_linked_narratives(
+        targets, assignments, explicit_assignment_names,
+        record.get("key"), document_version,
     )
     compound_problems = non_null_requirement_problems(cda, assignments)
     if compound_problems:

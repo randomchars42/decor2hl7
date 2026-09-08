@@ -1130,6 +1130,37 @@ Evidence: `src/decor2hl7/bindings.py`, `src/decor2hl7/cda/render.py`,
 `tests/test_core.py`,
 `docs/analyses/2026-09-07-reviewed-scalar-target-defaults.md`.
 
+## DEC-030 — Compiled entry-to-section narrative links
+
+**Decision:** accepted
+**Implementation:** verified
+
+A required CDA entry `text/reference/@value` branch below a section is
+document-production infrastructure when all of the following are explicit in
+the effective compiled constraint: the entry `text` has an element-text
+representation, its direct `reference` child is required, and the child's
+unfixed `value` attribute is required. Compilation marks the entry text as a
+linked-narrative source, marks the reference value as compiler-supplied, and
+records the exact physical relationship to the containing section narrative.
+It does not depend on a template id, medication field name, or prose example.
+
+For every active entry occurrence, rendering creates one deterministic,
+document-local fragment identifier, writes it as `reference/@value`, and adds a
+matching CDA narrative `content/@ID` node to that occurrence's containing
+section. A mapped entry-text scalar supplies the human-readable content. If it
+is absent, the renderer derives minimal wording from the same entry occurrence's
+other explicitly mapped values and finally falls back to the compiled template
+display name. Repeated entries and repeated sections retain their normalized
+occurrence boundaries; references never share or zip independent rows.
+
+The mapped scalar is not duplicated as raw mixed content in the entry `text`,
+and generated reference targets are not offered as clinical mapping endpoints.
+The section narrative remains intentionally minimal, but every generated
+fragment reference resolves within the document.
+
+Evidence: `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
+`src/decor2hl7/bindings.py`, `tests/test_cda_datatypes.py`.
+
 ## Maintenance rule
 
 A pull request that changes project semantics must update the affected decision

@@ -2111,6 +2111,9 @@ def _annotate_targets(
                         target["mandatory"] = attr.get("optional") is False
                         target["has_children"] = False
                         target["provenance"] = deepcopy(attr.get("provenance", []))
+                        for key in ("system_value", "content_role"):
+                            if attr.get(key):
+                                target[key] = deepcopy(attr[key])
                     if own_attr:
                         physical_occurrences[own_attr].append({
                             "node": attr,
@@ -2456,6 +2459,44 @@ def _compiled_content_roles(
                 node["content_role"] = "section_narrative"
             representation = _node_value_representation(node)
             if (
+                "section" in element_path
+                and raw == "text"
+                and representation is not None
+                and representation.kind == ValueRepresentationKind.ELEMENT_TEXT
+            ):
+                for child in node.get("children", []):
+                    child_name = str(child.get("name") or "").split(":", 1)[-1]
+                    child_name = child_name.split("[", 1)[0]
+                    required_child = bool(
+                        child.get("mandatory") or int(child.get("min") or 0) >= 1
+                    )
+                    required_value = next((
+                        attribute
+                        for attribute in child.get("attributes", [])
+                        if str(attribute.get("name") or "").split(":", 1)[-1]
+                        == "value"
+                        and attribute.get("optional") is False
+                        and attribute.get("value") is None
+                    ), None)
+                    if (
+                        child_name != "reference"
+                        or not required_child
+                        or required_value is None
+                    ):
+                        continue
+                    # CDA entry text commonly carries its value by reference to
+                    # human-readable section narrative. The required fragment
+                    # URI is document-production infrastructure, not a second
+                    # clinical mapping endpoint.
+                    node["content_role"] = "linked_narrative"
+                    child["content_role"] = "narrative_reference"
+                    child["system_value"] = "generated_narrative_reference"
+                    required_value["content_role"] = "narrative_reference"
+                    required_value["system_value"] = (
+                        "generated_narrative_reference"
+                    )
+                    break
+            if (
                 representation is not None
                 and representation.kind == ValueRepresentationKind.CODED
             ):
@@ -2477,6 +2518,117 @@ def _compiled_content_roles(
                         # serialized in this companion text node.
                         child["content_role"] = "coded_original_text"
         _compiled_content_roles(list(node.get("children", [])), path)
+
+
+def _annotate_linked_narrative_targets(
+    document: list[dict[str, Any]], targets: dict[str, dict[str, Any]],
+) -> None:
+    """Resolve compiled entry-text roles to one section and reference target.
+
+    The content-role pass runs before physical target names exist. This pass
+    records the exact target relationship after annotation so runtime can
+    execute it without interpreting template ids, datatype names, or paths.
+    """
+    def local_name(node: Mapping[str, Any]) -> str:
+        value = str(node.get("name") or "").split(":", 1)[-1]
+        return value.split("[", 1)[0]
+
+    def annotate_section(
+        section: dict[str, Any], section_location: tuple[int, ...],
+    ) -> None:
+        narratives: list[dict[str, Any]] = []
+        links: list[tuple[dict[str, Any], tuple[int, ...]]] = []
+
+        def scan(
+            nodes: list[dict[str, Any]], location: tuple[int, ...],
+            ancestors: tuple[tuple[dict[str, Any], tuple[int, ...]], ...],
+        ) -> None:
+            for index, node in enumerate(nodes):
+                here = location + (index,)
+                if node is not section and local_name(node) == "section":
+                    continue
+                if node.get("content_role") == "section_narrative":
+                    narratives.append(node)
+                if node.get("content_role") == "linked_narrative":
+                    owner_location = next((
+                        ancestor_location
+                        for ancestor, ancestor_location in reversed(ancestors)
+                        if local_name(ancestor) in {"entry", "entryRelationship"}
+                    ), section_location)
+                    links.append((node, owner_location))
+                scan(
+                    list(node.get("children", [])), here,
+                    ancestors + ((node, here),),
+                )
+
+        scan(
+            list(section.get("children", [])), section_location,
+            ((section, section_location),),
+        )
+        narrative_names = {
+            str(node.get("target") or "") for node in narratives
+            if node.get("target")
+        }
+        if len(narrative_names) != 1:
+            return
+        narrative_name = next(iter(narrative_names))
+        narrative_target = targets.get(narrative_name, {})
+        if len(narrative_target.get("locations", [])) != 1:
+            return
+        section_repeats = list(narrative_target.get("repeat_ancestors", []))
+
+        for node, owner_location in links:
+            source_name = str(node.get("target") or "")
+            source_target = targets.get(source_name, {})
+            reference_nodes = [
+                child for child in node.get("children", [])
+                if child.get("content_role") == "narrative_reference"
+            ]
+            reference_names = {
+                str(attribute.get("target") or "")
+                for child in reference_nodes
+                for attribute in child.get("attributes", [])
+                if attribute.get("content_role") == "narrative_reference"
+                and attribute.get("target")
+            }
+            if (
+                not source_name
+                or len(source_target.get("locations", [])) != 1
+                or len(reference_names) != 1
+            ):
+                continue
+            reference_name = next(iter(reference_names))
+            reference_target = targets.get(reference_name, {})
+            source_repeats = list(source_target.get("repeat_ancestors", []))
+            reference_repeats = list(
+                reference_target.get("repeat_ancestors", [])
+            )
+            if (
+                len(reference_target.get("locations", [])) != 1
+                or source_repeats != reference_repeats
+                or source_repeats[:len(section_repeats)] != section_repeats
+            ):
+                continue
+            source_target["narrative_link"] = {
+                "reference_target": reference_name,
+                "section_narrative_target": narrative_name,
+                "owner_location": ".".join(map(str, owner_location)),
+                "occurrence_depth": len(reference_repeats),
+                "section_occurrence_depth": len(section_repeats),
+            }
+            reference_target["narrative_source_target"] = source_name
+            reference_target["section_narrative_target"] = narrative_name
+
+    def visit(
+        nodes: list[dict[str, Any]], location: tuple[int, ...] = (),
+    ) -> None:
+        for index, node in enumerate(nodes):
+            here = location + (index,)
+            if local_name(node) == "section":
+                annotate_section(node, here)
+            visit(list(node.get("children", [])), here)
+
+    visit(document)
 
 
 
@@ -2564,6 +2716,7 @@ def compile_cda(
     _annotate_non_null_requirements(document, targets)
     _materialize_polymorphic_targets(document, targets, source_index)
     _annotate_quantity_range_targets(document, targets)
+    _annotate_linked_narrative_targets(document, targets)
     assertions: list[dict[str, Any]] = []
     def collect_assertions(
         nodes: Sequence[Mapping[str, Any]], prefix: tuple[int, ...] = (),
@@ -2598,7 +2751,7 @@ def compile_cda(
         return elements, attributes
     element_count, attribute_count = constraint_counts(document)
     return {
-        "version": 4,
+        "version": 5,
         "format": "cda",
         "document_template": {
             "id": template_id,

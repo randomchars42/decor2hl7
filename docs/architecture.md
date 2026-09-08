@@ -491,6 +491,15 @@ incomplete reviewed selection, and rendering checks companion presence for each
 populated occurrence after runtime completion. This is compiled datatype
 policy, not a medication/template/path special case.
 
+Required CDA entry narrative references use the same compiled-role boundary. If
+an effective entry `text` constraint requires an unfixed
+`reference/@value`, the compiler links that value to the containing section
+narrative target and removes the generated fragment URI from the clinical
+mapping surface. Rendering creates a deterministic fragment per active entry,
+adds matching structured `content/@ID` narrative, and preserves section/entry
+occurrence dimensions. A mapped entry-text value becomes the linked narrative
+wording instead of being duplicated as mixed content in the entry.
+
 ## Package conformance boundary
 
 Acquisition pins and hashes DECOR-core, the complete CDA R2/SDTC schema graph,
@@ -656,8 +665,9 @@ Therefore:
 
 ## Current intentional boundaries
 
-- Generic CDA narrative remains minimal; section-specific narrative can be
-  added behind `cda.py` without changing mappings.
+- Generic CDA narrative remains minimal. Required entry references resolve to
+  generated section `content` nodes; richer section-specific tables can be
+  added without changing mappings.
 - Nested repetition requires stable occurrence keys when more than one independent
   level/source is involved; positional guessing remains intentionally unsupported.
 - `transport.py` is generic HTTP POST until the receiver protocol is specified.

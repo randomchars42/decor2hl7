@@ -105,6 +105,7 @@ def presence_target_complete(
                 attribute.get("value") is None
                 and name not in fixed
                 and not supplied_by_code
+                and not attribute.get("system_value")
                 and not (scalar_fixed and name in represented_attributes)
             ):
                 return False

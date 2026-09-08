@@ -82,6 +82,14 @@ this yields ten executable medication mappings and raises the reviewed
 reference mapping from 95/120 to 100/120 fields. See
 [`analyses/2026-09-06-medication-pharmacy-profile.md`](analyses/2026-09-06-medication-pharmacy-profile.md).
 
+DEC-030 closes the medication entry's required narrative-link construction.
+The compiled `Medikation.text` mapping now supplies human-readable section
+narrative content, while document production generates an occurrence-local
+`text/reference/@value` and matching section `content/@ID` for every active
+medication. The reference value is not a second source mapping or a reviewed
+constant. Repeated medication references are distinct, and a medication without
+dosage free text receives minimal narrative wording from its other mapped values.
+
 Ingredient strength remains deliberately unmapped: the source is unconstrained
 text while the detail profile requires structured `RTO_PQ_PQ` numerator and
 denominator semantics. No grammar, unit normalization or denominator policy is
@@ -120,14 +128,14 @@ last maps to `INT`. Start/stop timestamps cannot safely derive that distinction,
 because their source descriptions deliberately cover both past and planned
 administration.
 
-With those two defaults present, the whole-document synthetic run advances to
-the next independent mandatory timestamp:
-`Allergyconcernact.effectiveTime/low` in template
-`1.2.276.0.76.10.4065@2015-03-27`. It means when the allergy was first
-documented as a concern. The transaction supplies no such timestamp, and
-encounter time or document-generation time is not an equivalent clinical fact.
-It therefore remains a fail-closed test boundary rather than receiving an
-invented scalar default.
+With those defaults and DEC-030 narrative links present, the whole-document
+synthetic run advances to `Medikation.statusCode`. The effective compiled
+constraint treats this `R` target as mandatory, binds it to dynamic ActStatus
+ValueSet `2.16.840.1.113883.1.11.15933`, and supplies neither a fixed value nor
+a source mapping. Choosing a medication status is a separate clinical policy
+decision and remains fail-closed. The Allergy Concern Act
+`effectiveTime/low` boundary described above remains independently unresolved
+and will be encountered after earlier medication requirements are satisfied.
 
 The subordinate `SXPR_TS/comp` now exposes its XSD-defined `IVL_TS`, `PIVL_TS`,
 `EIVL_TS`, and recursive `SXPR_TS` choices. This closes the missing-physical-leaf
@@ -515,9 +523,11 @@ stop and require review.
 
 ## CDA narrative
 
-The structural CDA renderer is generic. Section-specific human-readable
-narrative remains minimal and should be generated from the same normalized
-occurrence model without changing data-to-CDA mapping semantics.
+The structural CDA renderer is generic. DEC-030 generates resolvable
+entry-to-section narrative links from the same normalized occurrence model,
+including distinct links for repeated entries. Human-readable section content
+remains intentionally minimal; richer tables and section-specific presentation
+are still outside the portable data-to-CDA mapping semantics.
 
 ## Receiver protocol and exactly-once delivery
 

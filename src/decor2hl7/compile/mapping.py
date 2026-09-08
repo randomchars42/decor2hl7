@@ -4201,7 +4201,7 @@ def write_cda_mapping(
     )
     enriched_cda = dict(cda)
     enriched_cda["datapoints"] = cda_datapoints(cda, cda_proposal)
-    enriched_cda["version"] = 4
+    enriched_cda["version"] = 5
     enriched_cda["stats"] = {
         **dict(cda.get("stats", {})),
         "datapoints": len(enriched_cda["datapoints"]),

@@ -1231,6 +1231,124 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(find_required(section, f"{{{HL7}}}title").text, "Clinical facts")
             self.assertEqual(find_required(section, f"{{{HL7}}}text").text, "mapped fact")
 
+    def test_required_entry_text_references_generated_section_narrative(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document"
+    displayName="Medication section">
+  <element name="hl7:ClinicalDocument">
+    <element name="hl7:component"><element name="hl7:structuredBody">
+      <element name="hl7:component">
+        <element name="hl7:section" minimumMultiplicity="1" maximumMultiplicity="1">
+          <element name="hl7:title" datatype="ST" minimumMultiplicity="1" maximumMultiplicity="1"/>
+          <element name="hl7:text" datatype="SD.TEXT" minimumMultiplicity="1" maximumMultiplicity="1"/>
+          <element name="hl7:entry" minimumMultiplicity="0" maximumMultiplicity="*">
+            <element name="hl7:substanceAdministration" minimumMultiplicity="1" maximumMultiplicity="1">
+              <element name="hl7:text" datatype="ED" minimumMultiplicity="1"
+                  maximumMultiplicity="1" isMandatory="true">
+                <element name="hl7:reference" datatype="TEL" minimumMultiplicity="1"
+                    maximumMultiplicity="1" isMandatory="true">
+                  <attribute name="value" isOptional="false"/>
+                </element>
+              </element>
+              <element name="hl7:code" datatype="ST" minimumMultiplicity="1" maximumMultiplicity="1"/>
+            </element>
+          </element>
+        </element>
+      </element>
+    </element></element>
+  </element>
+</template>''', encoding="utf-8")
+            fields = {
+                name: {
+                    "name": name.title(), "concept": name, "type": "text",
+                    "parent": None, "repeat_chain": ["medications"],
+                    "value_sets": [], "codes": [],
+                }
+                for name in ("dose", "product")
+            }
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {}, "fields": fields,
+            }
+            compiled = compile_cda([source], model)
+            text_name, text_target = target_at(
+                compiled, "/hl7:substanceAdministration/hl7:text"
+            )
+            code_name, _ = target_at(
+                compiled, "/hl7:substanceAdministration/hl7:code"
+            )
+            reference_name, reference_target = target_at(
+                compiled,
+                "/hl7:substanceAdministration/hl7:text/hl7:reference/@value",
+            )
+            section_text_name, _ = target_at(
+                compiled, "/hl7:section/hl7:text"
+            )
+            self.assertEqual(compiled["version"], 5)
+            self.assertEqual(text_target["content_role"], "linked_narrative")
+            self.assertEqual(
+                text_target["narrative_link"],
+                {
+                    "reference_target": reference_name,
+                    "section_narrative_target": section_text_name,
+                    "owner_location": "0.0.0.0.0.2",
+                    "occurrence_depth": 1,
+                    "section_occurrence_depth": 0,
+                },
+            )
+            self.assertEqual(
+                reference_target["system_value"],
+                "generated_narrative_reference",
+            )
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P1", "values": {},
+                    "instances": {"medications": [
+                        {
+                            "key": "1",
+                            "values": {"dose": "10 mg", "product": "Drug A"},
+                            "instances": {},
+                        },
+                        {
+                            "key": "2",
+                            "values": {"product": "Drug B"},
+                            "instances": {},
+                        },
+                    ]},
+                },
+                model,
+                compiled,
+                {"fields": {"dose": text_name, "product": code_name}},
+                {},
+            )
+            self.assertEqual(problems, [])
+            root = ET.fromstring(payload)
+            entry_texts = root.findall(
+                f".//{{{HL7}}}substanceAdministration/{{{HL7}}}text"
+            )
+            self.assertEqual(len(entry_texts), 2)
+            references = [
+                find_required(entry_text, f"{{{HL7}}}reference").get("value")
+                for entry_text in entry_texts
+            ]
+            self.assertTrue(all(value and value.startswith("#d2h-narrative-") for value in references))
+            self.assertEqual(len(set(references)), 2)
+            self.assertTrue(
+                all(not (entry_text.text or "").strip() for entry_text in entry_texts),
+                [entry_text.text for entry_text in entry_texts],
+            )
+
+            contents = root.findall(
+                f".//{{{HL7}}}section/{{{HL7}}}text/{{{HL7}}}content"
+            )
+            self.assertEqual([item.text for item in contents], ["10 mg", "Drug B"])
+            self.assertEqual(
+                {"#" + str(item.get("ID")) for item in contents},
+                set(references),
+            )
+
     def test_single_vocabulary_code_fixes_required_attribute(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "template.xml"
