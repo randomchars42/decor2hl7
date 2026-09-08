@@ -100,9 +100,27 @@ def normalize_extensions(rows: Iterable[Mapping[str, Any]]) -> list[CdaExtension
             raise ValueError(
                 f"CDA extension rule {index} is missing: {', '.join(missing)}"
             )
-        minimum: int | str | None = None
-        maximum: int | str | None = None
-        conformance = ""
+        row = CdaExtension(
+            transaction_id=str(raw.get("transaction_id") or "").strip(),
+            transaction_effective_date=str(
+                raw.get("transaction_effective_date") or ""
+            ).strip(),
+            document_template_id=str(raw.get("document_template_id") or "").strip(),
+            document_template_effective_date=str(
+                raw.get("document_template_effective_date") or ""
+            ).strip(),
+            parent_template_id=str(raw.get("parent_template_id") or "").strip(),
+            parent_template_effective_date=str(
+                raw.get("parent_template_effective_date") or ""
+            ).strip(),
+            parent_element_id=str(raw.get("parent_element_id") or "").strip(),
+            element_name=str(raw.get("element_name") or "").strip(),
+            template_id=str(raw.get("template_id") or "").strip(),
+            template_effective_date=str(
+                raw.get("template_effective_date") or ""
+            ).strip(),
+            reason=str(raw.get("reason") or "").strip(),
+        )
         if operation == "attach":
             minimum = _multiplicity(
                 raw.get("minimum_multiplicity"), maximum=False,
@@ -127,28 +145,6 @@ def normalize_extensions(rows: Iterable[Mapping[str, Any]]) -> list[CdaExtension
                     f"CDA extension attachment {index} has unsupported "
                     f"conformance {conformance!r}"
                 )
-        row = CdaExtension(
-            transaction_id=str(raw.get("transaction_id") or "").strip(),
-            transaction_effective_date=str(
-                raw.get("transaction_effective_date") or ""
-            ).strip(),
-            document_template_id=str(raw.get("document_template_id") or "").strip(),
-            document_template_effective_date=str(
-                raw.get("document_template_effective_date") or ""
-            ).strip(),
-            parent_template_id=str(raw.get("parent_template_id") or "").strip(),
-            parent_template_effective_date=str(
-                raw.get("parent_template_effective_date") or ""
-            ).strip(),
-            parent_element_id=str(raw.get("parent_element_id") or "").strip(),
-            element_name=str(raw.get("element_name") or "").strip(),
-            template_id=str(raw.get("template_id") or "").strip(),
-            template_effective_date=str(
-                raw.get("template_effective_date") or ""
-            ).strip(),
-            reason=str(raw.get("reason") or "").strip(),
-        )
-        if operation == "attach":
             row.update({
                 "minimum_multiplicity": minimum,
                 "maximum_multiplicity": maximum,

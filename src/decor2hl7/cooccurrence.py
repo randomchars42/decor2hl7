@@ -254,7 +254,9 @@ def unavoidable_targets_problems(
         )
         for name, presence in modes.items()
     }
-    result = {str(name): [] for name in modes}
+    result: dict[str, list[dict[str, Any]]] = {
+        str(name): [] for name in modes
+    }
     for problem in datatype_cooccurrence_problems(cda, assignments):
         result.setdefault(str(problem.get("target") or ""), []).append(problem)
     return result
