@@ -1,4 +1,4 @@
-.PHONY: baseline check mypy-report
+.PHONY: baseline check mypy-report testrun
 
 check:
 	python3 -m unittest discover -s tests
@@ -25,3 +25,8 @@ mypy-report:
 		true; \
 	} > mypy-output.txt 2>&1
 	@echo "Wrote mypy-output.txt"
+
+testrun:
+	python3 -m decor2hl7 --root ../test-workplace check-cda-mapping && \
+	python3 -m decor2hl7 --root ../test-workplace setup-test --force && \
+	python3 -m decor2hl7 --root ../test-workplace test-cda-mapping
