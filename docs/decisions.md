@@ -43,6 +43,9 @@ is not necessarily an accepted clinical policy.
 | DEC-026 | ART-DECOR examples are non-executable instance data | accepted | verified |
 | DEC-027 | Bounded association identity-lineage closure | accepted | verified |
 | DEC-028 | Exact SPEC-choice overlays and namespace-aware profile extensions | accepted | verified |
+| DEC-029 | Reviewed scalar CDA construction defaults | accepted | verified |
+| DEC-030 | Compiled entry-to-section narrative links | accepted | verified |
+| DEC-031 | Explicit child constraints in non-monotonic SPEC designs | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -1160,6 +1163,36 @@ fragment reference resolves within the document.
 
 Evidence: `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
 `src/decor2hl7/bindings.py`, `tests/test_cda_datatypes.py`.
+
+## DEC-031 — Explicit child constraints in non-monotonic SPEC designs
+
+**Decision:** accepted
+**Implementation:** verified
+
+ART-DECOR `SPEC` formally denotes specialization, so a child is expected to
+narrow rather than broaden its parent. Published designs can nevertheless
+contain an explicit child constraint that is broader than its declared parent.
+The compiler follows the executable child design in that case: explicit child
+cardinality and mandatory flags are authoritative, while omitted properties
+are inherited. In particular, an explicit child minimum of zero clears an
+inherited mandatory flag unless the child explicitly says it is mandatory.
+
+Every such minimum, maximum, or mandatory weakening is retained as a
+`spec-constraint-weakening` warning in `cda.json` and the build diagnostics.
+`build --strict-specializations` converts any warning into a build error for
+users who require monotonic specialization. This policy also applies to
+included template groups.
+
+The AKTIN Medikation template explicitly changes its UV Medication Statement
+parent's `statusCode` from `1..1 M` to `0..1 R`; its generated Schematron likewise
+allows omission. The effective target is therefore optional. It is omitted
+when the dataset has no medication lifecycle datum, and no ActStatus default is
+invented. Medication mood, order mood, administration occurrence and lifecycle
+status remain distinct clinical facts.
+
+Evidence: `src/decor2hl7/cda/compile.py`, `src/decor2hl7/compile/artifacts.py`,
+`src/decor2hl7/cli.py`, `tests/test_core.py`,
+`docs/analyses/2026-09-08-spec-relaxation-and-medication-state.md`.
 
 ## Maintenance rule
 

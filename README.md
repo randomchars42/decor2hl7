@@ -64,6 +64,11 @@ decor2hl7 run --input /data/aktin/export
 `--site-config DIRECTORY`; this permits a reviewed mapping to be shared while
 each site retains its own input/code configuration.
 
+When a published ART-DECOR `SPEC` child explicitly weakens a parent constraint,
+`build` follows the executable child constraint and records a warning in the
+build diagnostics. Use `build --strict-specializations` to reject such designs
+instead.
+
 ART-DECOR network access uses **IPv4 by default** because the IPv6 route used
 during development was dramatically slower. `--ipv6` is a diagnostic override
 scoped to ART-DECOR requests; global socket resolution is never monkey-patched.

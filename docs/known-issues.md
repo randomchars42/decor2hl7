@@ -120,22 +120,33 @@ CEDIS Problem Concern Act uses `statusCode="active"`, and medication given
 during emergency-department treatment uses `moodCode="EVN"`. These are explicit
 transaction policies, not values recovered from ART-DECOR examples.
 
-Medication history and recommendations for future medication remain outside
-the current dataset scope. Adding them requires a per-medication three-way
-field distinguishing medication given during ED treatment, medication taken at
-home, and future recommendations. The first two categories map to `EVN`; the
-last maps to `INT`. Start/stop timestamps cannot safely derive that distinction,
-because their source descriptions deliberately cover both past and planned
-administration.
+Medication history, discharge recommendations, orders and non-administration
+remain outside the current dataset scope. Adding them requires a per-medication
+source discriminator. Medication given during ED treatment and medication
+history use the selected root's `EVN`; a future treatment recommendation can
+use its permitted `INT`. `active` is appropriate only when the source contract
+also says that the recommendation is currently operative; mood alone does not
+establish lifecycle status. Start/stop timestamps cannot derive either fact,
+because their descriptions deliberately cover past and planned administration.
 
-With those defaults and DEC-030 narrative links present, the whole-document
-synthetic run advances to `Medikation.statusCode`. The effective compiled
-constraint treats this `R` target as mandatory, binds it to dynamic ActStatus
-ValueSet `2.16.840.1.113883.1.11.15933`, and supplies neither a fixed value nor
-a source mapping. Choosing a medication status is a separate clinical policy
-decision and remains fail-closed. The Allergy Concern Act
-`effectiveTime/low` boundary described above remains independently unresolved
-and will be encountered after earlier medication requirements are satisfied.
+An order not administered in the ED is not represented by setting the current
+Medikation root to `moodCode="RQO"` and `statusCode="aborted"`. The selected root
+permits only `EVN` and `INT`; its optional UV Medication Order Reference carries
+`RQO`. `aborted` says an act stopped after activation and before intended
+completion, not merely that an order was not fulfilled. Supporting this case
+requires explicit source facts for the order lifecycle and administration
+fulfilment, followed by a reviewed profile construction (potentially an RQO
+order/reference plus a negated EVN administration and reason).
+
+DEC-031 resolves the former `Medikation.statusCode` blocker. The AKTIN child
+explicitly relaxes its declared UV parent's `1..1 M` constraint to `0..1 R`, and
+the generated AKTIN Schematron permits omission. The compiler now uses the
+explicit child constraint, emits a visible SPEC-weakening warning and omits
+status when no source value exists. No ActStatus default is supplied. The
+current synthetic fixture then reaches a different required sibling,
+`hl7:act/hl7:statusCode` in template `1.2.276.0.76.10.4048`; that independent
+clinical completion policy is not inferred here. The Allergy Concern Act
+`effectiveTime/low` boundary described above also remains unresolved.
 
 The subordinate `SXPR_TS/comp` now exposes its XSD-defined `IVL_TS`, `PIVL_TS`,
 `EIVL_TS`, and recursive `SXPR_TS` choices. This closes the missing-physical-leaf

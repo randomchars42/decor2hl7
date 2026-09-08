@@ -343,6 +343,9 @@ def cmd_build(args: argparse.Namespace) -> int:
         inputs["templates"], model_dir, model,
         core_definition_paths=core_paths(release_spec_dir(root, release)),
         cda_extensions=inputs.get("cda_extensions", []),
+        strict_specializations=bool(
+            getattr(args, "strict_specializations", False)
+        ),
     )
     from .conformance import build_conformance_artifacts
     conformance = build_conformance_artifacts(
@@ -393,6 +396,14 @@ def cmd_build(args: argparse.Namespace) -> int:
         f"{cda['stats']['targets']} physical named targets, "
         f"{cda['stats'].get('datapoints', 0)} logical mapped datapoints"
     )
+    constraint_diagnostics = list(cda.get("constraint_diagnostics", []))
+    if constraint_diagnostics:
+        _say(
+            "warning: "
+            f"{len(constraint_diagnostics)} CDA SPEC constraint weakening(s); "
+            "explicit child constraints were used; see "
+            f"{model_dir / 'build-diagnostics.md'}"
+        )
     audit_path = model_dir / "mapping-audit.json"
     if audit_path.is_file():
         accepted_path = _cda_mapping_path(root, release, transaction)
@@ -1339,6 +1350,13 @@ def parser() -> argparse.ArgumentParser:
         help=(
             "return nonzero when a degraded artifact is consulted by this build "
             "(build-diagnostics.json `build_degraded`)"
+        ),
+    )
+    q.add_argument(
+        "--strict-specializations", action="store_true",
+        help=(
+            "reject a CDA template whose explicit constraints weaken a declared "
+            "SPEC parent"
         ),
     )
     q.set_defaults(func=cmd_build)

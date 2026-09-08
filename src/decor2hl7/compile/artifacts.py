@@ -436,6 +436,7 @@ def write_build_diagnostics(
     unavailable = list(inputs.get("unavailable_artifacts", []))
     crawl_degraded = list(inputs.get("crawl_degraded_artifacts", unavailable))
     unresolved = list(cda.get("unresolved_templates", []))
+    constraint_diagnostics = list(cda.get("constraint_diagnostics", []))
     build_degraded = _build_degraded_artifacts(
         model_dir, inputs, model or {}, cda
     )
@@ -447,17 +448,20 @@ def write_build_diagnostics(
             "missing_dependencies": "omit-and-report",
             "missing_document_template": "fatal",
             "identity_mismatch": "fatal",
+            "spec_constraint_weakening": "explicit-child-constraint-and-warning",
         },
         "crawl_degraded": crawl_degraded,
         "build_degraded": build_degraded,
         # Compatibility name retained for consumers of format 1.
         "unavailable_artifacts": unavailable,
         "unresolved_templates": unresolved,
+        "constraint_diagnostics": constraint_diagnostics,
         "summary": {
             "unavailable_artifacts": len(unavailable),
             "crawl_degraded": len(crawl_degraded),
             "build_degraded": len(build_degraded),
             "unresolved_templates": len(unresolved),
+            "constraint_diagnostics": len(constraint_diagnostics),
         },
     }
     write_json(model_dir / "build-diagnostics.json", diagnostics)
@@ -518,6 +522,23 @@ def write_build_diagnostics(
                     _cell(row.get("relation")),
                     _cell(row.get("template")),
                     _cell(row.get("flexibility") or "dynamic"),
+                )
+            )
+        lines.append("")
+    if constraint_diagnostics:
+        lines += [
+            "## CDA constraint diagnostics",
+            "",
+            "| Severity | Code | Template path | Detail |",
+            "|---|---|---|---|",
+        ]
+        for diagnostic in constraint_diagnostics:
+            lines.append(
+                "| {} | `{}` | `{}` | {} |".format(
+                    _cell(diagnostic.get("severity") or "warning"),
+                    _cell(diagnostic.get("code")),
+                    _cell(diagnostic.get("path")),
+                    _cell(diagnostic.get("message")),
                 )
             )
         lines.append("")

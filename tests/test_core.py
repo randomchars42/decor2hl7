@@ -1013,6 +1013,110 @@ class CoreTests(unittest.TestCase):
             self.assertIn("new-section", contains)
             self.assertNotIn("old-section", contains)
 
+    def test_spec_weakening_uses_explicit_child_constraint_and_warns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.xml"
+            project.write_text('''
+<project>
+  <template id="parent" effectiveDate="2020-01-01" name="Parent">
+    <element name="hl7:ClinicalDocument" id="document">
+      <element name="hl7:statusCode" id="status" datatype="CS"
+               minimumMultiplicity="1" maximumMultiplicity="1"
+               conformance="R" isMandatory="true"/>
+    </element>
+  </template>
+  <template id="child" effectiveDate="2026-01-01" name="Child">
+    <relationship type="SPEC" template="parent" flexibility="2020-01-01"/>
+    <element name="hl7:ClinicalDocument" id="document">
+      <attribute name="classCode" value="DOCCLIN"/>
+      <element name="hl7:statusCode" id="status" datatype="CS"
+               minimumMultiplicity="0" maximumMultiplicity="1"
+               conformance="R"/>
+    </element>
+  </template>
+</project>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "child",
+                    "template_effective_date": "2026-01-01",
+                },
+                "groups": {},
+                "fields": {},
+            }
+            compiled = compile_cda([project], model)
+            status = compiled["document"][0]["children"][0]
+            self.assertEqual(status["min"], 0)
+            self.assertFalse(status["mandatory"])
+            self.assertEqual(
+                compiled["stats"]["constraint_diagnostics"], 1,
+            )
+            diagnostic = compiled["constraint_diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "spec-constraint-weakening")
+            self.assertEqual(
+                [change["property"] for change in diagnostic["changes"]],
+                ["minimumMultiplicity", "mandatory"],
+            )
+
+            payload, problems = cda.emit(
+                {"key": "1", "values": {}}, {"fields": {}}, compiled,
+                {"fields": {}}, {"null_flavor": {"missing_required": "NI"}},
+            )
+            self.assertEqual(problems, [])
+            root = ET.fromstring(payload)
+            self.assertIsNone(root.find("{urn:hl7-org:v3}statusCode"))
+
+            with self.assertRaisesRegex(
+                ValueError, "CDA SPEC constraint weakening",
+            ):
+                compile_cda(
+                    [project], model, strict_specializations=True,
+                )
+
+    def test_spec_weakening_policy_also_applies_to_includes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.xml"
+            project.write_text('''
+<project>
+  <template id="group" effectiveDate="2020-01-01" name="Group">
+    <element name="hl7:title" minimumMultiplicity="0"
+             maximumMultiplicity="1"/>
+  </template>
+  <template id="parent" effectiveDate="2020-01-01" name="Parent">
+    <element name="hl7:ClinicalDocument" id="document">
+      <include ref="group" flexibility="2020-01-01"
+               minimumMultiplicity="1" maximumMultiplicity="1"
+               conformance="R" isMandatory="true"/>
+    </element>
+  </template>
+  <template id="child" effectiveDate="2026-01-01" name="Child">
+    <relationship type="SPEC" template="parent" flexibility="2020-01-01"/>
+    <element name="hl7:ClinicalDocument" id="document">
+      <attribute name="classCode" value="DOCCLIN"/>
+      <include ref="group" flexibility="2020-01-01"
+               minimumMultiplicity="0" maximumMultiplicity="1"
+               conformance="R"/>
+    </element>
+  </template>
+</project>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "child",
+                    "template_effective_date": "2026-01-01",
+                },
+                "groups": {},
+                "fields": {},
+            }
+
+            compiled = compile_cda([project], model)
+            include = compiled["document"][0]["children"][0]
+            self.assertEqual(include["kind"], "include")
+            self.assertEqual(include["min"], 0)
+            self.assertFalse(include["mandatory"])
+            self.assertEqual(
+                compiled["constraint_diagnostics"][0]["path"],
+                "include:group",
+            )
+
     def test_missing_spec_parent_revision_degrades_only_the_refinement(self) -> None:
         """A missing SPEC parent revision must not erase or replace its child.
 
@@ -3807,6 +3911,29 @@ class CoreTests(unittest.TestCase):
             report = (model_dir / "build-diagnostics.md").read_text(encoding="utf-8")
             self.assertIn("valueset:vs@2020", report)
             self.assertIn("nested", report)
+
+    def test_build_diagnostics_include_spec_constraint_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp)
+            cda_model = {
+                "unresolved_templates": [],
+                "constraint_diagnostics": [{
+                    "severity": "warning",
+                    "code": "spec-constraint-weakening",
+                    "path": "hl7:ClinicalDocument/hl7:statusCode",
+                    "message": "child weakens parent; using the child",
+                }],
+            }
+            result = write_build_diagnostics(
+                model_dir, {"unavailable_artifacts": []}, cda_model,
+            )
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["summary"]["constraint_diagnostics"], 1)
+            report = (model_dir / "build-diagnostics.md").read_text(
+                encoding="utf-8",
+            )
+            self.assertIn("CDA constraint diagnostics", report)
+            self.assertIn("spec-constraint-weakening", report)
 
     def test_build_diagnostics_limit_headline_to_consulted_terminology(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

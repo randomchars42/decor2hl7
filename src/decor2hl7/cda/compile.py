@@ -5,9 +5,11 @@ ART-DECOR ids remain provenance; runtime assignments use generated target names.
 
 Template ``SPEC`` relationships are compiled as constraint inheritance: the
 specialized template overlays the parent constraint tree while still inheriting
-constraints that it does not redefine.  ``include`` remains a transparent
-constraint group and ``contains`` expands a referenced template below the
-containing XML element.
+constraints that it does not redefine.  Explicit child constraints remain
+authoritative when a published design weakens its declared parent, and the
+non-monotonic refinement is retained as a build diagnostic.  ``include``
+remains a transparent constraint group and ``contains`` expands a referenced
+template below the containing XML element.
 """
 
 from __future__ import annotations
@@ -662,7 +664,10 @@ def _parse_element(
         "datatype": element.get("datatype"),
         "min": _int(element.get("minimumMultiplicity")),
         "max": _maximum(element.get("maximumMultiplicity")),
-        "mandatory": True if element.get("isMandatory") == "true" else None,
+        "mandatory": (
+            _xml_true(element.get("isMandatory"))
+            if element.get("isMandatory") is not None else None
+        ),
         "conformance": element.get("conformance"),
         "is_closed": is_closed,
         "reviewed_extension": source_kind == "reviewed-extension",
@@ -709,7 +714,10 @@ def _parse_include(include: ET.Element, inherited_closed: bool = False) -> dict[
         "flexibility": include.get("flexibility"),
         "min": _int(include.get("minimumMultiplicity")),
         "max": _maximum(include.get("maximumMultiplicity")),
-        "mandatory": True if include.get("isMandatory") == "true" else None,
+        "mandatory": (
+            _xml_true(include.get("isMandatory"))
+            if include.get("isMandatory") is not None else None
+        ),
         "conformance": include.get("conformance"),
         "is_closed": inherited_closed or _xml_true(include.get("isClosed")),
         "children": [],
@@ -787,11 +795,20 @@ def _merge_node(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str
         for key in ("ref", "min", "max", "mandatory", "conformance"):
             if child.get(key) is not None:
                 result[key] = child.get(key)
+        if child.get("min") == 0 and child.get("mandatory") is not True:
+            result["mandatory"] = False
         if child.get("ref") is not None:
             result["flexibility"] = child.get("flexibility")
         result["is_closed"] = bool(parent.get("is_closed")) or bool(
             child.get("is_closed")
         )
+        diagnostics = _unique_constraint_diagnostics(
+            list(parent.get("_constraint_diagnostics", []))
+            + list(child.get("_constraint_diagnostics", []))
+            + _spec_constraint_diagnostics(parent, child, result)
+        )
+        if diagnostics:
+            result["_constraint_diagnostics"] = diagnostics
         return result
 
     result = deepcopy(dict(parent))
@@ -808,6 +825,20 @@ def _merge_node(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str
     ):
         if child.get(key) is not None:
             result[key] = deepcopy(child.get(key))
+    # Cardinality and mandatory are one semantic constraint in ART-DECOR: an
+    # explicit zero lower bound cannot remain mandatory. Some published
+    # templates nevertheless label a broader child as SPEC. Follow the
+    # executable child design, but retain a diagnostic instead of silently
+    # treating that broadening as a valid specialization.
+    if child.get("min") == 0 and child.get("mandatory") is not True:
+        result["mandatory"] = False
+    diagnostics = _unique_constraint_diagnostics(
+        list(parent.get("_constraint_diagnostics", []))
+        + list(child.get("_constraint_diagnostics", []))
+        + _spec_constraint_diagnostics(parent, child, result)
+    )
+    if diagnostics:
+        result["_constraint_diagnostics"] = diagnostics
     if child.get("contains") is not None:
         # A missing flexibility on an explicitly selected containment means
         # dynamic/latest; it must clear a static binding inherited from SPEC.
@@ -869,6 +900,111 @@ def _merge_node(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str
     return result
 
 
+def _constraint_limit(value: Any) -> float | None:
+    if value == "*":
+        return float("inf")
+    if isinstance(value, int):
+        return float(value)
+    return None
+
+
+def _spec_constraint_diagnostics(
+    parent: Mapping[str, Any],
+    child: Mapping[str, Any],
+    effective: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Describe explicit child occurrence constraints that broaden a SPEC parent."""
+    changes: list[dict[str, Any]] = []
+    parent_min = parent.get("min")
+    child_min = child.get("min")
+    if (
+        isinstance(parent_min, int)
+        and isinstance(child_min, int)
+        and child_min < parent_min
+    ):
+        changes.append({
+            "property": "minimumMultiplicity",
+            "parent": parent_min,
+            "child": child_min,
+        })
+
+    parent_max = _constraint_limit(parent.get("max"))
+    child_max = _constraint_limit(child.get("max"))
+    if (
+        parent_max is not None
+        and child_max is not None
+        and child_max > parent_max
+    ):
+        changes.append({
+            "property": "maximumMultiplicity",
+            "parent": parent.get("max"),
+            "child": child.get("max"),
+        })
+
+    if bool(parent.get("mandatory")) and not bool(effective.get("mandatory")):
+        changes.append({
+            "property": "mandatory",
+            "parent": True,
+            "child": False,
+        })
+    if not changes:
+        return []
+
+    parent_origin = dict(parent.get("origin", {}))
+    child_origin = dict(child.get("origin", {}))
+    parent_identity = str(parent_origin.get("template_id") or "parent template")
+    child_identity = str(child_origin.get("template_id") or "specialized template")
+    path = str(
+        child_origin.get("path")
+        or child.get("name")
+        or (
+            f"include:{child.get('ref')}"
+            if child.get("kind") == "include" else None
+        )
+        or "template item"
+    )
+    summary = ", ".join(
+        f"{change['property']} {change['parent']} -> {change['child']}"
+        for change in changes
+    )
+    return [{
+        "code": "spec-constraint-weakening",
+        "severity": "warning",
+        "policy": "explicit-child-constraint-authoritative",
+        "message": (
+            f"{child_identity} weakens SPEC parent {parent_identity} at {path} "
+            f"({summary}); using the explicit child constraint"
+        ),
+        "path": path,
+        "parent": parent_origin,
+        "child": child_origin,
+        "changes": changes,
+    }]
+
+
+def _unique_constraint_diagnostics(
+    diagnostics: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for diagnostic in diagnostics:
+        serial = dict(diagnostic)
+        key = json.dumps(serial, sort_keys=True, ensure_ascii=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(serial)
+    return result
+
+
+def _extract_constraint_diagnostics(
+    nodes: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    for node in nodes:
+        diagnostics.extend(node.pop("_constraint_diagnostics", []))
+        diagnostics.extend(_extract_constraint_diagnostics(node.get("children", [])))
+    return _unique_constraint_diagnostics(diagnostics)
 
 
 def _refine_sequence(parent: list[dict[str, Any]], child: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2639,6 +2775,7 @@ def compile_cda(
     cutoff: str | None = None,
     *,
     strict: bool = True,
+    strict_specializations: bool = False,
     core_definition_paths: Iterable[Path] = (),
     value_set_paths: Iterable[Path] = (),
     cda_extensions: Iterable[Mapping[str, Any]] = (),
@@ -2683,6 +2820,13 @@ def compile_cda(
     memo: dict[TemplateKey, list[dict[str, Any]]] = {}
     effective = _effective_template(selected, templates, memo)
     document = _expand_nodes(effective, templates, memo, (_key(selected),))
+    constraint_diagnostics = _extract_constraint_diagnostics(document)
+    if strict_specializations and constraint_diagnostics:
+        messages = "; ".join(
+            str(item.get("message") or item.get("code") or "SPEC weakening")
+            for item in constraint_diagnostics[:10]
+        )
+        raise ValueError(f"CDA SPEC constraint weakening: {messages}")
     definitions = index_definitions(core_definition_paths)
     if applied_extensions and not definitions:
         raise ValueError(
@@ -2761,6 +2905,7 @@ def compile_cda(
             "description": _description(selected),
         },
         "reviewed_extensions": applied_extensions,
+        "constraint_diagnostics": constraint_diagnostics,
         "targets": targets,
         # Filled after dataset-to-CDA mapping has established logical target
         # occurrences.  ``targets`` remains the physical template constraint
@@ -2783,6 +2928,7 @@ def compile_cda(
             "renderable_targets": sum(bool(target.get("renderable")) for target in targets.values()),
             "writable_value_targets": sum(bool(target.get("writable")) for target in targets.values()),
             "assertions": len(assertions),
+            "constraint_diagnostics": len(constraint_diagnostics),
             "elements": element_count,
             "attributes": attribute_count,
         },
@@ -2795,18 +2941,27 @@ def write_cda(
     model: dict[str, Any],
     fallback_paths: Iterable[Path] = (),
     cutoff: str | None = None,
+    *,
+    strict_specializations: bool = False,
 ) -> dict[str, Any]:
-    cda = compile_cda(xml_paths, model, fallback_paths, cutoff)
+    cda = compile_cda(
+        xml_paths, model, fallback_paths, cutoff,
+        strict_specializations=strict_specializations,
+    )
     write_json(model_dir / "cda.json", cda)
     (model_dir / "cda-assertions.sch").write_text(schematron(cda), encoding="utf-8")
     return cda
 
 
 def compile_cda_model(
-    templates: Iterable[Path], model: dict[str, Any],
+    templates: Iterable[Path], model: dict[str, Any], *,
+    strict_specializations: bool = False,
 ) -> dict[str, Any]:
     """Compile all available exact templates and report closure gaps."""
-    return compile_cda(templates, model, strict=False)
+    return compile_cda(
+        templates, model, strict=False,
+        strict_specializations=strict_specializations,
+    )
 
 
 def write_cda_model(
@@ -2814,10 +2969,12 @@ def write_cda_model(
     core_definition_paths: Iterable[Path] = (),
     value_set_paths: Iterable[Path] = (),
     cda_extensions: Iterable[Mapping[str, Any]] = (),
+    strict_specializations: bool = False,
 ) -> dict[str, Any]:
     """Write ``cda.json`` while retaining unresolved nested references."""
     cda = compile_cda(
         templates, model, strict=False,
+        strict_specializations=strict_specializations,
         core_definition_paths=core_definition_paths,
         value_set_paths=value_set_paths,
         cda_extensions=cda_extensions,

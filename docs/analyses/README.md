@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-08-spec-relaxation-and-medication-state.md`](2026-09-08-spec-relaxation-and-medication-state.md)
+  records the explicit-child policy and warning for non-monotonic ART-DECOR
+  `SPEC` designs, resolves optional AKTIN medication status, and separates
+  future recommendation, order, administration and lifecycle semantics.
 - [`2026-09-07-reviewed-scalar-target-defaults.md`](2026-09-07-reviewed-scalar-target-defaults.md)
   records the reviewed non-null completion mechanism, the CEDIS concern-status
   and ED-medication mood policies, and the future three-way medication source
