@@ -178,6 +178,53 @@ def _physical_default_target(cda: Mapping[str, Any], configured: str) -> str:
     return configured
 
 
+def _compiled_coded_members(
+    target: Mapping[str, Any], value: Any,
+) -> dict[tuple[tuple[str, str], ...], dict[str, str]]:
+    """Return distinct compiled coding members selected by a scalar value."""
+    representation = target.get("value_representation", {})
+    if (
+        not isinstance(value, str)
+        or not isinstance(representation, Mapping)
+        or representation.get("kind") != ValueRepresentationKind.CODED.value
+    ):
+        return {}
+
+    aliases = {
+        "codeSystem": ("codeSystem", "code_system"),
+        "codeSystemName": ("codeSystemName", "code_system_name"),
+        "codeSystemVersion": ("codeSystemVersion", "code_system_version"),
+        "displayName": ("displayName", "display_name"),
+    }
+    matches: dict[tuple[tuple[str, str], ...], dict[str, str]] = {}
+    for member in target.get("codes", []):
+        if not isinstance(member, Mapping) or str(member.get("code")) != value:
+            continue
+        coding: dict[str, str] = {"code": value}
+        for attribute, source_names in aliases.items():
+            source = next(
+                (
+                    member.get(name)
+                    for name in source_names if member.get(name) is not None
+                ),
+                None,
+            )
+            if source is not None:
+                coding[attribute] = str(source)
+        matches[tuple(sorted(coding.items()))] = coding
+    return matches
+
+
+def _compiled_coded_default(
+    target: Mapping[str, Any], value: Any,
+) -> dict[str, str] | None:
+    """Return the unique compiled coding selected by a scalar default."""
+    matches = _compiled_coded_members(target, value)
+    if len(matches) == 1:
+        return next(iter(matches.values()))
+    return None
+
+
 def target_default_values(
     cda: Mapping[str, Any], mapping: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -203,6 +250,14 @@ def target_default_values(
             {"nullFlavor": str(rule.get("nullFlavor") or "")}
             if "nullFlavor" in rule else rule.get("value")
         )
+        if "value" in rule:
+            target = cda.get("targets", {}).get(physical, {})
+            compiled_coding = (
+                _compiled_coded_default(target, value)
+                if isinstance(target, Mapping) else None
+            )
+            if compiled_coding is not None:
+                value = compiled_coding
         if physical in result and result[physical] != value:
             raise ValueError(
                 f"cda-mapping: target defaults {owners[physical]!r} and {name!r} "
@@ -249,6 +304,11 @@ def _validate_scalar_default(
         return [
             f"{prefix}.value {value!r} is outside the target's compiled code constraint"
         ]
+    if kind == ValueRepresentationKind.CODED.value:
+        if len(_compiled_coded_members(target, value)) > 1:
+            return [
+                f"{prefix}.value {value!r} has ambiguous compiled coding companions"
+            ]
     return []
 
 

@@ -14,12 +14,17 @@ import xml.etree.ElementTree as ET
 from html import escape
 from typing import Any, Mapping
 
+from .retrieval.xml import KNOWN_PREFIXES
+
 HL7 = "urn:hl7-org:v3"
 
 
-def _qname(name: str) -> str:
-    if name.startswith("hl7:"):
-        return f"{{{HL7}}}{name.split(':', 1)[1]}"
+def _qname(name: str, namespaces: Mapping[str, str]) -> str:
+    prefix, separator, local_name = name.partition(":")
+    if separator:
+        uri = namespaces.get(prefix) or KNOWN_PREFIXES.get(prefix)
+        if uri:
+            return f"{{{uri}}}{local_name}"
     return name
 
 
@@ -105,7 +110,10 @@ def _segment(segment: str) -> tuple[str, list[str]]:
     return name, predicates
 
 
-def _select(path: str, context: ET.Element, root: ET.Element) -> list[Any]:
+def _select(
+    path: str, context: ET.Element, root: ET.Element,
+    namespaces: Mapping[str, str],
+) -> list[Any]:
     descendant, segments = _split_path(path)
     if not segments:
         return []
@@ -117,9 +125,11 @@ def _select(path: str, context: ET.Element, root: ET.Element) -> list[Any]:
             m = re.fullmatch(r"([^=\s]+)\s*=\s*(['\"])(.*?)\2", attr_expr)
             if m:
                 attr, expected = m.group(1), m.group(3)
-                return [item.get(attr) for item in current if isinstance(item, ET.Element) and item.get(attr) == expected]
-            return [item.get(attr_expr) for item in current if isinstance(item, ET.Element) and item.get(attr_expr) is not None]
-        qname = _qname(name)
+                qname = _qname(attr, namespaces)
+                return [item.get(qname) for item in current if isinstance(item, ET.Element) and item.get(qname) == expected]
+            qname = _qname(attr_expr, namespaces)
+            return [item.get(qname) for item in current if isinstance(item, ET.Element) and item.get(qname) is not None]
+        qname = _qname(name, namespaces)
         candidates: list[ET.Element] = []
         for item in current:
             if not isinstance(item, ET.Element): continue
@@ -128,12 +138,18 @@ def _select(path: str, context: ET.Element, root: ET.Element) -> list[Any]:
             else:
                 candidates.extend([node for node in list(item) if node.tag == qname])
         for predicate in predicates:
-            candidates = [node for node in candidates if _eval(predicate, node, root, {}) is True]
+            candidates = [
+                node for node in candidates
+                if _eval(predicate, node, root, {}, namespaces) is True
+            ]
         current = candidates
     return current
 
 
-def _eval(expr: str, context: ET.Element, root: ET.Element, variables: Mapping[str, str]) -> bool | None:
+def _eval(
+    expr: str, context: ET.Element, root: ET.Element,
+    variables: Mapping[str, str], namespaces: Mapping[str, str],
+) -> bool | None:
     expr = _strip_outer(re.sub(r"\s+", " ", expr.strip()))
     if not expr:
         return True
@@ -142,7 +158,7 @@ def _eval(expr: str, context: ET.Element, root: ET.Element, variables: Mapping[s
         var = re.match(r"empty\(\$([A-Za-z_][A-Za-z0-9_-]*)", expr)
         if not var or var.group(1) not in variables:
             return None
-        nodes = _select(variables[var.group(1)], context, root)
+        nodes = _select(variables[var.group(1)], context, root, namespaces)
         seen: set[tuple[str, str]] = set()
         for node in nodes:
             if not isinstance(node, ET.Element): continue
@@ -157,33 +173,41 @@ def _eval(expr: str, context: ET.Element, root: ET.Element, variables: Mapping[s
         return True
     parts = _split_top(expr, "or")
     if parts:
-        results = [_eval(part, context, root, variables) for part in parts]
+        results = [
+            _eval(part, context, root, variables, namespaces) for part in parts
+        ]
         if any(result is True for result in results): return True
         if all(result is False for result in results): return False
         return None
     parts = _split_top(expr, "and")
     if parts:
-        results = [_eval(part, context, root, variables) for part in parts]
+        results = [
+            _eval(part, context, root, variables, namespaces) for part in parts
+        ]
         if any(result is False for result in results): return False
         if all(result is True for result in results): return True
         return None
     if expr.startswith("not(") and expr.endswith(")"):
-        result = _eval(expr[4:-1], context, root, variables)
+        result = _eval(expr[4:-1], context, root, variables, namespaces)
         return None if result is None else not result
     match = re.fullmatch(r"count\((.*)\)\s*(<=|>=|=|<|>)\s*(\d+)", expr)
     if match:
-        count = len(_select(match.group(1), context, root)); expected = int(match.group(3)); op = match.group(2)
+        count = len(_select(match.group(1), context, root, namespaces)); expected = int(match.group(3)); op = match.group(2)
         return {"<=": count <= expected, ">=": count >= expected, "=": count == expected, "<": count < expected, ">": count > expected}[op]
     match = re.fullmatch(r"@([^=\s]+)\s*=\s*(['\"])(.*?)\2", expr)
     if match:
-        return context.get(match.group(1)) == match.group(3)
+        return context.get(_qname(match.group(1), namespaces)) == match.group(3)
     if "$" in expr or "index-of(" in expr:
         return None
-    return bool(_select(expr, context, root))
+    return bool(_select(expr, context, root, namespaces))
 
 
-def evaluate(test: str, context: ET.Element, root: ET.Element, lets: Mapping[str, str] | None = None) -> bool | None:
-    return _eval(test, context, root, lets or {})
+def evaluate(
+    test: str, context: ET.Element, root: ET.Element,
+    lets: Mapping[str, str] | None = None,
+    namespaces: Mapping[str, str] | None = None,
+) -> bool | None:
+    return _eval(test, context, root, lets or {}, namespaces or {})
 
 
 def validate_contexts(
@@ -194,7 +218,15 @@ def validate_contexts(
     for element, assertions, lets in contexts:
         for assertion in assertions:
             test = str(assertion.get("test") or "")
-            result = evaluate(test, element, root, lets)
+            raw_namespaces = assertion.get("namespaces", {})
+            namespaces = (
+                {
+                    str(prefix): str(uri)
+                    for prefix, uri in raw_namespaces.items()
+                }
+                if isinstance(raw_namespaces, Mapping) else {}
+            )
+            result = evaluate(test, element, root, lets, namespaces)
             label = str(assertion.get("message") or test)
             source = f"{assertion.get('template_id') or '?'}:{assertion.get('element_id') or assertion.get('path') or '?'}"
             if result is False:
@@ -212,10 +244,49 @@ def validate_contexts(
 
 def schematron(cda: Mapping[str, Any]) -> str:
     assertions = list(cda.get("assertions", []))
+    namespace_uris = {"hl7": HL7}
+    prefix_pattern = re.compile(
+        r"(?<![:\w.-])([A-Za-z_][\w.-]*):(?=[A-Za-z_*])"
+    )
+    for assertion in assertions:
+        raw_namespaces = assertion.get("namespaces", {})
+        available = (
+            {
+                str(prefix): str(uri)
+                for prefix, uri in raw_namespaces.items()
+            }
+            if isinstance(raw_namespaces, Mapping) else {}
+        )
+        expressions = [
+            str(assertion.get("path") or ""),
+            str(assertion.get("test") or ""),
+            *(str(value) for value in dict(assertion.get("lets", {})).values()),
+        ]
+        for prefix in {
+            match.group(1)
+            for expression in expressions
+            for match in prefix_pattern.finditer(expression)
+        }:
+            uri = available.get(prefix) or KNOWN_PREFIXES.get(prefix)
+            if uri is None:
+                raise ValueError(
+                    f"ART-DECOR assertion uses undeclared namespace prefix {prefix!r}"
+                )
+            previous = namespace_uris.get(prefix)
+            if previous is not None and previous != uri:
+                raise ValueError(
+                    f"ART-DECOR assertions bind namespace prefix {prefix!r} "
+                    f"to both {previous!r} and {uri!r}"
+                )
+            namespace_uris[prefix] = uri
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<sch:schema xmlns:sch="http://purl.oclc.org/dsdl/schematron" queryBinding="xslt2">',
-        f'  <sch:ns prefix="hl7" uri="{HL7}"/>',
+        *(
+            f'  <sch:ns prefix="{escape(prefix, quote=True)}" '
+            f'uri="{escape(namespace_uris[prefix], quote=True)}"/>'
+            for prefix in sorted(namespace_uris)
+        ),
         '  <sch:pattern id="art-decor-assertions">',
     ]
     for index, assertion in enumerate(assertions, 1):

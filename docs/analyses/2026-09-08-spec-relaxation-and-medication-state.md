@@ -84,4 +84,6 @@ unit tests pass. An isolated build of the complete reference workspace reports
 three weakenings and compiles Medikation `statusCode` as optional. Its synthetic
 mapping fixture no longer reports medication status; it advances to the
 independent mandatory `hl7:act/hl7:statusCode` in template
-`1.2.276.0.76.10.4048`, for which no value is currently mapped or defaulted.
+`1.2.276.0.76.10.4048`. The later reviewed resolution of that concern-level
+boundary is recorded separately in
+[`2026-09-08-final-diagnosis-concern-defaults.md`](2026-09-08-final-diagnosis-concern-defaults.md).

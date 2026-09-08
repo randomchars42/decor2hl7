@@ -12,7 +12,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from decor2hl7 import assertions, cda, data, state, validate
-from decor2hl7.bindings import build_assignments
+from decor2hl7.bindings import build_assignments, target_default_values
 from decor2hl7.build import mapping
 from decor2hl7.build.mapping import cda_mapping_proposal
 from decor2hl7.build.model import compile_model
@@ -3160,6 +3160,71 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(any("Coded.value" in error and "compiled code constraint" in error for error in errors))
         self.assertTrue(any("Compound.value" in error and "compound non-null companions" in error for error in errors))
 
+    def test_coded_target_default_inherits_unique_compiled_coding(self) -> None:
+        target = {
+            "kind": "element", "datatype": "CE", "min": 1, "max": 1,
+            "mandatory": True, "has_children": True, "conformance": "M",
+            "renderable": True, "writable": True, "locations": ["0.0"],
+            "fixed": {}, "logical_types": ["code"],
+            "value_representation": {
+                "kind": "coded",
+                "attributes": ["code", "codeSystem", "displayName"],
+                "scalar_attribute": "code",
+            },
+            "codes": [{
+                "code": "29308-4",
+                "code_system": "2.16.840.1.113883.6.1",
+                "display_name": "Diagnosis",
+            }, {
+                "code": "75324-4",
+                "code_system": "2.16.840.1.113883.6.1",
+            }],
+        }
+        compiled = {"targets": {"Diagnosis.code": target}}
+        mapping = {"fields": {}, "target_defaults": {
+            "Diagnosis.code": {
+                "value": "29308-4",
+                "reason": "The template prefers this statement-kind code.",
+            },
+        }}
+
+        self.assertEqual(target_default_values(compiled, mapping), {
+            "Diagnosis.code": {
+                "code": "29308-4",
+                "codeSystem": "2.16.840.1.113883.6.1",
+                "displayName": "Diagnosis",
+            },
+        })
+
+    def test_coded_target_default_rejects_ambiguous_companions(self) -> None:
+        compiled = {"targets": {"Diagnosis.code": {
+            "kind": "element", "datatype": "CE", "min": 1, "max": 1,
+            "mandatory": True, "has_children": True, "conformance": "M",
+            "renderable": True, "writable": True, "locations": ["0.0"],
+            "fixed": {}, "logical_types": ["code"],
+            "value_representation": {
+                "kind": "coded", "attributes": ["code", "codeSystem"],
+                "scalar_attribute": "code",
+            },
+            "codes": [
+                {"code": "same", "code_system": "1.2.3"},
+                {"code": "same", "code_system": "4.5.6"},
+            ],
+        }}}
+        mapping = {"fields": {}, "target_defaults": {
+            "Diagnosis.code": {
+                "value": "same", "reason": "Intentionally ambiguous.",
+            },
+        }}
+
+        errors = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}}, mapping
+        )
+        self.assertTrue(any(
+            "Diagnosis.code" in error and "ambiguous compiled coding companions" in error
+            for error in errors
+        ))
+
     def test_target_default_validation_rejects_unsafe_nullification(self) -> None:
         def target(**changes: object) -> dict[str, object]:
             result: dict[str, object] = {
@@ -5542,6 +5607,18 @@ class CoreTests(unittest.TestCase):
         self.assertIs(assertions.evaluate("not(@negationInd='true' and hl7:value/hl7:qualifier/hl7:name/@code='FSTAT')", observation, root), True)
         self.assertIs(assertions.evaluate("count(hl7:component/hl7:observation[hl7:targetSiteCode/@code='L'])<=1", root, root), True)
 
+    def test_assertion_evaluator_resolves_template_namespaces(self) -> None:
+        root = ET.fromstring('''<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:pharmhl7="urn:hl7-org:pharm"><pharmhl7:ingredientSubstance><pharmhl7:name>Aspirin</pharmhl7:name></pharmhl7:ingredientSubstance></ClinicalDocument>''')
+        substance = root.find('{urn:hl7-org:pharm}ingredientSubstance')
+        assert substance is not None
+        self.assertIs(
+            assertions.evaluate(
+                "pharmhl7:code or pharmhl7:name", substance, root,
+                namespaces={"pharmhl7": "urn:hl7-org:pharm"},
+            ),
+            True,
+        )
+
     def test_schematron_preserves_assert_and_let(self) -> None:
         text = assertions.schematron({"assertions": [{
             "path": "hl7:observation", "template_id": "1.2.3", "role": "error",
@@ -5549,6 +5626,18 @@ class CoreTests(unittest.TestCase):
         }]})
         self.assertIn('<sch:let name="seq" value="//hl7:value"/>', text)
         self.assertIn('test="empty($seq)"', text)
+
+    def test_schematron_declares_assertion_template_namespaces(self) -> None:
+        text = assertions.schematron({"assertions": [{
+            "path": "pharmhl7:ingredientSubstance",
+            "template_id": "2.16.840.1.113883.10.21.4.18",
+            "role": "error", "test": "pharmhl7:code or pharmhl7:name",
+            "message": "code or name",
+            "namespaces": {"pharmhl7": "urn:hl7-org:pharm"},
+        }]})
+        self.assertIn(
+            '<sch:ns prefix="pharmhl7" uri="urn:hl7-org:pharm"/>', text
+        )
 
     def test_transform_rules_render_negation_nullflavor_and_ordinal(self) -> None:
         compiled = {

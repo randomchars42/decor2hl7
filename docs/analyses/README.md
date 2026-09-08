@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-08-final-diagnosis-concern-defaults.md`](2026-09-08-final-diagnosis-concern-defaults.md)
+  records the reviewed `active` lifecycle and unknown concern-start defaults
+  for the aggregate final-diagnosis Concern Act, the preferred LOINC
+  observation-kind default, and the namespace-aware UV Ingredient assertion
+  correction exposed by the reference fixture.
 - [`2026-09-08-spec-relaxation-and-medication-state.md`](2026-09-08-spec-relaxation-and-medication-state.md)
   records the explicit-child policy and warning for non-monotonic ART-DECOR
   `SPEC` designs, resolves optional AKTIN medication status, and separates

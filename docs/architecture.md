@@ -585,8 +585,12 @@ refinement. The renderer records each instantiated assertion context and evaluat
 it only after the complete CDA tree exists, so document-global `//` tests work.
 Error failures or unsupported error expressions abort emission; warning failures
 are returned as diagnostics. The same original expressions are emitted as
-`cda-assertions.sch`. The independent source verifier checks that assertions on
-effective ART-DECOR source elements survive compilation.
+`cda-assertions.sch`. Every assertion retains the in-scope namespace bindings
+from its source template. Both the in-process evaluator and generated
+Schematron therefore resolve non-CDA prefixes such as `pharmhl7` to expanded
+XML names instead of treating the lexical prefix as part of a local name. The
+independent source verifier checks that assertions on effective ART-DECOR
+source elements survive compilation.
 
 Dataset fields record `repeat_chain` from outer to inner repeating groups. CSV
 configuration can bind each level to an `occurrence_keys` column. Normalized

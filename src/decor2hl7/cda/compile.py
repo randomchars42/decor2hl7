@@ -616,7 +616,7 @@ def _parse_element(
     value_sets, value_set_bindings, codes, fixed, unit = _constraints(element)
     children: list[dict[str, Any]] = []
     attributes: list[dict[str, Any]] = []
-    assertions: list[dict[str, str]] = []
+    assertions: list[dict[str, Any]] = []
     lets: dict[str, str] = {}
     for child in list(element):
         kind = local(child.tag)
@@ -645,6 +645,7 @@ def _parse_element(
                 "template_effective_date": template.get("effectiveDate") or "",
                 "element_id": element.get("id") or "",
                 "path": current_path,
+                "namespaces": _template_namespaces(template),
             })
     return {
         "kind": "element",
@@ -859,12 +860,17 @@ def _merge_node(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str
             result["value_sets"] = []
             result["value_set_bindings"] = []
     merged_asserts: list[dict[str, Any]] = []
-    seen_asserts: set[tuple[str, str, str]] = set()
+    seen_asserts: set[tuple[str, str, str, tuple[tuple[str, str], ...]]] = set()
     for assertion in list(parent.get("asserts", [])) + list(child.get("asserts", [])):
+        assertion_namespaces = assertion.get("namespaces", {})
         assertion_key = (
             str(assertion.get("test") or ""),
             str(assertion.get("role") or ""),
             str(assertion.get("message") or ""),
+            tuple(sorted(
+                (str(prefix), str(uri))
+                for prefix, uri in assertion_namespaces.items()
+            )) if isinstance(assertion_namespaces, Mapping) else (),
         )
         if assertion_key not in seen_asserts:
             seen_asserts.add(assertion_key)

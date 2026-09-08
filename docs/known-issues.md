@@ -142,11 +142,32 @@ DEC-031 resolves the former `Medikation.statusCode` blocker. The AKTIN child
 explicitly relaxes its declared UV parent's `1..1 M` constraint to `0..1 R`, and
 the generated AKTIN Schematron permits omission. The compiler now uses the
 explicit child constraint, emits a visible SPEC-weakening warning and omits
-status when no source value exists. No ActStatus default is supplied. The
-current synthetic fixture then reaches a different required sibling,
-`hl7:act/hl7:statusCode` in template `1.2.276.0.76.10.4048`; that independent
-clinical completion policy is not inferred here. The Allergy Concern Act
-`effectiveTime/low` boundary described above also remains unresolved.
+status when no source value exists. No ActStatus default is supplied.
+
+DEC-029 now also closes the next final-diagnosis Concern Act requirements. The
+aggregate act in template `1.2.276.0.76.10.4048` uses the reviewed
+`statusCode="active"` policy while its diagnoses remain relevant for handoff;
+`completed` would require explicit concern-closure evidence. Its required
+`effectiveTime/low` uses `nullFlavor="UNK"`, because the concern-start time is
+applicable but absent from the transaction. Both are exact branch-local target
+defaults and do not create an empty final-diagnosis act.
+
+The final-diagnosis Problem Observation in template
+`1.2.276.0.76.10.4049` now uses the explicitly preferred LOINC construction
+code `29308-4`; the permitted deprecated alternative `75324-4` is not emitted.
+The generic scalar-default runtime resolves the selected finite member to its
+compiled `codeSystem` and rejects ambiguous coding companions.
+
+The next fixture failure exposed a validator defect rather than missing
+ingredient data: UV Ingredient XML already contained `pharmhl7:code` and
+`pharmhl7:name`, but the in-process assertion evaluator only expanded `hl7`
+QNames. DEC-032 retains source-template namespace maps, uses them during
+evaluation, and declares the used prefixes in generated Schematron. Separate
+discharge-only and transfer-only synthetic scenarios now pass. The reference
+fixture stores those outcomes as `TEST-1` and `TEST-2`, respectively, and
+expects two documents. One record that sets both remains invalid by the AKTIN
+document assertion, as intended. The Allergy Concern Act `effectiveTime/low`
+boundary described above also remains unresolved.
 
 The subordinate `SXPR_TS/comp` now exposes its XSD-defined `IVL_TS`, `PIVL_TS`,
 `EIVL_TS`, and recursive `SXPR_TS` choices. This closes the missing-physical-leaf

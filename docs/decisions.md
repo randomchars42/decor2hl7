@@ -46,6 +46,7 @@ is not necessarily an accepted clinical policy.
 | DEC-029 | Reviewed scalar CDA construction defaults | accepted | verified |
 | DEC-030 | Compiled entry-to-section narrative links | accepted | verified |
 | DEC-031 | Explicit child constraints in non-monotonic SPEC designs | accepted | verified |
+| DEC-032 | Namespace-aware ART-DECOR assertion evaluation | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -1109,9 +1110,11 @@ Evidence: `src/decor2hl7/cda/extensions.py`,
 scalar `value`, but never both. A scalar default requires a non-empty review
 reason and is limited to one exact, writable, required scalar target. Its type
 must match the compiled value representation, and a compiled finite code
-constraint must admit a coded value. Identifier values and targets with
-compound non-null companions remain excluded because one scalar cannot satisfy
-their construction semantics.
+constraint must admit a coded value. When that code selects one unique compiled
+coding, the runtime carries its compiled `codeSystem` and display metadata into
+the CDA; the same lexical code with different coding companions is rejected as
+ambiguous. Identifier values and targets with compound non-null companions
+remain excluded because one scalar cannot satisfy their construction semantics.
 
 A scalar default is completion policy, not source data: it never activates an
 otherwise unused optional branch. It is applied independently in every active
@@ -1122,16 +1125,29 @@ default without changing renderer policy.
 For the selected emergency-department transaction, the CEDIS Problem Concern
 Act uses `statusCode="active"` while the presenting complaint is tracked;
 `completed` would require explicit closure evidence and would pair with the
-concern's `effectiveTime/high`. Medication currently covers only medication
-given during treatment in the emergency department, so its reviewed
-`moodCode` is `EVN`. Future medication history and future recommendations must
-add a per-medication three-way dataset field. Given-in-ED and medication-history
-entries map to `EVN`; future recommendations map to `INT`. Start/stop timestamps
-do not substitute for that source distinction.
+concern's `effectiveTime/high`. The aggregate Abschlussdiagnosen Concern Act
+uses the same lifecycle policy: diagnoses communicated for handoff remain an
+active concern unless the source explicitly says tracking has ended. Its
+required concern-start time uses `nullFlavor="UNK"`, because such a time is
+applicable but absent from the transaction. These exact defaults activate only
+when real final-diagnosis data activates the optional branch.
+
+The final-diagnosis Problem Observation uses the template's explicitly
+preferred LOINC statement-kind code `29308-4`, rather than the permitted but
+deprecated `75324-4`. This identifies the observation as a diagnosis statement;
+the patient diagnosis itself remains in `observation/value`.
+
+Medication currently covers only medication given during treatment in the
+emergency department, so its reviewed `moodCode` is `EVN`. Future medication
+history and future recommendations must add a per-medication three-way dataset
+field. Given-in-ED and medication-history entries map to `EVN`; future
+recommendations map to `INT`. Start/stop timestamps do not substitute for that
+source distinction.
 
 Evidence: `src/decor2hl7/bindings.py`, `src/decor2hl7/cda/render.py`,
 `tests/test_core.py`,
-`docs/analyses/2026-09-07-reviewed-scalar-target-defaults.md`.
+`docs/analyses/2026-09-07-reviewed-scalar-target-defaults.md`,
+`docs/analyses/2026-09-08-final-diagnosis-concern-defaults.md`.
 
 ## DEC-030 — Compiled entry-to-section narrative links
 
@@ -1193,6 +1209,28 @@ status remain distinct clinical facts.
 Evidence: `src/decor2hl7/cda/compile.py`, `src/decor2hl7/compile/artifacts.py`,
 `src/decor2hl7/cli.py`, `tests/test_core.py`,
 `docs/analyses/2026-09-08-spec-relaxation-and-medication-state.md`.
+
+## DEC-032 — Namespace-aware ART-DECOR assertion evaluation
+
+**Decision:** accepted
+**Implementation:** verified
+
+Each compiled ART-DECOR assertion retains the namespace bindings in scope on
+its source template. The in-process assertion evaluator resolves every QName
+through that map, with the project's known-prefix table as compatibility for
+older compiled models. Generated `cda-assertions.sch` declares every prefix
+used by an assertion path, test, or let expression and fails compilation for
+an unknown or conflicting binding.
+
+This is required for assertions over selected profile extensions. In
+particular, the UV Ingredient rule tests `pharmhl7:code or pharmhl7:name` in
+the `urn:hl7-org:pharm` namespace. Lexically treating `pharmhl7` as part of an
+unnamespaced element name produces a false failure even when both children are
+present in the XML.
+
+Evidence: `src/decor2hl7/assertions.py`, `src/decor2hl7/cda/compile.py`,
+`tests/test_core.py`,
+`docs/analyses/2026-09-08-final-diagnosis-concern-defaults.md`.
 
 ## Maintenance rule
 
