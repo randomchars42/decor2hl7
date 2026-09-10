@@ -4492,6 +4492,35 @@ class CoreTests(unittest.TestCase):
         self.assertIn("<!-- Possible target (unproven): T.value -->", guide)
         self.assertNotIn("## Sections and entities", guide)
 
+    def test_possible_target_pool_excludes_generated_narrative_references(self) -> None:
+        def target(**values: Any) -> dict[str, Any]:
+            return {
+                "writable": True,
+                "locations": ["0.0"],
+                "logical_types": ["text"],
+                "fixed": {},
+                "conditional_fixed": False,
+                "system_value": None,
+                "element_name": "hl7:value",
+                "path": "hl7:observation/hl7:value",
+                "provenance": [{"source": "template"}],
+                **values,
+            }
+
+        pool = mapping_compiler._cda_target_candidate_pool({
+            "targets": {
+                "Clinical.value": target(),
+                "Generated.reference": target(
+                    element_name="@value",
+                    path="hl7:observation/hl7:text/hl7:reference/@value",
+                    content_role="narrative_reference",
+                    system_value="generated_narrative_reference",
+                ),
+            },
+        })
+
+        self.assertEqual(list(pool), ["Clinical.value"])
+
     def test_possible_targets_apply_datatype_cooccurrence_admissibility(self) -> None:
         def target(
             location: str, path: str, datatype: str,

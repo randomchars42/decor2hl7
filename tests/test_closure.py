@@ -111,7 +111,7 @@ class ReferenceClosureTests(unittest.TestCase):
         self.assertTrue(all(value["items"] for value in inventories.values()))
         self.assertEqual(
             {value["document_pool_size"] for value in inventories.values()},
-            {1059},
+            {1058},
         )
 
         xray_path = (
@@ -177,7 +177,7 @@ class ReferenceClosureTests(unittest.TestCase):
         )
         self.assertIsNotNone(inventory)
         assert inventory is not None
-        self.assertEqual(inventory["document_pool_size"], 1059)
+        self.assertEqual(inventory["document_pool_size"], 1058)
         by_name = {item["target"]: item for item in inventory["items"]}
         parent = by_name["Problemobservationcedis.effectiveTime"]
         low = by_name[
