@@ -213,8 +213,10 @@ def check_config(
             if len(locations) != 1:
                 errors.append(f"cda-mapping: {path} target {cda_target_name} has {len(locations)} physical locations")
             transform = rule.get("transform")
-            for reason in validate_transform(transform):
-                errors.append(f"cda-mapping: {path} -> {target_name}: {reason}")
+            for transform_reason in validate_transform(transform):
+                errors.append(
+                    f"cda-mapping: {path} -> {target_name}: {transform_reason}"
+                )
             if mode == "presence":
                 if str(field.get("type") or "") != "boolean":
                     errors.append(
@@ -222,16 +224,16 @@ def check_config(
                     )
                 continue
             if mode == "fallback_if_active":
-                reason = rule.get("reason")
-                if not isinstance(reason, str) or not reason.strip():
+                review_reason = rule.get("reason")
+                if not isinstance(review_reason, str) or not review_reason.strip():
                     errors.append(
                         f"cda-mapping: {path} -> {target_name}: "
                         "fallback_if_active requires a non-empty review reason"
                     )
-                required = bool(target.get("mandatory")) or int(
+                target_required = bool(target.get("mandatory")) or int(
                     target.get("min") or 0
                 ) >= 1
-                if not required:
+                if not target_required:
                     errors.append(
                         f"cda-mapping: {path} -> {target_name}: "
                         "fallback_if_active requires a target that is mandatory "
@@ -254,8 +256,9 @@ def check_config(
             )
             if for_each_target_positions(field, target, cda, cda_mapping) is not None:
                 reasons = [
-                    reason for reason in reasons
-                    if not reason.startswith("dataset has ")
+                    compatibility_reason
+                    for compatibility_reason in reasons
+                    if not compatibility_reason.startswith("dataset has ")
                 ]
                 compatible = not reasons
             if not compatible:
@@ -288,15 +291,15 @@ def check_config(
     }
     supplied_targets = configured_targets | site_targets
     for target_name in sorted(configured_targets):
-        for required in map(
+        for required_target in map(
             str, targets.get(target_name, {}).get("non_null_requires", [])
         ):
             if not non_null_requirement_satisfied(
-                cda, required, supplied_targets
+                cda, required_target, supplied_targets
             ):
                 errors.append(
                     f"cda-mapping: target {target_name} requires a non-null "
-                    f"companion at {required}"
+                    f"companion at {required_target}"
                 )
     for target_name, paths in sorted(claims.items()):
         covered = covered_shared_claims(cda_mapping).get(target_name, set())
