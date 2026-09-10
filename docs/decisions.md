@@ -48,6 +48,8 @@ is not necessarily an accepted clinical policy.
 | DEC-031 | Explicit child constraints in non-monotonic SPEC designs | accepted | verified |
 | DEC-032 | Namespace-aware ART-DECOR assertion evaluation | accepted | verified |
 | DEC-033 | Reviewed allergy time construction | accepted | verified |
+| DEC-034 | Bounded receiver transport adapters | accepted | verified |
+| DEC-035 | Versioned authored mapping scenarios | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -1304,6 +1306,35 @@ durable state changes required to interpret per-document acknowledgement.
 
 Evidence: `src/decor2hl7/transport.py`, `src/decor2hl7/cli.py`,
 `src/decor2hl7/testing.py`, `tests/test_transport.py`, `tests/test_cli.py`.
+
+## DEC-035 — Versioned authored mapping scenarios
+
+**Decision:** accepted
+**Implementation:** verified
+
+Reusable mapping scenarios are authored as CSV source sets with a manifest,
+stored beneath their release key and exact transaction key. The manifest also
+pins transaction OID and effective date; setup rejects a mismatch instead of
+adapting old data to a new compiled specification. Source cardinality, joins,
+and occurrence identity are explicit configuration and are never inferred from
+filenames or row position.
+
+`setup-test --scenario` copies the declared sources into an isolated generated
+fixture and derives its CSV/code/site configuration and `expected.json` from
+the selected model and mapping. The authored contract may declare suite-wide
+mapping coverage plus per-case present/absent model fields and CDA template IDs.
+This permits mutually exclusive choices to be tested across complete records.
+Generated CDA output is not accepted as its own golden oracle.
+
+The deterministic synthetic generator remains available when no scenario is
+specified, but the repository reference `testrun` uses the pinned authored set.
+Scenario names describe the complete record set; individual records use neutral
+`SCENARIO-*` identifiers rather than naming one partial clinical feature as the
+whole document.
+
+Evidence: `src/decor2hl7/testing.py`, `src/decor2hl7/cli.py`, `Makefile`,
+`tests/test_cli.py`, `tests/test_scenarios.py`,
+`tests/fixtures/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases/`.
 
 ## Maintenance rule
 

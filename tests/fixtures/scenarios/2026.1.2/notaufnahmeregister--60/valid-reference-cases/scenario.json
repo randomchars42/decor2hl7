@@ -1,0 +1,237 @@
+{
+  "version": 1,
+  "name": "valid-reference-cases",
+  "description": "Complete emergency-department reference records covering mutually exclusive triage and disposition branches without treating triage as the whole scenario.",
+  "release": "2026.1.2",
+  "transaction": {
+    "key": "notaufnahmeregister--60",
+    "id": "2.16.840.1.113883.2.6.60.3.4.60",
+    "effective_date": "2026-03-25T00:00:00"
+  },
+  "case_descriptions": {
+    "SCENARIO-01": "ESI red: resuscitated cardiac arrest, transfer",
+    "SCENARIO-02": "MTS red: severe asthma, transfer",
+    "SCENARIO-03": "MTS orange: first seizure, transfer",
+    "SCENARIO-04": "MTS yellow: bicycle-related lower-leg injury, discharge",
+    "SCENARIO-05": "MTS green: superficial ocular foreign body, discharge",
+    "SCENARIO-06": "MTS blue: mild gastroenteritis, discharge"
+  },
+  "input": {
+    "join_column": "case_id",
+    "case_source": "cases",
+    "encoding": "utf-8-sig",
+    "delimiter": ",",
+    "decimal_separator": ".",
+    "empty_is_null": true,
+    "null_values": [
+      "NULL",
+      "NA",
+      "N/A"
+    ],
+    "sources": {
+      "cases": {
+        "file": "cases.csv",
+        "cardinality": "1:1"
+      },
+      "diagnoses": {
+        "file": "diagnoses.csv",
+        "cardinality": "1:n",
+        "occurrence_keys": {
+          "abschlussdiagnosen.abschlussdiagnose": "occurrence_1"
+        }
+      },
+      "xray": {
+        "file": "xray.csv",
+        "cardinality": "1:n",
+        "occurrence_keys": {
+          "diagnostik.bildgebende_diagnostik.rontgen": "occurrence_1"
+        }
+      },
+      "additional-diagnostics": {
+        "file": "additional-diagnostics.csv",
+        "cardinality": "1:n",
+        "occurrence_keys": {
+          "diagnostik.wildcard_diagnostik": "occurrence_1"
+        }
+      },
+      "medications": {
+        "file": "medications.csv",
+        "cardinality": "1:n",
+        "occurrence_keys": {
+          "masnahmen.medikamentose_therapie": "occurrence_1"
+        }
+      },
+      "additional-therapies": {
+        "file": "additional-therapies.csv",
+        "cardinality": "1:n",
+        "occurrence_keys": {
+          "masnahmen.wildcard_therapie": "occurrence_1"
+        }
+      },
+      "vitals": {
+        "file": "vitals.csv",
+        "cardinality": "1:n",
+        "occurrence_keys": {
+          "vitalparameter": "occurrence_1"
+        }
+      }
+    }
+  },
+  "expected": {
+    "cases": [
+      "SCENARIO-01",
+      "SCENARIO-02",
+      "SCENARIO-03",
+      "SCENARIO-04",
+      "SCENARIO-05",
+      "SCENARIO-06"
+    ],
+    "documents": 6,
+    "coverage": "all-mapped",
+    "case_fields": {
+      "SCENARIO-01": {
+        "present": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.verwendetes_ersteinschatzungssystem",
+          "ersteinschatzung.parameter_der_ersteinschatzung.ergebnis_der_ersteinschatzung",
+          "ersteinschatzung.parameter_der_ersteinschatzung.esitriage",
+          "administrative_verlegungsentlassungsinformationen.typ_verlegung"
+        ],
+        "absent": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsprasentationsdiagramm",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_rot",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_orange",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_gelb",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_grun",
+          "administrative_verlegungsentlassungsinformationen.typ_entlassung"
+        ],
+        "present_templates": [
+          "1.2.276.0.76.3.1.195.10.18",
+          "1.2.276.0.76.3.1.195.10.20"
+        ],
+        "absent_templates": [
+          "1.2.276.0.76.3.1.195.10.19"
+        ]
+      },
+      "SCENARIO-02": {
+        "present": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.verwendetes_ersteinschatzungssystem",
+          "ersteinschatzung.parameter_der_ersteinschatzung.ergebnis_der_ersteinschatzung",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsprasentationsdiagramm",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_rot",
+          "administrative_verlegungsentlassungsinformationen.typ_verlegung"
+        ],
+        "absent": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.esitriage",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_orange",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_gelb",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_grun",
+          "administrative_verlegungsentlassungsinformationen.typ_entlassung"
+        ],
+        "present_templates": [
+          "1.2.276.0.76.3.1.195.10.18",
+          "1.2.276.0.76.3.1.195.10.19"
+        ],
+        "absent_templates": [
+          "1.2.276.0.76.3.1.195.10.20"
+        ]
+      },
+      "SCENARIO-03": {
+        "present": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.verwendetes_ersteinschatzungssystem",
+          "ersteinschatzung.parameter_der_ersteinschatzung.ergebnis_der_ersteinschatzung",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsprasentationsdiagramm",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_orange",
+          "administrative_verlegungsentlassungsinformationen.typ_verlegung"
+        ],
+        "absent": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.esitriage",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_rot",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_gelb",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_grun",
+          "administrative_verlegungsentlassungsinformationen.typ_entlassung"
+        ],
+        "present_templates": [
+          "1.2.276.0.76.3.1.195.10.18",
+          "1.2.276.0.76.3.1.195.10.19"
+        ],
+        "absent_templates": [
+          "1.2.276.0.76.3.1.195.10.20"
+        ]
+      },
+      "SCENARIO-04": {
+        "present": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.verwendetes_ersteinschatzungssystem",
+          "ersteinschatzung.parameter_der_ersteinschatzung.ergebnis_der_ersteinschatzung",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsprasentationsdiagramm",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_gelb",
+          "administrative_verlegungsentlassungsinformationen.typ_entlassung"
+        ],
+        "absent": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.esitriage",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_rot",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_orange",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_grun",
+          "administrative_verlegungsentlassungsinformationen.typ_verlegung"
+        ],
+        "present_templates": [
+          "1.2.276.0.76.3.1.195.10.18",
+          "1.2.276.0.76.3.1.195.10.19"
+        ],
+        "absent_templates": [
+          "1.2.276.0.76.3.1.195.10.20"
+        ]
+      },
+      "SCENARIO-05": {
+        "present": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.verwendetes_ersteinschatzungssystem",
+          "ersteinschatzung.parameter_der_ersteinschatzung.ergebnis_der_ersteinschatzung",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsprasentationsdiagramm",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_grun",
+          "administrative_verlegungsentlassungsinformationen.typ_entlassung"
+        ],
+        "absent": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.esitriage",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_rot",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_orange",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_gelb",
+          "administrative_verlegungsentlassungsinformationen.typ_verlegung"
+        ],
+        "present_templates": [
+          "1.2.276.0.76.3.1.195.10.18",
+          "1.2.276.0.76.3.1.195.10.19"
+        ],
+        "absent_templates": [
+          "1.2.276.0.76.3.1.195.10.20"
+        ]
+      },
+      "SCENARIO-06": {
+        "present": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.verwendetes_ersteinschatzungssystem",
+          "ersteinschatzung.parameter_der_ersteinschatzung.ergebnis_der_ersteinschatzung",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsprasentationsdiagramm",
+          "administrative_verlegungsentlassungsinformationen.typ_entlassung"
+        ],
+        "absent": [
+          "ersteinschatzung.parameter_der_ersteinschatzung.esitriage",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_rot",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_orange",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_gelb",
+          "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsindikator.mtsindikatoren_grun",
+          "administrative_verlegungsentlassungsinformationen.typ_verlegung"
+        ],
+        "present_templates": [
+          "1.2.276.0.76.3.1.195.10.18",
+          "1.2.276.0.76.3.1.195.10.19"
+        ],
+        "absent_templates": [
+          "1.2.276.0.76.3.1.195.10.20"
+        ]
+      }
+    },
+    "limitations": [
+      "The records are curated mapping fixtures, not diagnostic or treatment guidance.",
+      "The selected dataset makes both isolation answer and reason mandatory, while the CDA profile prohibits a reason for a negative answer; every fixture therefore uses a clinically plausible positive isolation indication.",
+      "Locally coded clinical concepts intentionally exercise the configured nullFlavor OTH fallback where no portable binding exists."
+    ]
+  }
+}
