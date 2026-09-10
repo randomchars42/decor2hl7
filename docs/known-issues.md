@@ -7,7 +7,7 @@ repetitions. The remaining items are boundaries where
 external protocol information or broader ART-DECOR expression coverage is
 needed; they are not silent runtime fallbacks.
 
-## Allergy payload mapping — priority 1
+## Allergy payload mapping — resolved for the selected transaction
 
 The dataset allergy group maps structurally to Allergies and Intolerances
 section `1.2.276.0.76.10.3051`, whose effective branch contains Allergy Concern
@@ -27,33 +27,25 @@ ValueSet contains an `OTH` exception and whose datatype exposes
 `nullFlavor="OTH"` plus their source wording. A supplied target member is kept
 only when both code and code system match exactly.
 
-The allergy description now maps to the unique compiled section narrative role;
-it no longer remains a structural-only suggestion. The antibiotic-allergy and
-contrast-agent-allergy flags are also executable through exact neutral examples
-in the active Allergy Intolerance Observation template. The examples supply the
-target ValueSet discriminators `A07AA` and `V08`; the source disorder codes
-`Z88.1` and `293637006` are not written as allergen identities. A present
-boolean is inverted into `negationInd`, an absent source emits no occurrence,
-and an equal explicit `Agens` code/code-system occurrence is coalesced rather
-than duplicated.
+The allergy description now maps to the unique compiled section narrative role.
+AKTIN confirmed that antibiotic and contrast-agent allergy are encoded through
+the agent codes `A07AA` and `V08` from ValueSet `1.2.276.0.76.11.52`. The source
+disorder codes `Z88.1` and `293637006` are not written as allergen identities.
+A present boolean is inverted into `negationInd`; source `false` therefore emits
+the corresponding agent with `negationInd="true"`, while an absent source emits
+no occurrence. An equal explicit `Agens` code/code-system occurrence is
+coalesced rather than duplicated. This closes the former DEC-018 policy review.
 
-DEC-018 still requires a separate policy review after DEC-026 removed generic
-example-derived construction defaults. Its allergy rules do not use
-`compiled_default`, but they do automatically obtain the `A07AA` and `V08`
-discriminator constants from exact neutral examples. If examples are to remain
-strictly non-executable even as mapping evidence, these two generated mappings
-must be demoted to review candidates or replaced by a non-example formal
-association. This follow-up is deliberately not resolved by the default-value
-correction.
-
-The complete allergy occurrence is not yet executable from this transaction by
-itself. Activating any of these structured allergy values also activates Allergy
-Concern Act `1.2.276.0.76.10.4065`, where ART-DECOR requires
-`effectiveTime/low` as the time the allergy was first documented as a concern.
-The source allergy group has no timestamp, and the mandatory target does not
-permit a null flavor. The compiler therefore retains the valid field mappings,
-but the synthetic full-proposal fixture reports this missing required sibling
-instead of substituting document time or inventing a clinical date.
+AKTIN also confirmed that Allergy Concern Act `effectiveTime/low` is the start
+of documenting the concern rather than allergy onset. The reviewed mapping uses
+`Aufnahmezeitpunkt` only as an activation-scoped fallback: it completes an
+allergy branch selected by another value but cannot create one. The unknown
+clinical onset is represented separately on Allergy Intolerance Observation
+`effectiveTime` with `nullFlavor="UNK"`. The compiler accepts this complex
+target default only because that required element exposes an optional,
+writable `@nullFlavor`. Its mandatory observation `statusCode` is completed by
+the reviewed ActStatus `completed`; that is the status of making the assertion,
+not a statement that the allergy or concern has ended.
 
 ## Medication payload mapping — priority 2
 
@@ -166,8 +158,7 @@ evaluation, and declares the used prefixes in generated Schematron. Separate
 discharge-only and transfer-only synthetic scenarios now pass. The reference
 fixture stores those outcomes as `TEST-1` and `TEST-2`, respectively, and
 expects two documents. One record that sets both remains invalid by the AKTIN
-document assertion, as intended. The Allergy Concern Act `effectiveTime/low`
-boundary described above also remains unresolved.
+document assertion, as intended.
 
 The subordinate `SXPR_TS/comp` now exposes its XSD-defined `IVL_TS`, `PIVL_TS`,
 `EIVL_TS`, and recursive `SXPR_TS` choices. This closes the missing-physical-leaf
@@ -178,7 +169,7 @@ unavailable.
 
 ## Transform vocabulary
 
-`cda-mapping.json` version 6 accepts direct target names, small declarative
+`cda-mapping.json` version 7 accepts direct target names, small declarative
 rules, and explicit structural bindings. The built-in scalar transform vocabulary is deliberately limited to `identity`,
 `enum`, `ordinal`, `not`, `code_system`, and `coded_fallback`. The generated proposal uses it for the currently
 proven AKTIN semantics for Tetanusschutz, Isolation, modified Rankin, and
@@ -187,6 +178,9 @@ declared open target CodeSystem, and to constrain an explicitly open source
 domain through an exact target ValueSet's `OTH`/`originalText` fallback.
 `mode: "presence"` is a structural assignment, not a scalar transform: it is
 allowed only for a boolean source and a unique renderable fixed statement.
+`mode: "fallback_if_active"` is a reviewed completion rule for a mandatory
+target inside an optional branch; unlike ordinary `fallback`, it cannot activate
+the branch or create a repeated occurrence and requires a review reason.
 Structural `for_each`, `repeat_by_discriminator`, and
 `coalesce` behavior is implemented in the generic binding layer and is generated
 only from formal repeat/discriminator evidence. Legacy reviewed `fan_out`
@@ -232,21 +226,16 @@ omitted, and mandatory/non-nullable targets remain validation errors.
 
 Decision record: `DEC-009` in [`decisions.md`](decisions.md).
 
-The current transaction represents `ICD-10 Sekundärdiagnose` as concept 29508
-with cardinality `0..1`, while historical/project material has also exposed it
-as `0..*`. It is therefore not yet safe to define a delimiter syntax or to
-expand it into additional diagnosis occurrences.
+AKTIN confirmed that `ICD-10 Sekundärdiagnose` is not included in a target
+template for this profile. The field therefore remains intentionally unmapped.
+It must not be written as `CD.translation`, because that would assert an
+alternative code for the primary diagnosis rather than another diagnosis; no
+semicolon parser or inferred additional Problem Observation is introduced.
 
-The current CDA evidence provides no proven direct target distinct from the
-primary ICD value. The compiler deliberately leaves concept 29508 unmapped; it
-must not be written as `CD.translation`, because that would assert a translation
-of the primary diagnosis rather than another diagnosis.
-
-AKTIN clarification is needed on cardinality and intended CDA representation:
-whether each secondary code becomes another Problem Observation, how it relates
-to the leading diagnosis, and whether text/certainty are repeated with it. Until
-that is resolved, no semicolon parser or inferred clinical relationship is
-implemented.
+The prior proposal candidate came through an `ADAPT` edge to a differently
+named concept. Weak derivation lineage with such name drift is now retained
+only as review evidence. It cannot become actionable through datatype,
+structural, or Schematron compatibility.
 
 The post-PR #20 audit also rejects `CD.translation`: the ART-DECOR CDA datatype
 documentation defines a translation as an alternative code for the same

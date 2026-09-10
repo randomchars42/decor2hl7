@@ -15,9 +15,11 @@ from typing import Any, Mapping
 from ..assertions import validate_contexts
 from ..bindings import (
     build_assignments,
+    is_fallback_if_active,
     non_null_requirement_problems,
     required_unmapped_null_flavor,
     target_default_values,
+    unwrap_fallback_if_active,
 )
 from ..cooccurrence import (
     cooccurrence_problem_message, datatype_cooccurrence_problems,
@@ -260,9 +262,12 @@ def _active_target_locations(
 ) -> set[tuple[int, ...]]:
     active: set[tuple[int, ...]] = set()
     targets = cda.get("targets", {})
-    for name in assignments:
+    for name, value in assignments.items():
         target = targets.get(name, {})
-        if target.get("system_value") == "generated_identifier":
+        if (
+            target.get("system_value") == "generated_identifier"
+            or is_fallback_if_active(value)
+        ):
             # Completion values never activate an otherwise unused optional
             # branch; they are consumed only after an explicit descendant has
             # selected that branch.
@@ -616,6 +621,10 @@ def _repeat_count(
         return 1
     count = int(node.get("min") or 0)
     for name, value in assignments.items():
+        if is_fallback_if_active(value):
+            # An activation-scoped fallback may fill an occurrence selected by
+            # another value, but it must never create a repeated occurrence.
+            continue
         target = cda.get("targets", {}).get(name, {})
         # If the assignment addresses this repeated element itself, its own
         # max cardinality does not imply another dataset occurrence level. At
@@ -930,7 +939,9 @@ def _render_node_once(
         ):
             assigned = _generated_identifier(assigned, str(target_name), occurrence)
         else:
-            assigned = _at(assigned, occurrence)
+            assigned = _at(
+                unwrap_fallback_if_active(assigned), occurrence
+            )
     if isinstance(assigned, Mapping) and assigned.get("__presence__") is True:
         # Presence-mode assignments activate an optional, fully constrained
         # structural statement.  Its fixed descendants carry the CDA payload;

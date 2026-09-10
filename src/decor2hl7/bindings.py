@@ -23,6 +23,26 @@ NULL_FLAVORS = frozenset({
     "NI", "INV", "DER", "OTH", "NINF", "PINF", "UNC", "MSK", "NA",
     "UNK", "ASKU", "NAV", "NASK", "TRC",
 })
+FALLBACK_IF_ACTIVE_MARKER = "__fallback_if_active__"
+
+
+def fallback_if_active_value(value: Any) -> dict[str, Any]:
+    """Mark a source fallback that must not activate an optional CDA branch."""
+    return {FALLBACK_IF_ACTIVE_MARKER: value}
+
+
+def is_fallback_if_active(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and FALLBACK_IF_ACTIVE_MARKER in value
+    )
+
+
+def unwrap_fallback_if_active(value: Any) -> Any:
+    return (
+        value.get(FALLBACK_IF_ACTIVE_MARKER)
+        if is_fallback_if_active(value) else value
+    )
 
 
 def presence_target_complete(
@@ -384,9 +404,13 @@ def validate_target_defaults(
                 errors.append(f"{prefix} cannot apply nullFlavor to an attribute")
             if target.get("mandatory") or str(target.get("conformance") or "").upper() == "M":
                 errors.append(f"{prefix} target does not permit a nullFlavor default")
-            if target.get("has_children"):
+            if (
+                target.get("has_children")
+                and not _permits_element_null_flavor(cda, target)
+            ):
                 errors.append(
-                    f"{prefix} targets a complex element; default its required leaf instead"
+                    f"{prefix} targets a complex element that does not expose "
+                    "an optional nullFlavor"
                 )
         elif has_value:
             errors.extend(_validate_scalar_default(prefix, target, rule.get("value")))
@@ -396,6 +420,36 @@ def validate_target_defaults(
                     "use a scalar value default"
                 )
     return errors
+
+
+def _permits_element_null_flavor(
+    cda: Mapping[str, Any], target: Mapping[str, Any]
+) -> bool:
+    """Return whether a complex target exposes a writable optional nullFlavor."""
+    if target.get("permits_null_flavor"):
+        return True
+    target_path = str(target.get("path") or "").rstrip("/")
+    if not target_path:
+        return False
+    template_id = target.get("template_id")
+    effective_date = target.get("template_effective_date")
+    expected_path = f"{target_path}/@nullFlavor"
+    for candidate in cda.get("targets", {}).values():
+        if not isinstance(candidate, Mapping):
+            continue
+        if (
+            candidate.get("kind") == "attribute"
+            and candidate.get("template_id") == template_id
+            and candidate.get("template_effective_date") == effective_date
+            and str(candidate.get("path") or "") == expected_path
+            and candidate.get("writable")
+            and not candidate.get("prohibited")
+            and not candidate.get("conditional_fixed")
+            and not candidate.get("mandatory")
+            and int(candidate.get("min") or 0) == 0
+        ):
+            return True
+    return False
 
 
 def _physical_target_name(
@@ -899,6 +953,7 @@ def build_assignments(
     targets = cda.get("targets", {})
     assignments: dict[str, Any] = {}
     fallback_assignments: list[tuple[str, Any]] = []
+    active_fallback_assignments: list[tuple[str, Any]] = []
     problems: list[str] = []
     structures = structure_rules(mapping)
     structural_sources: set[str] = set()
@@ -955,6 +1010,8 @@ def build_assignments(
             )
             if rule.get("mode") == "fallback":
                 fallback_assignments.append((name, prepared))
+            elif rule.get("mode") == "fallback_if_active":
+                active_fallback_assignments.append((name, prepared))
             else:
                 _assign(assignments, name, prepared)
 
@@ -1033,6 +1090,9 @@ def build_assignments(
         problems.append(f"unknown structural binding type {kind!r} in {rule_id!r}")
     for name, value in fallback_assignments:
         assignments[name] = _fallback(assignments.get(name), value)
+    for name, value in active_fallback_assignments:
+        if not _present(assignments.get(name)) and _present(value):
+            assignments[name] = fallback_if_active_value(value)
     _expand_quantity_range_assignments(assignments, targets, problems)
     return assignments, problems
 

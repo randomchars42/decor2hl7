@@ -2161,6 +2161,13 @@ def _annotate_targets(
                     ):
                         target[key] = deepcopy(node.get(key))
                     target["has_children"] = bool(node.get("children"))
+                    target["permits_null_flavor"] = any(
+                        str(attribute.get("name") or "").split(":", 1)[-1]
+                        == "nullFlavor"
+                        and attribute.get("optional") is not False
+                        and attribute.get("value") in (None, "")
+                        for attribute in node.get("attributes", [])
+                    )
                     target["provenance"] = deepcopy(node.get("provenance", []))
                 if own_name:
                     physical_occurrences[own_name].append({

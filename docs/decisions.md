@@ -23,7 +23,7 @@ is not necessarily an accepted clinical policy.
 | DEC-006 | Explicit occurrence identity | accepted | verified |
 | DEC-007 | Structural mapping rules | accepted | verified |
 | DEC-008 | Diagnosis certainty and effective time | accepted | verified |
-| DEC-009 | Secondary ICD-10 diagnoses | open | none |
+| DEC-009 | Secondary ICD-10 diagnoses | accepted | verified |
 | DEC-010 | Missing-artifact tolerance | accepted | verified |
 | DEC-011 | Mapping evidence and documentation | accepted | verified |
 | DEC-012 | External artifact supplements and waivers | open | partial |
@@ -47,6 +47,7 @@ is not necessarily an accepted clinical policy.
 | DEC-030 | Compiled entry-to-section narrative links | accepted | verified |
 | DEC-031 | Explicit child constraints in non-monotonic SPEC designs | accepted | verified |
 | DEC-032 | Namespace-aware ART-DECOR assertion evaluation | accepted | verified |
+| DEC-033 | Reviewed allergy time construction | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -162,6 +163,8 @@ Structural semantics are explicit and declarative:
   `equal_or_error`;
 - `mode: fallback` fills an absent leaf per occurrence without replacing a real
   value.
+- `mode: fallback_if_active` fills a required value only after another mapping
+  has activated that optional CDA branch. It cannot create a branch or repeat.
 
 Legacy reviewed `fan_out` remains executable. `init-cda-mapping` migrates it only
 when a generated replacement proves the same sources and physical CDA target.
@@ -193,16 +196,22 @@ Evidence: `src/decor2hl7/compile/mapping.py`, `src/decor2hl7/bindings.py`,
 
 ## DEC-009 — Secondary ICD-10 diagnoses
 
-**Decision:** open  
-**Implementation:** none
+**Decision:** accepted
+**Implementation:** verified
 
-Concept 29508 is `0..1` in the selected transaction while historical material
-has exposed `0..*`. The intended CDA occurrence/relationship and association
-with text, certainty and the leading diagnosis require AKTIN clarification.
-Until then it remains unmapped: no delimiter parser, `CD.translation`, or
-inferred additional Problem Observation is introduced.
+AKTIN confirmed that the selected CDA profile contains no target template for
+the transaction's `ICD-10 Sekundärdiagnose`. It therefore remains intentionally
+unmapped: no delimiter parser, `CD.translation`, or inferred additional Problem
+Observation is introduced.
 
-Evidence: `docs/known-issues.md`,
+The stale candidate was reached through weak `ADAPT` lineage from a differently
+named concept. Such name-drifting weak lineage remains visible as review
+evidence but is never actionable, and Schematron compatibility cannot promote
+it. This is a generic semantic guard rather than a field-name exception.
+
+Evidence: AKTIN maintainer clarification for template
+`1.2.276.0.76.10.4048@2016-06-22`, `src/decor2hl7/compile/mapping.py`,
+`tests/test_core.py`, `docs/known-issues.md`,
 `docs/analyses/2026-09-02-residual-mapping-boundaries.md`.
 
 ## DEC-010 — Missing-artifact tolerance
@@ -699,14 +708,16 @@ runtime merges an example-derived branch only if code and code system are equal.
 Otherwise it creates another occurrence. Differing values for one equal
 discriminator are an error; no clinical precedence rule is inferred.
 
-For the selected AKTIN snapshot, the active Allergy Intolerance Observation
-examples establish `A07AA` for the antibiotic flag and `V08` for the contrast-
-agent flag. A matching explicit `Agens` occurrence is coalesced rather than
-duplicated. This decision does not complete Allergy Concern Act
-`effectiveTime/low`; the transaction still supplies no time at which the
-allergy was first documented as a concern.
+For the selected AKTIN snapshot, AKTIN confirmed that the agent ValueSet
+establishes `A07AA` for the antibiotic flag and `V08` for the contrast-agent
+flag. `false` is represented by the corresponding occurrence with
+`negationInd="true"`; absence of the source emits no occurrence. A matching
+explicit `Agens` occurrence is coalesced rather than duplicated. DEC-033
+separately completes the required timestamps of an activated allergy entry.
 
-Evidence: `src/decor2hl7/compile/structural.py`,
+Evidence: AKTIN maintainer clarification for template
+`1.2.276.0.76.10.4066@2015-09-18` and ValueSet
+`1.2.276.0.76.11.52@2015-11-17`, `src/decor2hl7/compile/structural.py`,
 `src/decor2hl7/compile/mapping.py`, `src/decor2hl7/bindings.py`,
 `tests/test_core.py`,
 `docs/analyses/2026-09-02-allergy-example-discriminators.md`.
@@ -1020,10 +1031,10 @@ declares the particle as abstract `ANY` but ART-DECOR constrains a concrete
 datatype, null-flavor completion retains that compiled `xsi:type` so the result
 remains schema-valid.
 
-This decision removes generic example-derived construction defaults. It does
-not settle DEC-018, whose generated allergy occurrence rules use exact example
-captions and discriminator codes as mapping evidence. That separate use remains
-implemented pending the policy review recorded in `docs/known-issues.md`.
+This decision removes generic example-derived construction defaults. DEC-018's
+allergy occurrence rules use exact example captions and discriminator codes as
+mapping evidence rather than absent-source construction defaults; AKTIN later
+confirmed those agent codes and negation semantics explicitly.
 
 Evidence: `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
 `src/decor2hl7/bindings.py`, `tests/test_cda_datatypes.py`, `tests/test_core.py`,
@@ -1050,8 +1061,11 @@ review-only. A separate explicit template association remains independently
 actionable, while the existing DEC-015 rule may project the static association
 into the selected occurrence only when one CDA/RIM owner-particle slot and one
 in-context target are unique. Schematron support and transform generation cannot
-revive an occurrence-mismatch candidate. Missing lineage remains missing
-evidence; it never causes a guessed association.
+revive an occurrence-mismatch candidate. Weak derivation lineage (`ADAPT` and
+similar edges) whose source and related concept names disagree is likewise
+review-only; structural compatibility and Schematron constraints cannot repair
+that semantic drift. Missing lineage remains missing evidence; it never causes
+a guessed association.
 
 Evidence: `src/decor2hl7/retrieval/references.py`,
 `src/decor2hl7/retrieval/fetch.py`, `src/decor2hl7/retrieval/artifacts.py`,
@@ -1231,6 +1245,38 @@ present in the XML.
 Evidence: `src/decor2hl7/assertions.py`, `src/decor2hl7/cda/compile.py`,
 `tests/test_core.py`,
 `docs/analyses/2026-09-08-final-diagnosis-concern-defaults.md`.
+
+## DEC-033 — Reviewed allergy time construction
+
+**Decision:** accepted
+**Implementation:** verified
+
+AKTIN confirmed that Allergy Concern Act `effectiveTime/low` denotes the start
+of documenting the concern, not the clinical onset of the allergy. The reviewed
+mapping therefore uses `administrative_aufnahmeinformationen.aufnahmezeitpunkt`
+as an activation-scoped fallback for `Allergyconcernact.low`.
+
+This rule may fill the mandatory `low` only when another mapped allergy value
+has already activated that optional branch. It cannot create an Allergy Concern
+Act or another repetition by itself. If an activated allergy occurrence has no
+admission time, rendering fails instead of inventing a time.
+
+The allergy onset belongs to Allergy Intolerance Observation `effectiveTime`.
+Because the selected transaction provides no onset, the reviewed mapping emits
+`nullFlavor="UNK"` on that required element. A complex required element may use
+such a target default only when the compiled template exposes a writable,
+optional `@nullFlavor`; other complex defaults remain invalid.
+
+The observation's mandatory `statusCode` describes completion of the assertion,
+not resolution of the allergy or closure of the concern. The reviewed mapping
+uses ActStatus `completed`, consistently with every active-template example;
+the Allergy Concern Act retains its independent lifecycle status.
+
+Evidence: AKTIN maintainer clarification for templates
+`1.2.276.0.76.10.2036@2016-06-01` and
+`1.2.276.0.76.10.4066@2015-09-18`, `src/decor2hl7/bindings.py`,
+`src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
+`src/decor2hl7/validate.py`, `tests/test_core.py`.
 
 ## Maintenance rule
 

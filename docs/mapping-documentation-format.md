@@ -369,21 +369,15 @@ renderer.
 ### Rule-choice mockup
 
 ```markdown
-### Decision required: encounter start
+### Reviewed rule: allergy concern documentation start
 
-Two dataset datapoints refer to one CDA encounter-start target.
+`Aufnahmezeitpunkt` directly populates encounter start. A second reviewed rule
+uses the same source for mandatory Allergy Concern Act `effectiveTime/low` only
+after another mapped allergy value has activated that optional branch.
 
-Choose one supported behavior:
-
-1. **`equal_or_error` coalescing** — either value may populate the target; if
-   both are present they must be equal. This preserves both sources without
-   silently choosing between conflicting values.
-2. **Map only Aufnahmezeitpunkt** — use only the first datapoint and keep the
-   other field `null`.
-3. **Keep both fields unmapped** — no dataset value populates the target; the
-   configured required-CDA completion policy applies if the element is active.
-
-The runtime supports no “prefer first” rule, so that choice is not offered.
+The report labels this rule **Active-branch fallback**, shows its review reason,
+and states that it cannot create an allergy branch or repeated occurrence by
+itself. The distinct documentation-start dataset concept remains unmapped.
 ```
 
 Every offered rule must be accompanied by its exact abridged JSON configuration.
@@ -615,7 +609,7 @@ behavior.
 - Do not generate full JSON and XML for every direct mapping.
 - Generate one simple example and one example for every non-trivial pattern that
   occurs: transform, repetition, repeat-by-discriminator, coalescing, fallback,
-  ambiguity or target-specific default.
+  active-branch fallback, ambiguity or target-specific default.
 - Group candidate details into decision cards only for unresolved fields.
 - Keep the complete physical admissibility inventory in each main-guide decision
   card. Semantic evidence may stay compact, but must not hide a selectable row.

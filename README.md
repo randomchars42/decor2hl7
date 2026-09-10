@@ -31,6 +31,13 @@ decor2hl7 test-cda-mapping
 decor2hl7 validate-cda test/2026.1.2/notaufnahmeregister--60/out/TEST-1.xml
 ```
 
+The complete setup-time path from ART-DECOR parsing through rule composition,
+model compilation, mapping evidence, and the reviewed mapping bundle is
+described in
+[`docs/specification-to-mapping-pipeline.md`](docs/specification-to-mapping-pipeline.md).
+Testing and runtime processing are intentionally documented as separate
+workflow stages.
+
 Both catalogs print a `KEY`; pass that key to the corresponding `set-*` command.
 `list-versions FILTER` and `list-transactions FILTER` optionally narrow the
 printed catalog.
@@ -646,9 +653,18 @@ Unmapped raw codes become `nullFlavor="OTH"` by default.
 
 ```json
 {
-  "version": 6,
+  "version": 7,
   "fields": {
     "patient.identifikatoren.patienten_id": "PatientIdentifier.id",
+    "administrative_aufnahmeinformationen.aufnahmezeitpunkt": [
+      "CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.low@20160601",
+      {
+        "target": "Allergyconcernact.low",
+        "mode": "fallback_if_active",
+        "reason": "Reviewed start of documenting an activated allergy concern."
+      }
+    ],
+    "dokumentationsinformationen.beginn_patientenbezogene_dokumentation.zeitpunkt_beginn_patientenbezogene_dokumentation": null,
     "ersteinschatzung.parameter_der_ersteinschatzung.zeitpunkt_der_ersteinschatzung": "ersteinschatzung.effectiveTime",
     "scores.modified_rankin_skala_score": {
       "target": "Modifiedrankinscale.observation.value",
@@ -656,18 +672,18 @@ Unmapped raw codes become `nullFlavor="OTH"` by default.
     },
     "masnahmen.wildcard_therapie.code": null
   },
-  "structures": {
-    "encounter-time": {
-      "type": "coalesce",
-      "sources": ["administrative_aufnahmeinformationen.aufnahmezeitpunkt", "dokumentationsinformationen.beginn_patientenbezogene_dokumentation.zeitpunkt_beginn_patientenbezogene_dokumentation"],
-      "target": "CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.low@20160601",
-      "policy": "equal_or_error"
-    }
-  },
   "defaults": {
     "required_unmapped": {"nullFlavor": "NI"}
   },
   "target_defaults": {
+    "Allergyintoleranceobservation.effectiveTime": {
+      "nullFlavor": "UNK",
+      "reason": "The transaction does not provide the allergy onset."
+    },
+    "Allergyintoleranceobservation.statusCode": {
+      "value": "completed",
+      "reason": "The allergy assertion has been completed."
+    },
     "Diagnosis.effectiveTime.low": {
       "nullFlavor": "UNK",
       "reason": "The transaction contains no diagnosis-onset datapoint."
@@ -693,6 +709,9 @@ means the related concept/design may have been changed. Identity-style lineage
 (`SPEC`, `INHERIT`, `ORIGINAL`, `EQUIV`, `COPY`, `VERSION`) may enrich omitted
 model constraints; `ADAPT`/derivation remains evidence unless an explicit target
 mapping or transform proves the runtime semantics.
+When weak derivation lineage also changes the concept name, its mapping bridge is
+review-only. Datatype, structural, or Schematron compatibility cannot make that
+semantic identity actionable.
 
 Direct `implementation/@xpath` declarations are treated as explicit technical
 mapping evidence when they uniquely resolve to a current writable CDA target.
@@ -733,7 +752,7 @@ target binds an exact ValueSet with an `OTH` exception plus a compiled
 `originalText` companion. Exact admitted code/code-system pairs are preserved;
 other values render as `nullFlavor="OTH"` with their wording in `originalText`.
 
-`cda-mapping.json` version 6 may also contain declarative scalar, structural,
+`cda-mapping.json` version 7 may also contain declarative scalar, structural,
 and completion rules. The generated proposal currently derives only semantics
 supported by the specification itself:
 Tetanusschutz drives `negationInd` plus `nullFlavor=NI` for unknown status,
@@ -742,9 +761,11 @@ Isolation drives `negationInd`, and modified Rankin labels map to their numeric
 use it to create repeated entries below one shared medication section; V/A/Z/G
 certainty controls the formal qualifier and exclusion negation; left/right pupil
 fields use a specification-derived `repeat_by_discriminator` rule with the
-bound AKTIN L/R eye ValueSet; equivalent encounter start fields use conservative
-`equal_or_error` coalescing. Exact neutral examples in the active allergy
-observation also derive antibiotic and contrast-agent branches: each source
+bound AKTIN L/R eye ValueSet. `Aufnahmezeitpunkt` maps to encounter start, while
+the differently named documentation-start concept remains unmapped. The reviewed
+allergy mapping also uses `Aufnahmezeitpunkt` only to complete the concern start
+after another allergy value has activated the branch. The active allergy
+observation derives antibiotic and contrast-agent branches: each source
 boolean is inverted into `negationInd`, while the target example supplies the
 bound `A07AA` or `V08` discriminator. An explicit `Agens` with the same code and
 code system is merged into that occurrence rather than duplicated; the source
@@ -766,6 +787,9 @@ A boolean coded act uses inverse `negationInd` when that attribute is the target
 representation. Separately, `mode: "presence"` may activate an optional
 ART-DECOR statement whose complete payload is fixed and whose template is
 uniquely identified by exact source terminology; false omits the statement.
+`mode: "fallback_if_active"` may fill a required target only after another value
+has activated the optional branch. It requires a review reason and cannot create
+a branch or repeat by itself.
 Occurrence-level values may be selected as the unique nearest compatible
 descendant of an already-derived `for_each` boundary. Structural containers do
 not become scalar writable targets through either rule.
@@ -785,8 +809,10 @@ they are checked against the compiled scalar datatype and finite code
 constraints. Defaults never activate an otherwise unused optional branch and
 are applied to every active repeated occurrence. Actual mapped values always
 win in the same occurrence. Null defaults cannot be applied to attributes,
-optional targets, complex elements, or mandatory constraints that prohibit
-null flavors. Scalar defaults cannot supply identifiers or compound values
+optional targets, or mandatory constraints that prohibit null flavors. A
+required complex element is eligible only when its compiled
+template exposes a writable optional `@nullFlavor`; other complex elements are
+rejected. Scalar defaults cannot supply identifiers or compound values
 whose non-null companion semantics require a structural mapping.
 
 ART-DECOR `<example>` fragments never supply automatic values or display

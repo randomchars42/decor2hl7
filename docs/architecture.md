@@ -32,6 +32,11 @@ external INPUT/ CSV → data.py → validate.py → cda/render.py → transport.
             └──────────── state.py ────────────┘
 ```
 
+The stage-by-stage setup-time path from fetched ART-DECOR XML through rule
+composition, `model.json`, `cda.json`, mapping evidence, and the reviewed
+mapping bundle is documented in
+[`specification-to-mapping-pipeline.md`](specification-to-mapping-pipeline.md).
+
 ## Package structure
 
 ```text
@@ -421,6 +426,10 @@ executable. An independently resolved `templateAssociation` remains a separate
 candidate; only the unique in-context CDA/RIM-slot projection above may make the
 static association cross template revisions. Generated Schematron can strengthen
 compatible evidence but cannot override this guard.
+Weak derivation lineage is also non-executable when the current and related
+concept names disagree. The bridge remains visible for review, but structural,
+datatype, and Schematron compatibility cannot establish the missing semantic
+identity.
 
 The XSD graph also carries `complexType/@mixed`. A mixed-content root receives
 an element-text value representation during compilation, so mappings such as a
@@ -449,7 +458,7 @@ Mapping values can be direct target strings or declarative rule objects. A field
 may control more than one target (for example Tetanusschutz `negationInd` and
 `nullFlavor`) without introducing target-specific renderer code.
 
-`cda-mapping.json` version 6 separates scalar transforms, structural bindings,
+`cda-mapping.json` version 7 separates scalar transforms, structural bindings,
 and CDA completion policy. The compiler emits only rules supported by explicit
 cardinality, terminology, and template evidence:
 
@@ -473,6 +482,10 @@ cardinality, terminology, and template evidence:
   `equal_or_error` unless a different policy is explicitly configured;
 - `mode: "fallback"` remains available for an explicitly configured
   source-dependent fallback and fills each occurrence independently;
+- `mode: "fallback_if_active"` is a reviewed fallback for a required target
+  inside an optional branch. It requires a reason, is ignored during branch and
+  repeat activation, and is consumed only after another assignment selects the
+  branch;
 - `mode: "presence"` lets a boolean activate one optional statement only when
   exact terminology identifies the template and ART-DECOR fixes its complete
   clinical payload. False omits it. The structural target does not become a
@@ -482,7 +495,9 @@ cardinality, terminology, and template evidence:
   `xsi:type` is retained when the CDA particle is polymorphic;
 - `target_defaults` records reviewed target-specific completion, such as
   `nullFlavor="UNK"` for the required diagnosis onset that this transaction does
-  not provide. A real mapped onset wins in its own occurrence.
+  not provide. Required complex elements may receive a null flavor only when
+  their compiled datatype surface exposes an optional writable `@nullFlavor`.
+  A real mapped value wins in its own occurrence.
 
 Compiled datatype targets may also carry `non_null_requires`. Proposal
 generation treats a dependent component as review-only until the required

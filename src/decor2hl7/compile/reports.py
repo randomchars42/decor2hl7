@@ -488,6 +488,8 @@ def _mapping_status(row: Mapping[str, Any]) -> str:
         return "Structural rule"
     if isinstance(rule, Mapping) and rule.get("mode") == "presence":
         return "Presence rule"
+    if isinstance(rule, Mapping) and rule.get("mode") == "fallback_if_active":
+        return "Active-branch fallback"
     if isinstance(rule, Mapping) and rule.get("transform"):
         return "Transform"
     return "Mapped" if isinstance(row.get("selection"), str) else "Rule"
@@ -508,6 +510,12 @@ def _configuration_instruction(row: Mapping[str, Any]) -> str:
             f"In `cda-mapping.json`, review the rule stored at "
             f"`fields[\"{path}\"]`; it conditionally activates `\"{target}\"` "
             f"when **{name}** is true."
+        )
+    if isinstance(rule, Mapping) and rule.get("mode") == "fallback_if_active":
+        return (
+            f"In `cda-mapping.json`, review the rule stored at "
+            f"`fields[\"{path}\"]`; it fills `\"{target}\"` from **{name}** "
+            "only when another mapped value has already activated the target branch."
         )
     return (
         f"In `cda-mapping.json`, review the rule stored at "

@@ -604,6 +604,7 @@ class CoreTests(unittest.TestCase):
         <element name="hl7:participantRole" id="role" minimumMultiplicity="1" maximumMultiplicity="1">
           <element name="hl7:code" id="referral-code" datatype="CE"
                    minimumMultiplicity="1" maximumMultiplicity="1" conformance="R">
+            <attribute name="nullFlavor" datatype="CS" isOptional="true"/>
             <vocabulary valueSet="referral-vs"/>
             <element name="hl7:originalText" id="referral-text" datatype="ST"
                      minimumMultiplicity="0" maximumMultiplicity="1"/>
@@ -651,6 +652,9 @@ class CoreTests(unittest.TestCase):
             target = compile_cda([project], model)
             target_name = "Referral.code"
             self.assertTrue(target["targets"][target_name]["has_children"])
+            self.assertTrue(
+                target["targets"][target_name]["permits_null_flavor"]
+            )
             self.assertEqual(
                 direct_compatibility(field, target["targets"][target_name]),
                 (True, []),
@@ -2032,6 +2036,51 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(rows[0]["kind"], "SCHEMATRON_CONSTRAINT")
         self.assertIn("SCHEMATRON_CONSTRAINT(required)", rows[0]["chain"])
 
+    def test_weak_lineage_name_drift_stays_review_only(self) -> None:
+        target = {
+            "template_id": "encounter", "template_effective_date": "2026",
+            "element_id": "low", "kind": "element", "writable": True,
+            "renderable": True, "locations": ["0.0"],
+            "path": "hl7:effectiveTime/hl7:low", "datatype": "TS",
+            "logical_types": ["datetime", "date"], "repeat_ancestors": [],
+            "value_representation": {
+                "kind": "timestamp", "logical_types": ["datetime", "date"],
+                "attribute": "value",
+            },
+            "schematron_constraints": [{"kind": "required", "value": 1}],
+        }
+        field = {
+            "name": "Documentation start", "concept": "current",
+            "type": "datetime", "repeat_chain": [],
+        }
+        associations = [{
+            "concept": "legacy", "template_id": "encounter",
+            "effective_date": "2026", "element_id": "low",
+            "kind": "templateAssociation", "code_systems": [],
+        }]
+        cda_model = {
+            "source_index": {"encounter|ID:low": ["Encounter.low"]},
+            "targets": {"Encounter.low": target},
+        }
+        candidates = mapping_compiler._ta_candidates(
+            field,
+            {"current": {("ADAPT", "legacy")}},
+            associations,
+            {"legacy": "Admission time"},
+            cda_model,
+        )
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        self.assertFalse(candidate["actionable"])
+        self.assertEqual(candidate["semantic_blocked"], "lineage_name_drift")
+        self.assertIn("lineage name drift", candidate["warnings"])
+
+        strengthened = mapping_compiler._schematron_constraint_candidates(
+            field, candidates, cda_model, None,
+        )
+        self.assertEqual(len(strengthened), 1)
+        self.assertFalse(strengthened[0]["actionable"])
+
     def test_semantic_negation_transform_beats_unrelated_named_code_slot(self) -> None:
         model = {"groups": {}, "fields": {"measures.isolation": {
             "name": "Isolation", "short_name": "Isolation", "concept": "isolation",
@@ -2923,6 +2972,163 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(assignments["Diagnosis.high"][0], None)
         self.assertEqual(assignments["Diagnosis.high"][1], {"nullFlavor": "UNK"})
         self.assertEqual(assignments["Diagnosis.high"][2], "2026-08-28T12:00:00+02:00")
+
+    def test_reviewed_fallback_fills_only_an_already_active_branch(self) -> None:
+        compiled: dict[str, Any] = {
+            "targets": {
+                "AllergyConcern.low": {
+                    "kind": "element", "datatype": "TS", "min": 1, "max": 1,
+                    "mandatory": True, "has_children": False,
+                    "renderable": True, "writable": True,
+                    "locations": ["0.0.0.0.0"], "repeat_ancestors": [],
+                    "logical_types": ["datetime", "date"],
+                },
+                "AllergyObservation.effectiveTime": {
+                    "kind": "element", "datatype": "IVL_TS", "min": 1,
+                    "max": 1, "mandatory": False, "conformance": "R",
+                    "has_children": True, "template_id": "allergy-observation",
+                    "template_effective_date": "2026",
+                    "path": "hl7:observation/hl7:effectiveTime",
+                    "renderable": True, "writable": True,
+                    "locations": ["0.0.0.1.0.0"],
+                    "repeat_ancestors": [],
+                    "logical_types": ["datetime", "date"],
+                    "value_representation": {
+                        "kind": "timestamp",
+                        "logical_types": ["datetime", "date"],
+                        "attribute": "value",
+                    },
+                },
+                "AllergyObservation.effectiveTime.nullFlavor": {
+                    "kind": "attribute", "datatype": "CS", "min": 0,
+                    "max": 1, "mandatory": False, "has_children": False,
+                    "template_id": "allergy-observation",
+                    "template_effective_date": "2026",
+                    "path": "hl7:observation/hl7:effectiveTime/@nullFlavor",
+                    "renderable": True, "writable": True,
+                    "locations": ["0.0.0.1.0.0.100000"],
+                    "repeat_ancestors": [], "logical_types": ["text"],
+                },
+                "AllergyObservation.value": {
+                    "kind": "element", "datatype": "ST", "min": 1, "max": 1,
+                    "mandatory": True, "has_children": False,
+                    "renderable": True, "writable": True,
+                    "locations": ["0.0.0.1.0.1"], "repeat_ancestors": [],
+                    "logical_types": ["text"],
+                },
+            },
+            "document": [{
+                "kind": "element", "name": "hl7:ClinicalDocument", "min": 1,
+                "max": 1, "mandatory": True, "attributes": [], "codes": [],
+                "fixed": {"classCode": "DOCCLIN"}, "targets": [], "children": [{
+                    "kind": "element", "name": "hl7:component", "min": 0,
+                    "max": 1, "mandatory": False, "attributes": [], "codes": [],
+                    "fixed": {}, "targets": [], "children": [{
+                        "kind": "element", "name": "hl7:act", "min": 1,
+                        "max": 1, "mandatory": True, "attributes": [], "codes": [],
+                        "fixed": {"classCode": "ACT"}, "targets": [], "children": [{
+                            "kind": "element", "name": "hl7:effectiveTime", "min": 1,
+                            "max": 1, "mandatory": True, "attributes": [], "codes": [],
+                            "fixed": {}, "targets": [], "children": [{
+                                "kind": "element", "name": "hl7:low", "datatype": "TS",
+                                "min": 1, "max": 1, "mandatory": True,
+                                "attributes": [], "codes": [], "fixed": {},
+                                "targets": ["AllergyConcern.low"], "children": [],
+                            }],
+                        }, {
+                            "kind": "element", "name": "hl7:entryRelationship", "min": 0,
+                            "max": 1, "mandatory": False, "attributes": [], "codes": [],
+                            "fixed": {}, "targets": [], "children": [{
+                                "kind": "element", "name": "hl7:observation", "min": 1,
+                                "max": 1, "mandatory": True, "attributes": [], "codes": [],
+                                "fixed": {"classCode": "OBS"}, "targets": [], "children": [{
+                                    "kind": "element", "name": "hl7:effectiveTime",
+                                    "datatype": "IVL_TS", "min": 1, "max": 1,
+                                    "mandatory": False, "conformance": "R",
+                                    "attributes": [{
+                                        "name": "nullFlavor", "optional": True,
+                                        "targets": [],
+                                    }],
+                                    "codes": [], "fixed": {},
+                                    "targets": ["AllergyObservation.effectiveTime"],
+                                    "children": [],
+                                }, {
+                                    "kind": "element", "name": "hl7:value", "datatype": "ST",
+                                    "min": 1, "max": 1, "mandatory": True,
+                                    "attributes": [], "codes": [], "fixed": {},
+                                    "targets": ["AllergyObservation.value"], "children": [],
+                                }],
+                            }],
+                        }],
+                    }],
+                }],
+            }],
+        }
+        complete_fixture_value_targets(compiled)
+        model = {"fields": {
+            "encounter.admission": {"type": "datetime", "repeat_chain": []},
+            "allergy.agent": {"type": "text", "repeat_chain": []},
+        }}
+        mapping = {
+            "version": 7,
+            "fields": {
+                "encounter.admission": {
+                    "target": "AllergyConcern.low",
+                    "mode": "fallback_if_active",
+                    "reason": "Use the reviewed ED admission time as concern start.",
+                },
+                "allergy.agent": "AllergyObservation.value",
+            },
+            "defaults": {"required_unmapped": {"nullFlavor": "NI"}},
+            "target_defaults": {
+                "AllergyObservation.effectiveTime": {
+                    "nullFlavor": "UNK",
+                    "reason": "The allergy onset is unknown.",
+                },
+            },
+        }
+        errors = validate.check_config(
+            model, compiled,
+            {"fields": {"encounter.admission": None, "allergy.agent": None}},
+            mapping,
+        )
+        self.assertEqual(errors, [])
+
+        admission = "2026-09-09T10:15:00+02:00"
+        empty, problems = cda.emit(
+            {"key": "P1", "values": {"encounter.admission": admission}},
+            model, compiled, mapping, {},
+        )
+        self.assertEqual(problems, [])
+        self.assertIsNone(ET.fromstring(empty).find("{urn:hl7-org:v3}component"))
+
+        payload, problems = cda.emit(
+            {"key": "P1", "values": {
+                "encounter.admission": admission, "allergy.agent": "Penicillin",
+            }},
+            model, compiled, mapping, {},
+        )
+        self.assertEqual(problems, [])
+        root = ET.fromstring(payload)
+        low = find_required(
+            root,
+            "{urn:hl7-org:v3}component/{urn:hl7-org:v3}act/"
+            "{urn:hl7-org:v3}effectiveTime/{urn:hl7-org:v3}low",
+        )
+        self.assertEqual(low.get("value"), "20260909101500+0200")
+        onset = find_required(
+            root,
+            "{urn:hl7-org:v3}component/{urn:hl7-org:v3}act/"
+            "{urn:hl7-org:v3}entryRelationship/{urn:hl7-org:v3}observation/"
+            "{urn:hl7-org:v3}effectiveTime",
+        )
+        self.assertEqual(onset.get("nullFlavor"), "UNK")
+
+        with self.assertRaisesRegex(ValueError, "mandatory CDA element"):
+            cda.emit(
+                {"key": "P1", "values": {"allergy.agent": "Penicillin"}},
+                model, compiled, mapping, {},
+            )
 
     def test_mapping_owned_defaults_complete_each_active_occurrence(self) -> None:
         def target(location: str, datatype: str, minimum: int = 1) -> dict[str, object]:

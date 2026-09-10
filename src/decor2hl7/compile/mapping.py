@@ -677,11 +677,19 @@ def _ta_candidates(
                     warning = "requires transform or a different CDA payload"
                     if warning not in warnings and not occurrence_mismatch:
                         warnings.insert(0, warning)
-                if any(edge in WEAK_EDGES for edge, _ in path) and not _names_agree(
-                    str(field.get("name") or ""), concept_names.get(related)
-                ):
-                    # Keep the weak mapping (user preference), but make semantic
-                    # drift visible and lower its rank.
+                lineage_name_drift = bool(
+                    any(edge in WEAK_EDGES for edge, _ in path)
+                    and not _names_agree(
+                        str(field.get("name") or ""),
+                        concept_names.get(related),
+                    )
+                )
+                if lineage_name_drift:
+                    # A derivation edge may have changed the concept's meaning.
+                    # Structural and datatype compatibility cannot repair that
+                    # missing semantic identity, so retain the bridge only as
+                    # review evidence.
+                    actionable = False
                     score -= 20
                     warnings.append("lineage name drift")
                 mapping = (
@@ -705,6 +713,8 @@ def _ta_candidates(
                     warnings=warnings,
                     mapping=mapping,
                 )
+                if lineage_name_drift:
+                    candidate["semantic_blocked"] = "lineage_name_drift"
                 if occurrence_mismatch:
                     candidate["occurrence_mismatch"] = True
                 result.append(candidate)
@@ -1030,6 +1040,7 @@ def _schematron_constraint_candidates(
             "kind": "SCHEMATRON_CONSTRAINT",
             "actionable": bool(
                 not candidate.get("occurrence_mismatch")
+                and not candidate.get("semantic_blocked")
                 and (candidate.get("actionable") or compatible)
             ),
             "warnings": list(dict.fromkeys(
@@ -2902,7 +2913,7 @@ def _cda_mapping_analysis(
             primary_rules = mapping_rules(primary.get("mapping"))
             primary_targets = [
                 str(rule["target"]) for rule in primary_rules
-                if rule.get("mode") != "fallback"
+                if rule.get("mode") not in {"fallback", "fallback_if_active"}
             ] or [primary["target"]]
             for target_name in primary_targets:
                 claims[target_name].append(path)
@@ -3115,7 +3126,7 @@ def _cda_mapping_analysis(
             detail.pop("gap", None)
 
     proposal: dict[str, Any] = {
-        "version": 6,
+        "version": 7,
         "model": {
             "dataset_id": model.get("meta", {}).get("dataset_id"),
             "transaction_id": model.get("meta", {}).get("transaction_id"),

@@ -183,12 +183,14 @@ def check_config(
                 )
                 continue
             mode = rule.get("mode")
-            if mode not in {None, "fallback", "presence"}:
+            if mode not in {
+                None, "fallback", "fallback_if_active", "presence",
+            }:
                 errors.append(
                     f"cda-mapping: {path} -> {target_name}: unknown assignment mode "
                     f"{rule.get('mode')!r}"
                 )
-            if mode != "fallback":
+            if mode not in {"fallback", "fallback_if_active"}:
                 claims[cda_target_name].append(path)
             configured_targets.add(cda_target_name)
             configured_target_modes[cda_target_name] = bool(
@@ -219,6 +221,22 @@ def check_config(
                         f"cda-mapping: {path} -> {target_name}: presence mode requires a boolean source"
                     )
                 continue
+            if mode == "fallback_if_active":
+                reason = rule.get("reason")
+                if not isinstance(reason, str) or not reason.strip():
+                    errors.append(
+                        f"cda-mapping: {path} -> {target_name}: "
+                        "fallback_if_active requires a non-empty review reason"
+                    )
+                required = bool(target.get("mandatory")) or int(
+                    target.get("min") or 0
+                ) >= 1
+                if not required:
+                    errors.append(
+                        f"cda-mapping: {path} -> {target_name}: "
+                        "fallback_if_active requires a target that is mandatory "
+                        "inside its active branch"
+                    )
             compatibility_field = field
             structure_name = rule.get("structure")
             structure = structures_by_id.get(str(structure_name or ""), {})

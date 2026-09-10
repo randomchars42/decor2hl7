@@ -94,6 +94,11 @@ decor2hl7 test-cda-mapping
 
 The important product is the reviewed target mapping. For CDA this is the portable `cda-mapping.json` plus its identity lock. It must not depend on any particular site's CSV layout.
 
+The complete setup-time sequence from ART-DECOR parsing and rule composition
+through `model.json`, `cda.json`, mapping evidence, and the reviewed mapping
+bundle is described in
+[`docs/specification-to-mapping-pipeline.md`](docs/specification-to-mapping-pipeline.md).
+
 A future FHIR target should follow the same ownership model and produce a corresponding reviewed `fhir-mapping.json` rather than changing the target-neutral input configuration.
 
 ### 2. Site / input configuration workflow
