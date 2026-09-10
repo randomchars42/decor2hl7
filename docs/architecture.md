@@ -541,6 +541,13 @@ context, and whether any of them holds a document location — and reports
 kept and `generation_messages_outside_selected_closure` counts the rest, so
 nothing is dropped; an unparseable context is treated as in-closure.
 
+For every template OID with a physical compiled document location, assembly
+selects its exact effective-dated revision set. Other fetched template OIDs are
+kept as dependency input for dynamic and generic template resolution. This
+prevents historical rules for one physical template identity from being active
+at the same time without starving the publication transform of dependency-only
+templates.
+
 Mapping analysis follows that generation step. `compile/schematron.py` extracts
 required and maximum occurrences, fixed values, ValueSet references, required
 attributes, and concrete `xsi:type` choices from the template pattern files. It
@@ -666,6 +673,14 @@ unmapped fields. Authored mode additionally records the scenario name, source,
 content digest, case list, and case-level assertions. The authored oracle is
 therefore the reviewed input and explicit structural expectations; renderer
 output is not copied back as golden expected XML.
+
+An authored manifest may add local CDA values and activation-scoped CDA
+fallbacks to the generated site configuration. It may also add input-code
+translations. For an unbound dataset code, a translation can carry an explicit
+code, code-system identity, and display name; bound dataset terminology still
+accepts only one of its compiled canonical values. These declarations are
+copied into the isolated fixture and never mutate `model.json`, `cda.json`, or
+the reviewed portable CDA mapping.
 
 `test-cda-mapping` reads that fixture through the ordinary production modules:
 `data.ingest` → record validation → structural bindings → CDA rendering and

@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 XSD = "{http://www.w3.org/2001/XMLSchema}"
 CORE_REVISION = "e922fc35586fd2629f0c8a021080bca9ab424e18"
 CORE_FILES = {
+    "CDA.xsd": "schema/normative/infrastructure/cda/CDA.xsd",
     "POCD_MT000040.xsd": "schema/normative/infrastructure/cda/POCD_MT000040.xsd",
     "datatypes.xsd": "schema/normative/processable/coreschemas/datatypes.xsd",
     "datatypes-base.xsd": "schema/normative/processable/coreschemas/datatypes-base.xsd",
@@ -42,6 +43,7 @@ class ModelDefinition:
     base: str | None
     parts: tuple[ModelPart, ...]
     attributes: tuple[ModelAttribute, ...]
+    required_choices: tuple[tuple[str, ...], ...] = ()
     mixed: bool = False
     category: str = "datatype"
     source: str = ""
@@ -128,6 +130,43 @@ def _merge_parts(parts: Iterable[ModelPart]) -> tuple[ModelPart, ...]:
     return tuple(result)
 
 
+def _required_choices(
+    content: ET.Element,
+) -> tuple[tuple[str, ...], ...]:
+    """Return required XSD choices whose alternatives are direct elements.
+
+    Individual branches of an XSD choice correctly have effective minimum
+    zero.  Retaining the group requirement separately lets the CDA compiler
+    complete one template-selected branch without claiming that every branch
+    is required.
+    """
+    parents = {child: parent for parent in content.iter() for child in parent}
+    result: list[tuple[str, ...]] = []
+    for choice in content.findall(f".//{XSD}choice"):
+        alternatives = [
+            item.get("name") or _local_type(item.get("ref"))
+            for item in list(choice)
+            if item.tag == f"{XSD}element"
+        ]
+        if len(alternatives) < 2 or any(not item for item in alternatives):
+            continue
+        if int(choice.get("minOccurs") or "1") == 0:
+            continue
+        current = parents.get(choice)
+        required = True
+        while current is not None and current is not content:
+            if (
+                current.tag == f"{XSD}choice"
+                or int(current.get("minOccurs") or "1") == 0
+            ):
+                required = False
+                break
+            current = parents.get(current)
+        if required:
+            result.append(tuple("hl7:" + str(item) for item in alternatives))
+    return tuple(result)
+
+
 def index_definitions(paths: Iterable[Path]) -> DefinitionIndex:
     """Index one inheritance graph from the pinned CDA core XSD set."""
     result = DefinitionIndex()
@@ -181,6 +220,7 @@ def index_definitions(paths: Iterable[Path]) -> DefinitionIndex:
                     for item in content.findall(f".//{XSD}attribute")
                     if item.get("name") and item.get("type")
                 ),
+                required_choices=_required_choices(content),
                 mixed=node.get("mixed") == "true",
                 category=(
                     "structural"
@@ -234,6 +274,9 @@ def resolve_definition(
         base=definition.base,
         parts=tuple(parts.values()),
         attributes=tuple(attributes.values()),
+        required_choices=tuple(dict.fromkeys(
+            (*base.required_choices, *definition.required_choices)
+        )),
         mixed=definition.mixed or base.mixed,
         category=definition.category,
         source=definition.source,

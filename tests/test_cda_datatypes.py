@@ -1378,6 +1378,64 @@ class CdaDatatypeTests(unittest.TestCase):
             node = find_required(ET.fromstring(payload), f"{{{HL7}}}realmCode")
             self.assertEqual(node.get("code"), "DE")
 
+    def test_single_element_vocabulary_emits_its_display_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1" isMandatory="true">
+    <element name="hl7:code" datatype="CE" minimumMultiplicity="1" maximumMultiplicity="1" isMandatory="true">
+      <vocabulary code="123" codeSystem="1.2.3" displayName="Fixed display"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {}, "fields": {},
+            }
+            compiled = compile_cda([source], model)
+            payload, problems = cda.emit(
+                {"key": "P1", "values": {}, "instances": {}},
+                model, compiled, {"fields": {}}, {},
+            )
+            self.assertEqual(problems, [])
+            node = find_required(ET.fromstring(payload), f"{{{HL7}}}code")
+            self.assertEqual(node.attrib, {
+                "code": "123", "codeSystem": "1.2.3",
+                "displayName": "Fixed display",
+            })
+
+    def test_inline_include_renders_required_contained_particle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text('''<project>
+  <template id="header" effectiveDate="2026" name="Header">
+    <element name="hl7:languageCode" datatype="CS" minimumMultiplicity="1"
+             maximumMultiplicity="1" isMandatory="true">
+      <vocabulary code="de-DE"/>
+    </element>
+  </template>
+  <template id="doc" effectiveDate="2026" name="Document">
+    <element name="hl7:ClinicalDocument" minimumMultiplicity="1"
+             maximumMultiplicity="1" isMandatory="true">
+      <include ref="header" flexibility="2026"/>
+    </element>
+  </template>
+</project>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {}, "fields": {},
+            }
+            compiled = compile_cda([source], model)
+            payload, problems = cda.emit(
+                {"key": "P1", "values": {}, "instances": {}},
+                model, compiled, {"fields": {}}, {},
+            )
+            self.assertEqual(problems, [])
+            language = find_required(
+                ET.fromstring(payload), f"{{{HL7}}}languageCode"
+            )
+            self.assertEqual(language.get("code"), "de-DE")
+
     def test_reused_artdecor_ids_keep_path_specific_fixed_constraints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "template.xml"
@@ -1863,6 +1921,318 @@ class CdaDatatypeTests(unittest.TestCase):
             sources = {item.get("source") for item in postcode["provenance"]}  # type: ignore[union-attr]
             self.assertIn("template", sources)
             self.assertIn("template + datatype", sources)
+
+    def test_renderer_uses_core_particle_order_without_renaming_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "POCD_MT000040.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="ClinicalDocument" type="POCD_MT000040.ClinicalDocument"/>
+  <xs:complexType name="POCD_MT000040.ClinicalDocument"><xs:sequence>
+    <xs:element name="templateId" type="II"/>
+    <xs:element name="id" type="II"/>
+    <xs:element name="code" type="CE"/>
+  </xs:sequence></xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            source = root / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1" isMandatory="true">
+    <element name="hl7:id" datatype="II" minimumMultiplicity="1" maximumMultiplicity="1" isMandatory="true">
+      <attribute name="root" value="1.2.3" isOptional="false"/>
+    </element>
+    <element name="hl7:code" datatype="CE" minimumMultiplicity="1" maximumMultiplicity="1" isMandatory="true">
+      <vocabulary code="123" codeSystem="1.2.3"/>
+    </element>
+    <element name="hl7:templateId" datatype="II" minimumMultiplicity="1" maximumMultiplicity="1" isMandatory="true">
+      <attribute name="root" value="9.8.7" isOptional="false"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {}, "fields": {},
+            }
+            compiled = compile_cda(
+                [source], model, core_definition_paths=[schema]
+            )
+            source_order = [
+                str(child.get("name"))
+                for child in compiled["document"][0]["children"]
+            ]
+            self.assertEqual(source_order, [
+                "hl7:id", "hl7:code", "hl7:templateId",
+            ])
+            payload, problems = cda.emit(
+                {"key": "P1", "values": {}, "instances": {}},
+                model, compiled, {"fields": {}}, {},
+            )
+            self.assertEqual(problems, [])
+            rendered_order = [
+                child.tag.rsplit("}", 1)[-1]
+                for child in ET.fromstring(payload)
+            ]
+            self.assertEqual(rendered_order, ["templateId", "id", "code"])
+
+    def test_core_required_choice_makes_selected_material_branch_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "POCD_MT000040.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="ClinicalDocument" type="POCD_MT000040.ClinicalDocument"/>
+  <xs:complexType name="POCD_MT000040.ClinicalDocument"><xs:sequence>
+    <xs:element name="manufacturedProduct" type="POCD_MT000040.ManufacturedProduct"/>
+  </xs:sequence></xs:complexType>
+  <xs:complexType name="POCD_MT000040.ManufacturedProduct"><xs:choice>
+    <xs:element name="manufacturedLabeledDrug" type="POCD_MT000040.LabeledDrug"/>
+    <xs:element name="manufacturedMaterial" type="POCD_MT000040.Material"/>
+  </xs:choice></xs:complexType>
+  <xs:complexType name="POCD_MT000040.LabeledDrug"/>
+  <xs:complexType name="POCD_MT000040.Material">
+    <xs:attribute name="nullFlavor" type="xs:string"/>
+  </xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            source = root / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:manufacturedProduct" datatype="POCD_MT000040.ManufacturedProduct"
+             minimumMultiplicity="1" maximumMultiplicity="1">
+      <element name="hl7:manufacturedMaterial" datatype="POCD_MT000040.Material"
+               minimumMultiplicity="0" maximumMultiplicity="1" conformance="R"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc", "template_effective_date": "2026",
+                },
+                "groups": {}, "fields": {},
+            }
+            compiled = compile_cda(
+                [source], model, core_definition_paths=[schema]
+            )
+            product = compiled["document"][0]["children"][0]
+            material = product["children"][0]
+            self.assertEqual(material["min"], 1)
+            self.assertEqual(
+                material["cda_required_choice"]["definition"],
+                "POCD_MT000040.ManufacturedProduct",
+            )
+
+            payload, problems = cda.emit(
+                {"key": "P1", "values": {}, "instances": {}},
+                model, compiled, {"fields": {}}, {},
+            )
+            self.assertEqual(problems, [])
+            rendered = find_required(
+                ET.fromstring(payload), f".//{{{HL7}}}manufacturedMaterial"
+            )
+            self.assertEqual(rendered.get("nullFlavor"), "NI")
+
+    def test_required_coded_value_with_wording_uses_legal_oth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "datatypes.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="ST" mixed="true"/>
+  <xs:complexType name="CD"><xs:sequence>
+    <xs:element name="originalText" type="ST" minOccurs="0"/>
+  </xs:sequence><xs:attribute name="nullFlavor" type="xs:string"/></xs:complexType>
+  <xs:complexType name="CE"><xs:complexContent><xs:extension base="CD"/></xs:complexContent></xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            source = root / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:value" datatype="CE" minimumMultiplicity="1"
+             maximumMultiplicity="1" conformance="R">
+      <vocabulary valueSet="complaint-vs" flexibility="2026"/>
+      <element name="hl7:originalText" datatype="ST"
+               minimumMultiplicity="0" maximumMultiplicity="1"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc", "template_effective_date": "2026",
+                },
+                "groups": {},
+                "fields": {"complaint": {"type": "text", "repeat_chain": []}},
+                "value_sets": {
+                    "complaint-vs@2026": {
+                        "id": "complaint-vs",
+                        "effective_date": "2026",
+                        "codes": {
+                            "OTH": {
+                                "code_system": "2.16.840.1.113883.5.1008",
+                            },
+                        },
+                        "exceptions": ["OTH"],
+                    },
+                },
+            }
+            compiled = compile_cda(
+                [source], model, core_definition_paths=[schema]
+            )
+            original_text_name, _ = target_at(
+                compiled, "/hl7:value/hl7:originalText"
+            )
+            payload, problems = cda.emit(
+                {
+                    "key": "P1",
+                    "values": {"complaint": "Akute Atemnot"},
+                    "instances": {},
+                },
+                model,
+                compiled,
+                {"fields": {"complaint": original_text_name}},
+                {},
+            )
+            self.assertEqual(problems, [])
+            value = find_required(ET.fromstring(payload), f"{{{HL7}}}value")
+            self.assertEqual(value.get("nullFlavor"), "OTH")
+            original_text = find_required(
+                value, f"{{{HL7}}}originalText"
+            )
+            self.assertEqual(original_text.text, "Akute Atemnot")
+
+    def test_bound_null_flavor_exception_is_rendered_as_null_flavor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "datatypes.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="ST" mixed="true"/>
+  <xs:complexType name="CD"><xs:sequence>
+    <xs:element name="originalText" type="ST" minOccurs="0"/>
+  </xs:sequence><xs:attribute name="nullFlavor" type="xs:string"/></xs:complexType>
+  <xs:complexType name="CE"><xs:complexContent><xs:extension base="CD"/></xs:complexContent></xs:complexType>
+  <xs:complexType name="CV"><xs:complexContent><xs:extension base="CE"/></xs:complexContent></xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            source = root / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:value" datatype="CV" minimumMultiplicity="1" maximumMultiplicity="1" conformance="R">
+      <vocabulary valueSet="test-vs" flexibility="2026"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc", "template_effective_date": "2026",
+                },
+                "groups": {},
+                "fields": {"status": {"type": "code", "repeat_chain": []}},
+                "value_sets": {
+                    "test-vs@2026": {
+                        "id": "test-vs",
+                        "effective_date": "2026",
+                        "codes": {
+                            "UNK": {
+                                "code_system": "2.16.840.1.113883.5.1008",
+                            },
+                        },
+                        "exceptions": ["UNK"],
+                    },
+                },
+            }
+            compiled = compile_cda(
+                [source], model, core_definition_paths=[schema]
+            )
+            target_name, target = target_at(compiled, "/hl7:value")
+            self.assertEqual(target["null_flavor_exceptions"], ["UNK"])
+            self.assertTrue(target["permits_null_flavor"])
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P1",
+                    "values": {
+                        "status": {
+                            "code": "UNK",
+                            "codeSystem": "2.16.840.1.113883.5.1008",
+                        },
+                    },
+                    "instances": {},
+                },
+                model, compiled, {"fields": {"status": target_name}}, {},
+            )
+            self.assertEqual(problems, [])
+            value = ET.fromstring(payload).find("{urn:hl7-org:v3}value")
+            self.assertIsNotNone(value)
+            assert value is not None
+            self.assertEqual(value.get("nullFlavor"), "UNK")
+            self.assertIsNone(value.get("code"))
+            self.assertIsNone(value.find("{urn:hl7-org:v3}originalText"))
+
+            fallback, problems = cda.emit(
+                {"key": "P2", "values": {}, "instances": {}},
+                model, compiled, {"fields": {}}, {},
+            )
+            self.assertEqual(problems, [])
+            value = ET.fromstring(fallback).find("{urn:hl7-org:v3}value")
+            self.assertIsNotNone(value)
+            assert value is not None
+            self.assertEqual(value.get("nullFlavor"), "UNK")
+
+    def test_site_fallback_completes_only_an_active_optional_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:templateId" datatype="II" minimumMultiplicity="1" maximumMultiplicity="1">
+      <attribute name="root" value="1.2.3"/>
+    </element>
+    <element name="hl7:observation" minimumMultiplicity="0" maximumMultiplicity="1">
+      <attribute name="moodCode" datatype="cs" isOptional="false"/>
+      <element name="hl7:value" datatype="ST" minimumMultiplicity="1" maximumMultiplicity="1"/>
+      <element name="hl7:effectiveTime" datatype="TS" minimumMultiplicity="0" maximumMultiplicity="1"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc", "template_effective_date": "2026",
+                },
+                "groups": {},
+                "fields": {"fact": {"type": "text", "repeat_chain": []}},
+            }
+            compiled = compile_cda([source], model)
+            value_name, _ = target_at(compiled, "/hl7:value")
+            mood_name, _ = target_at(compiled, "/@moodCode")
+            time_name, _ = target_at(compiled, "/hl7:effectiveTime")
+            site = {
+                "cda": {"fallback_if_active": {
+                    mood_name: "EVN",
+                    time_name: "2026-09-10T12:30:00+02:00",
+                }},
+            }
+
+            empty, problems = cda.emit(
+                {"key": "P1", "values": {}, "instances": {}},
+                model, compiled, {"fields": {"fact": value_name}}, site,
+            )
+            self.assertEqual(problems, [])
+            self.assertIsNone(
+                ET.fromstring(empty).find("{urn:hl7-org:v3}observation")
+            )
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P2", "values": {"fact": "present"},
+                    "instances": {},
+                },
+                model, compiled, {"fields": {"fact": value_name}}, site,
+            )
+            self.assertEqual(problems, [])
+            observation = ET.fromstring(payload).find(
+                "{urn:hl7-org:v3}observation"
+            )
+            self.assertIsNotNone(observation)
+            assert observation is not None
+            self.assertEqual(observation.get("moodCode"), "EVN")
+            effective_time = observation.find(
+                "{urn:hl7-org:v3}effectiveTime"
+            )
+            self.assertIsNotNone(effective_time)
+            assert effective_time is not None
+            self.assertEqual(effective_time.get("value"), "20260910123000+0200")
 
     def test_closed_template_does_not_materialize_unspecified_core_parts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

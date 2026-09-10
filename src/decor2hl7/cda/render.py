@@ -14,7 +14,9 @@ from typing import Any, Mapping
 
 from ..assertions import validate_contexts
 from ..bindings import (
+    NULL_FLAVORS,
     build_assignments,
+    fallback_if_active_value,
     is_fallback_if_active,
     non_null_requirement_problems,
     required_unmapped_null_flavor,
@@ -28,6 +30,7 @@ from .model import ValueRepresentationKind
 
 HL7 = "urn:hl7-org:v3"
 XSI = "http://www.w3.org/2001/XMLSchema-instance"
+NULLFLAVOR_CODE_SYSTEM = "2.16.840.1.113883.5.1008"
 ET.register_namespace("", HL7)
 ET.register_namespace("xsi", XSI)
 
@@ -148,6 +151,24 @@ def _subtree_has_assignment(
     )
 
 
+def _has_direct_fallback_assignment(
+    node: Mapping[str, Any],
+    assignments: Mapping[str, Any],
+    occurrence: tuple[int, ...],
+) -> bool:
+    """Return whether this leaf has an activation-scoped completion value."""
+    # Attribute completion is consumed only after this element is selected;
+    # it must never make an optional element active by itself.
+    names = [str(name) for name in node.get("targets", [])]
+    return any(
+        name in assignments
+        and is_fallback_if_active(assignments[name])
+        and _at(unwrap_fallback_if_active(assignments[name]), occurrence)
+        is not None
+        for name in names
+    )
+
+
 def _has_physical_value_below(
     location: tuple[int, ...],
     physical_values: Mapping[tuple[int, ...], tuple[Any, Mapping[str, Any]]],
@@ -160,6 +181,17 @@ def _has_physical_value_below(
     Physical locations let that role activate only its owning branch.
     """
     return any(here[:len(location)] == location for here in physical_values)
+
+
+def _ordered_children(
+    node: Mapping[str, Any],
+) -> list[tuple[int, Mapping[str, Any]]]:
+    """Return source indices in the separately compiled XML render order."""
+    return sorted(
+        enumerate(node.get("children", [])),
+        key=lambda item: (int(item[1].get("render_order", item[0])), item[0]),
+    )
+
 
 def _set_xsi_type(element: ET.Element, representation: Mapping[str, Any]) -> None:
     xsi_type = representation.get("xsi_type")
@@ -179,6 +211,14 @@ def _write_value(
             f"CDA value target {target.get('path') or node.get('name')} has no compiled value representation"
         )
     _set_xsi_type(element, representation)
+    if (
+        isinstance(value, Mapping)
+        and str(value.get("codeSystem") or value.get("code_system") or "")
+        == NULLFLAVOR_CODE_SYSTEM
+        and str(value.get("code") or "") in NULL_FLAVORS
+        and target.get("permits_null_flavor")
+    ):
+        value = {"nullFlavor": str(value["code"])}
     if isinstance(value, Mapping) and value.get("__section_narrative__"):
         base = str(value.get("text") or "")
         items = [
@@ -284,6 +324,35 @@ def _active_target_locations(
     return active
 
 
+def _activate_fallback_elements(
+    cda: Mapping[str, Any],
+    assignments: Mapping[str, Any],
+    active: set[tuple[int, ...]],
+) -> None:
+    """Activate a fallback element only below an already active owner.
+
+    Attribute fallbacks are consumed while their owning element renders.  An
+    optional element fallback needs its own location activated, but may do so
+    only when another assignment has already selected its immediate parent.
+    This preserves ``fallback_if_active``'s promise not to create a branch.
+    """
+    for name, value in assignments.items():
+        if not is_fallback_if_active(value):
+            continue
+        target = cda.get("targets", {}).get(name, {})
+        for raw_location in target.get("locations", []):
+            try:
+                location = tuple(
+                    int(part) for part in str(raw_location).split(".")
+                )
+            except ValueError:
+                continue
+            if not location or location[-1] >= 100000:
+                continue
+            if location[:-1] in active:
+                active.add(location)
+
+
 def _node_target_names(node: Mapping[str, Any]) -> set[str]:
     names = {str(name) for name in node.get("targets", [])}
     for attr in node.get("attributes", []):
@@ -325,7 +394,11 @@ def _complete_content_roles(
                         name = str(raw_name)
                         target = targets.get(name, {})
                         if target.get("writable") and len(target.get("locations", [])) == 1:
-                            assignments.setdefault(name, value)
+                            fixed_text = target.get("fixed_text")
+                            assignments.setdefault(
+                                name,
+                                value if fixed_text is None else str(fixed_text),
+                            )
                             return
                 walk(list(node.get("children", [])))
         walk(list(section.get("children", [])))
@@ -558,6 +631,17 @@ def _coded_original_text(value: Any) -> Any:
         return [_coded_original_text(item) for item in value]
     if not isinstance(value, Mapping):
         return None
+    null_flavor = str(value.get("nullFlavor") or "")
+    if not null_flavor and (
+        str(value.get("codeSystem") or value.get("code_system") or "")
+        == NULLFLAVOR_CODE_SYSTEM
+    ):
+        null_flavor = str(value.get("code") or "")
+    # OTH is the one null flavor whose supplied wording is meaningful: it
+    # identifies the out-of-domain concept.  Other null flavors describe why
+    # no concept is known and therefore must not gain an originalText child.
+    if null_flavor and null_flavor != "OTH":
+        return None
     for key in ("raw", "canonical", "displayName", "display"):
         if value.get(key) not in (None, ""):
             return value[key]
@@ -708,7 +792,7 @@ def _render_transparent(
 ) -> list[ET.Element]:
     if str(node.get("conformance") or "").upper() == "NP":
         return []
-    required = _has_required_content(node)
+    required = _has_required_content(node) or bool(node.get("transparent_inline"))
     active = location in active_locations and (
         _subtree_has_assignment(node, assignments, occurrence)
         or _has_physical_value_below(location, physical_values)
@@ -733,7 +817,7 @@ def _render_transparent(
         occurrences = [occurrence + (index,) for index in range(count)]
     result: list[ET.Element] = []
     for current_occurrence in occurrences:
-        for index, child in enumerate(node.get("children", [])):
+        for index, child in _ordered_children(node):
             result.extend(
                 _render_node(
                     child, parent, assignments, target_defaults, active_locations, cda,
@@ -775,6 +859,13 @@ def _render_node(
         _subtree_has_assignment(node, assignments, occurrence)
         or _has_physical_value_below(location, physical_values)
     )
+    if parent is not None and _has_direct_fallback_assignment(
+        node, assignments, occurrence
+    ):
+        # Reaching this call means the owning XML element already exists.
+        # A direct completion value may fill its leaf without selecting an
+        # otherwise absent ancestor branch.
+        active = True
     if not required and not active:
         return []
 
@@ -880,7 +971,7 @@ def _render_node_once(
         value = None if attr.get("conditional_fixed") else fixed_value
         assigned, target_name = _value_for_attribute(attr, assignments)
         if target_name is not None:
-            value = _at(assigned, occurrence)
+            value = _at(unwrap_fallback_if_active(assigned), occurrence)
         if value is None:
             for target in attr.get("targets", []):
                 if str(target) in target_defaults:
@@ -977,6 +1068,10 @@ def _render_node_once(
                     {"codeSystem": codes[0].get("code_system")}
                     if codes[0].get("code_system") else {}
                 ),
+                **(
+                    {"displayName": codes[0].get("display_name")}
+                    if codes[0].get("display_name") else {}
+                ),
             },
             target,
             node,
@@ -1003,7 +1098,7 @@ def _render_node_once(
             )
 
     child_count = 0
-    for index, child in enumerate(node.get("children", [])):
+    for index, child in _ordered_children(node):
         child_count += len(
             _render_node(
                 child, element, assignments, target_defaults, active_locations, cda,
@@ -1011,6 +1106,45 @@ def _render_node_once(
                 occurrence, physical_values,
             )
         )
+
+    completion_target = next(
+        (
+            cda.get("targets", {}).get(str(name), {})
+            for name in node.get("targets", [])
+            if cda.get("targets", {}).get(str(name), {}).get(
+                "value_representation"
+            )
+        ),
+        None,
+    )
+    if (
+        required
+        and assigned is None
+        and default is None
+        and len(node.get("codes") or []) != 1
+        and child_count
+        and completion_target is not None
+        and completion_target.get("permits_null_flavor")
+    ):
+        legal = {
+            str(value)
+            for value in completion_target.get("null_flavor_exceptions", [])
+            if str(value) in NULL_FLAVORS
+        }
+        # OTH and UNC are the nullFlavors whose datatype rules can retain
+        # originalText-like payload. Prefer OTH because it denotes locally
+        # described content; never invent a payload-bearing fallback unless
+        # the bound profile explicitly admits it.
+        compatible = next(
+            (value for value in ("OTH", "UNC") if value in legal), None
+        )
+        if compatible is not None:
+            _write_value(
+                element,
+                {"nullFlavor": compatible},
+                completion_target,
+                node,
+            )
 
     if (
         required and assigned is None and default is None
@@ -1030,18 +1164,25 @@ def _render_node_once(
         # nullFlavor fallback.  A complex structural value is stricter: its
         # compiled datatype/model expansion must expose @nullFlavor before the
         # renderer may use it in place of required child content.
-        target = next(
-            (
-                cda.get("targets", {}).get(str(name), {})
-                for name in node.get("targets", [])
-                if cda.get("targets", {}).get(str(name), {}).get(
-                    "value_representation"
-                )
-            ),
-            None,
-        )
+        target = completion_target
         if target is not None:
-            _write_value(element, {"nullFlavor": null_flavor}, target, node)
+            legal_values = [
+                str(value)
+                for value in target.get("null_flavor_exceptions", [])
+                if str(value) in NULL_FLAVORS
+            ]
+            selected_flavor = next(
+                (
+                    value for value in (
+                        null_flavor, "UNK", "NAV", "NI", "OTH",
+                    )
+                    if value in legal_values
+                ),
+                legal_values[0] if legal_values else null_flavor,
+            )
+            _write_value(
+                element, {"nullFlavor": selected_flavor}, target, node
+            )
         else:
             element.set("nullFlavor", null_flavor)
     return [element]
@@ -1100,6 +1241,23 @@ def emit(
             assignments.setdefault(name, _format_site(value, variables))
         else:
             problems.append(f"site configuration references unknown, prohibited or ambiguous CDA target {name!r}")
+
+    for name, value in site.get("cda", {}).get(
+        "fallback_if_active", {}
+    ).items():
+        if (
+            name in targets and targets[name].get("renderable")
+            and len(targets[name].get("locations", [])) == 1
+        ):
+            assignments.setdefault(
+                name,
+                fallback_if_active_value(_format_site(value, variables)),
+            )
+        else:
+            problems.append(
+                "site configuration references unknown, prohibited or "
+                f"ambiguous CDA fallback target {name!r}"
+            )
 
     identifier_root = str(
         site.get("identifiers", {}).get("document_root") or ""
@@ -1177,6 +1335,7 @@ def emit(
         active_locations.update(
             location[:depth] for depth in range(1, len(location) + 1)
         )
+    _activate_fallback_elements(cda, assignments, active_locations)
     null_flavor = required_unmapped_null_flavor(mapping)
     roots: list[ET.Element] = []
     assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]] = []

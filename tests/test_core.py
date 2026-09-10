@@ -19,7 +19,10 @@ from decor2hl7.build.model import compile_model
 from decor2hl7.build.target import collect_templates, compile_cda, select_template
 from decor2hl7.compile import mapping as mapping_compiler
 from decor2hl7.compile.artifacts import (
-    compiler_inputs, selected_closure_templates, write_build_diagnostics,
+    compiler_inputs,
+    selected_closure_template_revisions,
+    selected_closure_templates,
+    write_build_diagnostics,
 )
 from decor2hl7.compile.structural import (
     boolean_example_discriminator_rules, value_set_members,
@@ -4288,10 +4291,22 @@ class CoreTests(unittest.TestCase):
 
     def test_selected_closure_templates_require_a_document_location(self) -> None:
         cda_model = {"targets": {
-            "Located.value": {"template_id": "located", "locations": ["0.1"]},
-            "Reachable.value": {"template_id": "unlocated", "locations": []},
+            "Located.value": {
+                "template_id": "located",
+                "template_effective_date": "2026-01-02T00:00:00",
+                "locations": ["0.1"],
+            },
+            "Reachable.value": {
+                "template_id": "unlocated",
+                "template_effective_date": "2025-01-02T00:00:00",
+                "locations": [],
+            },
         }}
         self.assertEqual(selected_closure_templates(cda_model), {"located"})
+        self.assertEqual(
+            selected_closure_template_revisions(cda_model),
+            {("located", "2026-01-02T00:00:00")},
+        )
 
     def test_declared_endpoint_parity_accepts_only_fixed_structural_folds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5436,6 +5451,30 @@ class CoreTests(unittest.TestCase):
             {"fields": {"status": {"1": "typo"}}},
         )
         self.assertTrue(any("unknown canonical value" in error for error in errors))
+
+    def test_unbound_code_accepts_explicit_site_code_identity(self) -> None:
+        field = {"type": "code", "values": {}}
+        translation = {
+            "LOCAL": {
+                "code": "LOCAL",
+                "codeSystem": "2.25.186589136976866630731912149362364494481",
+                "displayName": "Local procedure",
+            },
+        }
+        errors = validate.check_config(
+            {"fields": {"procedure": field}},
+            {"targets": {}},
+            {"fields": {"procedure": None}},
+            {"fields": {"procedure": None}},
+            {"fields": {"procedure": translation}},
+        )
+        self.assertEqual(errors, [])
+        value = data.normalize_value("LOCAL", field, translation, {})
+        self.assertEqual(value["code"], "LOCAL")
+        self.assertEqual(
+            value["codeSystem"],
+            "2.25.186589136976866630731912149362364494481",
+        )
 
     def test_history_rotation_uses_first_entry_timestamp_not_mtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

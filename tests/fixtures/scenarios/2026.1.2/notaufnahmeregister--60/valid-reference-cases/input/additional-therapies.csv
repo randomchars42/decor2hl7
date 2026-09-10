@@ -1,2 +1,2 @@
 case_id,occurrence_1,masnahmen.wildcard_therapie.code,masnahmen.wildcard_therapie.definitorischer_link,masnahmen.wildcard_therapie.klinisch_relevante_zeitangaben.zeitpunkt,masnahmen.wildcard_therapie.klinisch_relevante_zeitangaben.zeitraum
-SCENARIO-02,therapy-1,OXYGEN,Lokaler Leistungskatalog: Sauerstofftherapie,2026-05-02T10:06:00+02:00,45
+SCENARIO-02,therapy-1,OXYGEN,https://example.org/aktin/services/oxygen-therapy,2026-05-02T10:06:00+02:00,45
