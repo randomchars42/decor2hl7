@@ -28,5 +28,6 @@ mypy-report:
 
 testrun:
 	python3 -m decor2hl7 --root ../test-workplace check-cda-mapping && \
-	python3 -m decor2hl7 --root ../test-workplace setup-test --force && \
+	python3 -m decor2hl7 --root ../test-workplace setup-test --force \
+		--scenario tests/fixtures/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases && \
 	python3 -m decor2hl7 --root ../test-workplace test-cda-mapping

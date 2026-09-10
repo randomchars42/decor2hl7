@@ -490,6 +490,184 @@ class CliTests(unittest.TestCase):
             self.assertFalse((root / "out" / RELEASES[0]["key"] / TRANSACTIONS[0]["key"]).exists())
             self.assertEqual(list((root / "state").iterdir()), [])
 
+            scenario = root / "authored-scenario"
+            (scenario / "input").mkdir(parents=True)
+            write_json(scenario / "scenario.json", {
+                "version": 1,
+                "name": "two-authored-cases",
+                "release": RELEASES[0]["key"],
+                "transaction": {
+                    "key": TRANSACTIONS[0]["key"],
+                    "id": TRANSACTIONS[0]["id"],
+                    "effective_date": TRANSACTIONS[0]["effective_date"],
+                },
+                "input": {
+                    "join_column": "case_id",
+                    "case_source": "cases",
+                    "sources": {
+                        "cases": {"file": "cases.csv", "cardinality": "1:1"},
+                    },
+                },
+                "expected": {
+                    "cases": ["CASE-A", "CASE-B"],
+                    "documents": 2,
+                    "coverage": "all-mapped",
+                    "case_fields": {
+                        "CASE-A": {"present": ["case.note"]},
+                        "CASE-B": {"present": ["case.note"]},
+                    },
+                },
+            })
+            (scenario / "input" / "cases.csv").write_text(
+                "case_id,case.note\nCASE-A,First authored note\n"
+                "CASE-B,Second authored note\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main([
+                "--root", str(root), "setup-test", "--force",
+                "--scenario", str(scenario),
+            ]), 0)
+            expected = load_json(fixture / "expected.json")
+            self.assertEqual(expected["cases"], ["CASE-A", "CASE-B"])
+            self.assertEqual(expected["scenario"]["name"], "two-authored-cases")
+            authored_out = root / "authored-results"
+            self.assertEqual(main([
+                "--root", str(root), "test-cda-mapping", "--out", str(authored_out)
+            ]), 0)
+            authored = load_json(authored_out / "results.json")
+            self.assertEqual(authored["status"], "PASS")
+            self.assertEqual(
+                authored["documents"], ["case-a.xml", "case-b.xml"]
+            )
+            self.assertEqual(authored["scenario"]["name"], "two-authored-cases")
+
+    def test_authored_scenario_identity_is_pinned_to_the_selected_spec(self) -> None:
+        from decor2hl7.testing import setup_fixture
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scenario = root / "scenario"
+            (scenario / "input").mkdir(parents=True)
+            write_json(scenario / "scenario.json", {
+                "version": 1,
+                "name": "wrong-release",
+                "release": "2025.0.0",
+                "transaction": {
+                    "key": TRANSACTIONS[0]["key"],
+                    "id": TRANSACTIONS[0]["id"],
+                    "effective_date": TRANSACTIONS[0]["effective_date"],
+                },
+                "input": {
+                    "case_source": "cases",
+                    "sources": {"cases": {"file": "cases.csv"}},
+                },
+                "expected": {"cases": ["CASE-A"]},
+            })
+            (scenario / "input" / "cases.csv").write_text(
+                "case_id,case.note\nCASE-A,Note\n", encoding="utf-8"
+            )
+            model = {"groups": {}, "fields": {
+                "case.note": {"type": "text", "repeat_chain": []},
+            }}
+            mapping = {"fields": {"case.note": None}}
+            fixture = root / "fixture"
+            setup_fixture(
+                fixture, RELEASES[0], TRANSACTIONS[0], model,
+                {"targets": {}}, mapping,
+            )
+            original_input = (fixture / "input/cases.csv").read_text()
+            with self.assertRaisesRegex(ValueError, "scenario identity mismatch"):
+                setup_fixture(
+                    fixture, RELEASES[0], TRANSACTIONS[0], model,
+                    {"targets": {}}, mapping,
+                    scenario_dir=scenario, force=True,
+                )
+            self.assertEqual(
+                (fixture / "input/cases.csv").read_text(), original_input
+            )
+
+    def test_authored_scenario_copies_explicit_repeat_sources(self) -> None:
+        from decor2hl7.testing import setup_fixture
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scenario = root / "scenario"
+            (scenario / "input").mkdir(parents=True)
+            write_json(scenario / "scenario.json", {
+                "version": 1,
+                "name": "repeat-cases",
+                "release": RELEASES[0]["key"],
+                "transaction": {
+                    "key": TRANSACTIONS[0]["key"],
+                    "id": TRANSACTIONS[0]["id"],
+                    "effective_date": TRANSACTIONS[0]["effective_date"],
+                },
+                "input": {
+                    "case_source": "cases",
+                    "sources": {
+                        "cases": {"file": "cases.csv", "cardinality": "1:1"},
+                        "events": {
+                            "file": "events.csv", "cardinality": "1:n",
+                            "occurrence_keys": {"events": "event_id"},
+                        },
+                    },
+                },
+                "expected": {
+                    "cases": ["CASE-A", "CASE-B"], "documents": 2,
+                },
+            })
+            (scenario / "input/cases.csv").write_text(
+                "case_id,case.note\nCASE-A,One\nCASE-B,Two\n", encoding="utf-8"
+            )
+            (scenario / "input/events.csv").write_text(
+                "case_id,event_id,events.value\nCASE-A,1,Alpha\n"
+                "CASE-A,2,Beta\nCASE-B,1,Gamma\n",
+                encoding="utf-8",
+            )
+            model = {
+                "groups": {"events": {"repeating": True}},
+                "fields": {
+                    "case.note": {"type": "text", "repeat_chain": []},
+                    "events.value": {
+                        "type": "text", "repeat_chain": ["events"],
+                    },
+                },
+            }
+            fixture = root / "fixture"
+            expected = setup_fixture(
+                fixture, RELEASES[0], TRANSACTIONS[0], model,
+                {"targets": {}},
+                {"fields": {"case.note": None, "events.value": None}},
+                scenario_dir=scenario,
+            )
+            csv_mapping = load_json(fixture / "config/csv-mapping.json")
+            site = load_json(fixture / "config/site.json")
+            self.assertEqual(csv_mapping["fields"], {
+                "case.note": "cases:case.note",
+                "events.value": "events:events.value",
+            })
+            self.assertEqual(site["input"]["sources"]["events"], {
+                "file": "events.csv", "cardinality": "1:n",
+                "occurrence_keys": {"events": "event_id"},
+            })
+            self.assertEqual(expected["repeat_sources"], [{
+                "source": "events", "repeat_chains": ["events"], "rows": 3,
+            }])
+
+    def test_force_refuses_to_delete_unmarked_input_directories(self) -> None:
+        from decor2hl7.testing import setup_fixture
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / "not-a-fixture"
+            (fixture / "input").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "without a decor2hl7 fixture"):
+                setup_fixture(
+                    fixture, RELEASES[0], TRANSACTIONS[0],
+                    {"groups": {}, "fields": {}}, {"targets": {}},
+                    {"fields": {}}, force=True,
+                )
+            self.assertTrue((fixture / "input").is_dir())
+
     def test_synthetic_repeat_fixture_exercises_small_code_domain(self) -> None:
         from decor2hl7.testing import setup_fixture
 

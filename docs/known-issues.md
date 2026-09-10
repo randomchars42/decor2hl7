@@ -559,3 +559,21 @@ Local sent-state cannot prove exactly-once delivery across the failure window
 where a POST succeeds but the process crashes before state is recorded.
 Receiver-supported document IDs or idempotency semantics should be used when
 available.
+
+## Authored scenario clinical scope
+
+The versioned `valid-reference-cases` set replaces the one-row maximal synthetic
+fixture in the repository's reference `testrun`. It exercises ESI red and MTS
+red/orange/yellow/green/blue as mutually exclusive complete records, permits at
+most the indicator matching the MTS result, omits an indicator for blue, and
+keeps discharge and transfer mutually exclusive. Regression tests also check
+the Glasgow Coma Scale component sums used by those records.
+
+This is reviewed executable mapping evidence, not a general clinical rule
+engine or treatment recommendation. Cross-field plausibility outside the
+declared invariants is still maintained by fixture review. The selected
+ART-DECOR dataset makes both the isolation answer and reason mandatory, while
+the CDA profile prohibits a reason when the answer is negative. Until that
+source/cardinality mismatch is clarified, the reference cases use clinically
+plausible positive isolation indications and record the limitation in their
+manifest; the suite cannot cover the negative-isolation branch legally.

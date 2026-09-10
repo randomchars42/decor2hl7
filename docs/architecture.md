@@ -648,20 +648,34 @@ without datatype- or path-specific renderer behavior.
 compatibility, and `mapping-lock.json` without requiring site CSV mappings.
 This is the review gate for the shareable specification product.
 
-`setup-test` derives deterministic CSV columns from `model.json`. Scalar fields
-go to `cases.csv`; each distinct repeat chain gets a generated `1:n` source with
-explicit occurrence-key columns. The fixture configuration uses valid synthetic
-identifier roots and model-derived terminology aliases. `expected.json` freezes
-the selected release/transaction and model/CDA/mapping hashes and records mapped
-and unmapped fields.
+`setup-test` supports two fixture sources. Its synthetic mode derives
+deterministic CSV columns from `model.json`: scalar fields go to `cases.csv` and
+each distinct repeat chain gets a generated `1:n` source with explicit
+occurrence-key columns. Its authored mode reads a caller-selected directory
+containing `scenario.json` and `input/*.csv`. The manifest pins the release and
+exact transaction identity, declares every input relationship, and may require
+case-specific model fields and CDA template IDs to be present or absent. Setup
+rejects identity drift, unsafe or duplicate source paths, unknown model columns,
+duplicate field ownership, and a case-source order that differs from the
+declared cases before generating fixture configuration.
+
+Both modes produce an isolated fixture configuration with valid identifier
+roots and model-derived terminology aliases. `expected.json` freezes the
+selected release/transaction and model/CDA/mapping hashes and records mapped and
+unmapped fields. Authored mode additionally records the scenario name, source,
+content digest, case list, and case-level assertions. The authored oracle is
+therefore the reviewed input and explicit structural expectations; renderer
+output is not copied back as golden expected XML.
 
 `test-cda-mapping` reads that fixture through the ordinary production modules:
 `data.ingest` → record validation → structural bindings → CDA rendering and
 ART-DECOR assertions. It writes generated XML, `results.json`, and `results.md`
 to the test result directory. It intentionally bypasses production change
 state and transport. Coverage means a mapped datapoint survived normalization
-and participated in the tested record; it does not claim that a single
-synthetic document can exercise mutually exclusive or conditional branches.
+and participated in the fixture suite. One synthetic document cannot exercise
+mutually exclusive or conditional branches; a versioned authored suite can
+distribute them across complete records and prove the declared absences as well
+as presences.
 
 ## State
 

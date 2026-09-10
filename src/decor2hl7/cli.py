@@ -967,9 +967,13 @@ def cmd_setup_test(args: argparse.Namespace) -> int:
         else transaction_test_dir(root, release, transaction)
     )
     expected = setup_fixture(
-        test_dir, release, transaction, model, cda, cda_mapping, force=args.force
+        test_dir, release, transaction, model, cda, cda_mapping,
+        force=args.force,
+        scenario_dir=_explicit_path(args.scenario) if args.scenario else None,
     )
     _say(f"test fixture: {test_dir}")
+    if args.scenario:
+        _say(f"authored scenario set: {expected['scenario']['name']}")
     _say(f"generated {len(expected['generated_fields'])} model datapoint columns")
     _say(f"CDA-mapped fields covered by input: {len(expected['mapped_fields'])}")
     return 0
@@ -1385,8 +1389,15 @@ def parser() -> argparse.ArgumentParser:
     _add_runtime_config_overrides(q, site=False)
     q.set_defaults(func=cmd_check_cda_mapping)
 
-    q = sub.add_parser("setup-test", help="generate isolated synthetic CSV/config mapping test input")
+    q = sub.add_parser(
+        "setup-test",
+        help="prepare isolated generated or authored CSV/config mapping test input",
+    )
     q.add_argument("--test-dir", help="test fixture directory; defaults to test/<release>/<transaction>")
+    q.add_argument(
+        "--scenario",
+        help="authored scenario-set directory containing scenario.json and input/",
+    )
     q.add_argument("--force", action="store_true", help="replace generated input/config/expected files")
     _add_runtime_config_overrides(q, site=False)
     q.set_defaults(func=cmd_setup_test)
