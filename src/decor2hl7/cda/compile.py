@@ -57,6 +57,7 @@ from .model import (
 
 TemplateKey = tuple[str, str]
 TEMPLATE_RELATIONS = {"SPEC", "VERSION", "COPY"}
+NULLFLAVOR_CODE_SYSTEM = "2.16.840.1.113883.5.1008"
 
 
 def _xml_true(value: str | None) -> bool:
@@ -720,6 +721,10 @@ def _parse_include(include: ET.Element, inherited_closed: bool = False) -> dict[
             if include.get("isMandatory") is not None else None
         ),
         "conformance": include.get("conformance"),
+        # An include without its own multiplicity is an inline constraint
+        # group. Its contained XML particles retain their own cardinalities;
+        # the transparent wrapper must not suppress them at runtime.
+        "transparent_inline": include.get("minimumMultiplicity") is None,
         "is_closed": inherited_closed or _xml_true(include.get("isClosed")),
         "children": [],
     }
@@ -1390,6 +1395,10 @@ def _expand_nodes(
             )
             if target is not None and _key(target) not in stack:
                 effective = _effective_template(target, templates, memo)
+                contained = _expand_nodes(
+                    effective, templates, memo, stack + (_key(target),)
+                )
+                _require_contained_root(contained)
                 node["children"].append({
                     "kind": "template",
                     "ref": target.get("id"),
@@ -1398,12 +1407,26 @@ def _expand_nodes(
                     "min": 0,
                     "max": 1,
                     "mandatory": False,
-                    "children": _expand_nodes(
-                        effective, templates, memo, stack + (_key(target),)
-                    ),
+                    "transparent_inline": True,
+                    "children": contained,
                 })
         out.append(node)
     return out
+
+
+def _require_contained_root(nodes: list[dict[str, Any]]) -> bool:
+    """Make a ``contains`` template's concrete root present with its owner."""
+    for node in nodes:
+        if node.get("kind") == "element":
+            if str(node.get("conformance") or "").upper() != "NP":
+                node["min"] = max(1, int(node.get("min") or 0))
+            return True
+        if node.get("kind") in {"include", "template"} and _require_contained_root(
+            list(node.get("children", []))
+        ):
+            node["transparent_inline"] = True
+            return True
+    return False
 
 
 def _model_source(
@@ -1631,6 +1654,7 @@ def _expand_datatype_structure(
                         )
                         node.setdefault("children", []).append(child)
                         existing_children[key].append(child)
+                _order_children_by_model(node, parts)
         _expand_datatype_structure(
             list(node.get("children", [])),
             definitions,
@@ -1764,6 +1788,86 @@ def _transparent_element_children(
             )
 
 
+def _first_xml_particle(node: Mapping[str, Any]) -> str | None:
+    """Return the first concrete XML particle below one compiled child."""
+    if node.get("kind") == "element":
+        return _particle_key(str(node.get("name") or ""))
+    if node.get("kind") in {"include", "template", "datatype_choice"}:
+        for child in node.get("children", []):
+            particle = _first_xml_particle(child)
+            if particle:
+                return particle
+    return None
+
+
+def _order_children_by_model(
+    node: dict[str, Any], parts: Iterable[Any],
+) -> None:
+    """Record the normative CDA/XSD particle order for rendering.
+
+    ART-DECOR templates occasionally list particles in documentation order
+    rather than the XSD sequence. The compiled list itself remains in source
+    order because physical locations and stable target names are based on its
+    indices; the renderer consumes this separate ordering annotation.
+    """
+    order = {
+        _particle_key(str(part.name)): index
+        for index, part in enumerate(parts)
+    }
+    fallback = len(order)
+    for index, child in enumerate(node.get("children", [])):
+        child["render_order"] = order.get(
+            _first_xml_particle(child) or "", fallback + index
+        )
+
+
+def _annotate_null_flavor_exceptions(
+    targets: Mapping[str, dict[str, Any]], model: Mapping[str, Any],
+) -> None:
+    """Retain the legal nullFlavor exceptions of bound target value sets.
+
+    Value-set members are not construction defaults. Exception membership is
+    nevertheless an executable profile constraint: it tells the renderer
+    which nullFlavor may legally complete a required, otherwise empty value.
+    """
+    value_sets = model.get("value_sets", {})
+    if not isinstance(value_sets, Mapping):
+        return
+    for target in targets.values():
+        exception_sets: list[set[str]] = []
+        for binding in target.get("value_set_bindings", []):
+            if not isinstance(binding, Mapping) or not binding.get("id"):
+                continue
+            oid = str(binding["id"])
+            effective = str(binding.get("effective_date") or "")
+            exact = value_sets.get(f"{oid}@{effective}") if effective else None
+            candidates = (
+                [exact]
+                if isinstance(exact, Mapping)
+                else [
+                    value for key, value in value_sets.items()
+                    if str(key).startswith(oid + "@")
+                    and isinstance(value, Mapping)
+                ]
+            )
+            for candidate in candidates:
+                codes = candidate.get("codes", {})
+                exceptions = {
+                    str(code)
+                    for code in candidate.get("exceptions", [])
+                    if isinstance(codes, Mapping)
+                    and isinstance(codes.get(str(code)), Mapping)
+                    and str(codes[str(code)].get("code_system") or "")
+                    == NULLFLAVOR_CODE_SYSTEM
+                }
+                if exceptions:
+                    exception_sets.append(exceptions)
+        if exception_sets:
+            target["null_flavor_exceptions"] = sorted(
+                set.intersection(*exception_sets)
+            )
+
+
 def _expand_cda_model_structure(
     nodes: list[dict[str, Any]], definitions: dict[str, Any],
     stack: tuple[str, ...] = (),
@@ -1823,6 +1927,21 @@ def _expand_cda_model_structure(
                             child["extension_slot_maximum"] = part.maximum
                         if not child.get("datatype"):
                             child["datatype"] = part.datatype
+                        if str(child.get("conformance") or "").upper() != "NP":
+                            child["min"] = max(
+                                int(child.get("min") or 0), part.minimum
+                            )
+                            current_max = child.get("max")
+                            if (
+                                not child.get("reviewed_extension")
+                                and part.maximum is not None
+                                and (
+                                    current_max is None
+                                    or current_max == "*"
+                                    or int(current_max) > part.maximum
+                                )
+                            ):
+                                child["max"] = part.maximum
                         child.setdefault("provenance", []).append({
                             **source, "source": "template + cda-rim",
                         })
@@ -1841,6 +1960,30 @@ def _expand_cda_model_structure(
                     child["provenance"] = [source]
                     node.setdefault("children", []).append(child)
                     existing_children[key].append(child)
+            for choice_index, alternatives in enumerate(
+                definition.required_choices
+            ):
+                selected = [
+                    child
+                    for name in alternatives
+                    for child in existing_children.get(_particle_key(name), [])
+                    if not child.get("model_derived")
+                    and str(child.get("conformance") or "").upper() != "NP"
+                ]
+                if len(selected) == 1:
+                    # The XSD requires one alternative and the ART-DECOR
+                    # template selected exactly one concrete branch.  Preserve
+                    # that group-derived requirement without making the other
+                    # XSD alternatives appear as template endpoints.
+                    selected[0]["min"] = max(
+                        1, int(selected[0].get("min") or 0)
+                    )
+                    selected[0]["cda_required_choice"] = {
+                        "definition": definition.name,
+                        "index": choice_index,
+                        "alternatives": list(alternatives),
+                    }
+            _order_children_by_model(node, definition.parts)
             existing_attributes = {
                 _particle_key("@" + str(item.get("name") or "")): item
                 for item in node.get("attributes", [])
@@ -1861,6 +2004,9 @@ def _expand_cda_model_structure(
                             attribute.fixed
                             if attribute.fixed is not None else attribute.default
                         )
+                    existing["optional"] = bool(
+                        existing.get("optional", True) and attribute.optional
+                    )
                     existing.setdefault("provenance", []).append({
                         **source, "source": "template + cda-rim",
                     })
@@ -2870,6 +3016,7 @@ def compile_cda(
             node["mandatory"] = True
             break
     source_index = _annotate_targets(document, targets)
+    _annotate_null_flavor_exceptions(targets, model)
     _annotate_non_null_requirements(document, targets)
     _materialize_polymorphic_targets(document, targets, source_index)
     _annotate_quantity_range_targets(document, targets)

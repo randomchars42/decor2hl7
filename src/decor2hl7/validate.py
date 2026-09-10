@@ -76,14 +76,22 @@ def check_site(site: Mapping[str, Any], cda: Mapping[str, Any] | None = None) ->
                                 errors.append(f"site: input.sources.{name}.occurrence_keys must map non-empty repeat paths to columns")
     if cda is not None:
         targets = cda.get("targets", {})
-        values = site.get("cda", {}).get("values", {})
-        if values is not None and not isinstance(values, Mapping):
-            errors.append("site: cda.values must be an object")
-        elif isinstance(values, Mapping):
-            for name in values:
-                target = targets.get(name)
-                if not target or not target.get("writable") or len(target.get("locations", [])) != 1:
-                    errors.append(f"site: cda.values references unknown/prohibited/ambiguous target {name!r}")
+        cda_config = site.get("cda", {})
+        for key in ("values", "fallback_if_active"):
+            values = (
+                cda_config.get(key, {})
+                if isinstance(cda_config, Mapping) else {}
+            )
+            if values is not None and not isinstance(values, Mapping):
+                errors.append(f"site: cda.{key} must be an object")
+            elif isinstance(values, Mapping):
+                for name in values:
+                    target = targets.get(name)
+                    if not target or not target.get("writable") or len(target.get("locations", [])) != 1:
+                        errors.append(
+                            f"site: cda.{key} references unknown/prohibited/"
+                            f"ambiguous target {name!r}"
+                        )
     return errors
 
 
@@ -280,12 +288,14 @@ def check_config(
                 f"cda-mapping: target {target_name} is not admissible: "
                 + cooccurrence_problem_message(problem)
             )
+    site_cda = site.get("cda", {}) if isinstance(site, Mapping) else {}
     site_targets = {
-        str(name) for name in (
-            site.get("cda", {}).get("values", {})
-            if isinstance(site, Mapping)
-            and isinstance(site.get("cda", {}), Mapping)
-            and isinstance(site.get("cda", {}).get("values", {}), Mapping)
+        str(name)
+        for key in ("values", "fallback_if_active")
+        for name in (
+            site_cda.get(key, {})
+            if isinstance(site_cda, Mapping)
+            and isinstance(site_cda.get(key, {}), Mapping)
             else {}
         )
     }
@@ -328,14 +338,39 @@ def check_config(
                 errors.append(f"codes-mapping: {path} must contain a JSON object")
                 continue
             for raw, value in translations.items():
-                if value is not None and str(value) not in canonical:
+                explicit_unbound_code = (
+                    not canonical
+                    and field.get("type") == "code"
+                    and isinstance(value, Mapping)
+                    and isinstance(value.get("code"), str)
+                    and bool(value.get("code"))
+                    and isinstance(value.get("codeSystem"), str)
+                    and bool(value.get("codeSystem"))
+                    and all(
+                        key in {"code", "codeSystem", "displayName"}
+                        and isinstance(item, str)
+                        for key, item in value.items()
+                    )
+                )
+                if (
+                    value is not None
+                    and str(value) not in canonical
+                    and not explicit_unbound_code
+                ):
                     errors.append(f"codes-mapping: {path} maps {raw!r} to unknown canonical value {value!r}")
     if site is not None:
         errors.extend(check_site(site, cda))
-        site_values = (
-            site.get("cda", {}).get("values", {})
-            if isinstance(site.get("cda", {}), Mapping) else {}
-        )
+        site_cda = site.get("cda", {})
+        site_values = {
+            str(name): value
+            for key in ("values", "fallback_if_active")
+            for name, value in (
+                site_cda.get(key, {}).items()
+                if isinstance(site_cda, Mapping)
+                and isinstance(site_cda.get(key, {}), Mapping)
+                else []
+            )
+        }
         if isinstance(site_values, Mapping):
             for problem in datatype_cooccurrence_problems(cda, site_values):
                 errors.append(

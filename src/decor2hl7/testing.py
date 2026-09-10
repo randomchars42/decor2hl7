@@ -513,6 +513,50 @@ def _copy_scenario_input(
                 "template present and absent"
             )
 
+    site_cfg = manifest.get("site", {})
+    if not isinstance(site_cfg, Mapping):
+        raise ValueError("scenario site must be an object")
+    scenario_cda = site_cfg.get("cda", {})
+    if not isinstance(scenario_cda, Mapping):
+        raise ValueError("scenario site.cda must be an object")
+    for key in ("values", "fallback_if_active"):
+        scenario_values = scenario_cda.get(key, {})
+        if not isinstance(scenario_values, Mapping):
+            raise ValueError(f"scenario site.cda.{key} must be an object")
+        site["cda"][key] = dict(scenario_values)
+
+    code_cfg = manifest.get("codes", {})
+    if not isinstance(code_cfg, Mapping):
+        raise ValueError("scenario codes must be an object")
+    for path, translations in code_cfg.items():
+        field = model_fields.get(str(path))
+        if not isinstance(field, Mapping) or field.get("type") != "code":
+            raise ValueError(
+                f"scenario codes references non-coded model field {path!r}"
+            )
+        if not isinstance(translations, Mapping) or not all(
+            isinstance(raw, str)
+            and raw
+            and (
+                isinstance(canonical, str) and bool(canonical)
+                or isinstance(canonical, Mapping)
+                and isinstance(canonical.get("code"), str)
+                and bool(canonical.get("code"))
+                and isinstance(canonical.get("codeSystem"), str)
+                and bool(canonical.get("codeSystem"))
+                and all(
+                    key in {"code", "codeSystem", "displayName"}
+                    and isinstance(value, str)
+                    for key, value in canonical.items()
+                )
+            )
+            for raw, canonical in translations.items()
+        ):
+            raise ValueError(
+                f"scenario codes.{path} must map non-empty strings to a "
+                "non-empty canonical string or an explicit code object"
+            )
+
     site_input = site["input"]
     for key in (
         "encoding", "delimiter", "decimal_separator", "empty_is_null",
@@ -528,6 +572,10 @@ def _copy_scenario_input(
         "source": str(scenario_dir.resolve()),
         "sha256": _scenario_digest(manifest, source_files),
         "expected": dict(expected_cfg),
+        "codes": {
+            str(path): dict(translations)
+            for path, translations in code_cfg.items()
+        },
     }
     return csv_fields, scenario_meta, repeat_sources
 
@@ -598,7 +646,7 @@ def synthetic_site(
             "null_values": ["NULL", "NA", "N/A"],
             "sources": {},
         },
-        "cda": {"values": {}},
+        "cda": {"values": {}, "fallback_if_active": {}},
         "state": {"rotate_days": 0},
         "transport": {
             "adapter": "http-post", "url": None, "timeout": 60, "headers": {},
@@ -710,6 +758,8 @@ def setup_fixture(
         "fields": {path: csv_fields.get(path) for path in fields},
     }
     codes_mapping = code_mapping_defaults(model)
+    if scenario_meta is not None:
+        codes_mapping.setdefault("fields", {}).update(scenario_meta["codes"])
     write_json(config_root / "csv-mapping.json", csv_mapping)
     write_json(config_root / "codes-mapping.json", codes_mapping)
     write_json(config_root / "site.json", site)

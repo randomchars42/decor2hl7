@@ -77,6 +77,40 @@
       }
     }
   },
+  "site": {
+    "cda": {
+      "values": {
+        "CDAconfidentialityCode.confidentialityCode": {
+          "code": "N",
+          "codeSystem": "2.16.840.1.113883.5.25",
+          "displayName": "Normal"
+        },
+        "CDAlanguageCode.languageCode": "de-DE"
+      },
+      "fallback_if_active": {
+        "UVSubordinateadministration.substanceAdministration.moodCode@20230130": "EVN",
+        "UVSubordinateadministration.substanceAdministration.statusCode@20230130": "completed",
+        "UVSubordinateadministration.substanceAdministration.effectiveTime_value_or_nullFlavor@20230130": "2026-05-02T10:12:00+02:00",
+        "CDAauthor.author.assignedAuthor.assignedPerson@20140917::PersonElements.name": "Dr. Eva Beispiel"
+      }
+    }
+  },
+  "codes": {
+    "diagnostik.wildcard_diagnostik.code": {
+      "EEG": {
+        "code": "EEG",
+        "codeSystem": "2.25.186589136976866630731912149362364494481",
+        "displayName": "Elektroenzephalographie"
+      }
+    },
+    "masnahmen.wildcard_therapie.code": {
+      "OXYGEN": {
+        "code": "OXYGEN",
+        "codeSystem": "2.25.1021511283152997440161685070563521730",
+        "displayName": "Sauerstofftherapie"
+      }
+    }
+  },
   "expected": {
     "cases": [
       "SCENARIO-01",
@@ -231,7 +265,8 @@
     "limitations": [
       "The records are curated mapping fixtures, not diagnostic or treatment guidance.",
       "The selected dataset makes both isolation answer and reason mandatory, while the CDA profile prohibits a reason for a negative answer; every fixture therefore uses a clinically plausible positive isolation indication.",
-      "Locally coded clinical concepts intentionally exercise the configured nullFlavor OTH fallback where no portable binding exists."
+      "The wildcard concepts use explicit site-owned 2.25 code-system identities; their HTTPS definitional links identify the local definitions because the dataset publishes no formal terminology binding.",
+      "The published wildcard associations split a point and duration across mutually exclusive atomic and interval effectiveTime branches; exact CDA validation therefore remains blocked until the profile association or reviewed portable mapping is corrected."
     ]
   }
 }

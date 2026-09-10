@@ -301,7 +301,10 @@ def _compiler_inputs(root: Path) -> dict[str, Any]:
 
 def cmd_build(args: argparse.Namespace) -> int:
     from .compile.artifacts import (
-        configured_source_rules, selected_closure_templates, write_build_diagnostics,
+        configured_source_rules,
+        selected_closure_template_revisions,
+        selected_closure_templates,
+        write_build_diagnostics,
     )
     from .compile.mapping import write_code_mapping
     from .cda.compile import write_cda_model
@@ -351,6 +354,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     conformance = build_conformance_artifacts(
         release_spec_dir(root, release), model_dir, inputs, release, transaction,
         selected_closure_templates(cda),
+        selected_closure_template_revisions(cda),
     )
     from .compile.schematron import attach_constraints
     if any(

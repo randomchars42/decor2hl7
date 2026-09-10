@@ -64,8 +64,10 @@ class ConformanceTests(unittest.TestCase):
             valid = root / "valid.xml"
             valid.write_text(
                 '''<ClinicalDocument xmlns="urn:hl7-org:v3"
- xmlns:pharmhl7="urn:hl7-org:pharm">
+ xmlns:pharmhl7="urn:hl7-org:pharm"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
  <manufacturedMaterial pharmhl7:classification="direct">
+ <value xsi:type="CE" code="TAB"/>
  <pharmhl7:formCode code="TAB"/></manufacturedMaterial></ClinicalDocument>''',
                 encoding="utf-8",
             )
@@ -88,6 +90,10 @@ class ConformanceTests(unittest.TestCase):
                 "{urn:hl7-org:pharm}classification",
                 projected_material.attrib,
             )
+            projected_text = projected[0].read_text(encoding="utf-8")
+            self.assertIn('xmlns="urn:hl7-org:v3"', projected_text)
+            self.assertNotIn("xmlns:ns0=", projected_text)
+            self.assertIn('xsi:type="CE"', projected_text)
             self.assertIsNotNone(
                 ET.parse(valid).find(".//{urn:hl7-org:pharm}formCode")
             )
@@ -395,6 +401,13 @@ class ConformanceTests(unittest.TestCase):
                 '<element name="pharm:product"/></template></result>',
                 encoding="utf-8",
             )
+            old_template = root / "old-template.xml"
+            old_template.write_text(
+                '<template id="9.8.7" name="Old" '
+                'effectiveDate="2025-01-03T00:00:00">'
+                '<element name="hl7:observation"/></template>',
+                encoding="utf-8",
+            )
             terminology = root / "terminology.xml"
             terminology.write_text(
                 '<valueSets><project><valueSet id="7.8.9" name="Codes" '
@@ -409,7 +422,7 @@ class ConformanceTests(unittest.TestCase):
                     "transaction_source": transaction,
                     "model_resources": [],
                     "terminology_resources": [terminology],
-                    "templates": [template, other_template],
+                    "templates": [template, other_template, old_template],
                 },
                 {"key": "2026.1", "date": "2026-01-05T00:00:00"},
                 {"id": "1.2.3.4.5", "effective_date": "2026-01-02T00:00:00"},
@@ -417,7 +430,7 @@ class ConformanceTests(unittest.TestCase):
             )
             assembled = ET.parse(output).getroot()
             templates = assembled.find("rules").findall("template")  # type: ignore[union-attr]
-            self.assertEqual(len(templates), 2)
+            self.assertEqual(len(templates), 3)
             self.assertEqual(templates[0].get("name"), "Actual")
             self.assertEqual(templates[0].get("effectiveDate"), "2026-01-03T00:00:00")
             self.assertIn('xmlns:pharm="urn:example:pharm"', output.read_text(encoding="utf-8"))
@@ -425,6 +438,34 @@ class ConformanceTests(unittest.TestCase):
             self.assertEqual(
                 templates[1].find("element").get("name"),  # type: ignore[union-attr]
                 "pharm2:product",
+            )
+            filtered = root / "assembled-filtered.xml"
+            assemble_decor_closure(
+                release_dir,
+                {
+                    "transaction_analysis": dataset,
+                    "transaction_source": transaction,
+                    "model_resources": [],
+                    "terminology_resources": [terminology],
+                    "templates": [template, other_template, old_template],
+                },
+                {"key": "2026.1", "date": "2026-01-05T00:00:00"},
+                {
+                    "id": "1.2.3.4.5",
+                    "effective_date": "2026-01-02T00:00:00",
+                },
+                filtered,
+                {("9.8.7", "2026-01-03T00:00:00")},
+            )
+            filtered_templates = (
+                ET.parse(filtered).getroot().find("rules").findall("template")  # type: ignore[union-attr]
+            )
+            self.assertEqual(
+                [(item.get("id"), item.get("effectiveDate")) for item in filtered_templates],
+                [
+                    ("9.8.7", "2026-01-03T00:00:00"),
+                    ("9.8.6", "2026-01-03T00:00:00"),
+                ],
             )
             values = assembled.find("terminology").findall("valueSet")  # type: ignore[union-attr]
             self.assertEqual([(item.get("id"), item.get("effectiveDate")) for item in values], [

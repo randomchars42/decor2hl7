@@ -521,6 +521,18 @@ with the structural type and combined provenance in place; it must not coexist
 with a second generic child. Group placement likewise uses compiled structural
 metadata (`kind`, writability, children and derivation provenance), not absence
 of a datatype, because explicit CDA containers carry their RIM class datatype.
+An include without its own multiplicity is an inline constraint group; it does
+not make required contained particles optional. A `contains` relationship makes
+the referenced concrete root present with its owner.
+
+The CDA/RIM overlay may strengthen an explicit particle's minimum, maximum, or
+required attribute from the pinned XSD, but never weakens ART-DECOR or revives
+an `NP` branch. It also retains a required XSD choice independently from the
+zero minimum of each alternative. When ART-DECOR exposes exactly one concrete
+alternative, that branch satisfies the group requirement; generic alternatives
+are not manufactured as profile targets. The compiler records normative XSD
+particle order separately from stable ART-DECOR source locations, and the
+renderer uses that order without changing target identity.
 
 Medication `for_each` remains under DEC-007 because the model describes legal
 XML structure, not occurrence ownership. Pupil laterality is derived separately
@@ -777,12 +789,25 @@ intact and `generation_messages_outside_selected_closure` counts the remainder,
 so the omission is visible rather than dropped; a message whose context cannot
 be parsed is treated as in-closure.
 
+For a template OID instantiated by the compiled document, validator assembly
+retains only the exact effective-dated revision or revisions selected at a
+physical document location. This prevents superseded rules with the same
+template OID from being activated against one instance. Templates used only as
+publication-transform dependencies remain available at all fetched revisions,
+so dynamic and generic CDA/RIM resolution is not broken by document filtering.
+
 `validate-cda` is a separate enforced gate: it validates documents against the
 complete SDTC schema entry point and the generated transaction/datatype
 Schematron. It fails closed if package or validator checksums differ, generation
 reported unresolved terminology inside the selected closure, or either validator
 emits errors. Setup and validation may use Java; transformation remains
 standard-library-only.
+
+The foreign-extension projection used only for the base CDA/SDTC XSD gate
+serializes the normal CDA default namespace plus `xsi` and `sdtc` bindings.
+This preserves the namespace meaning of unprefixed QName values such as
+`xsi:type="CE"`; projection cannot turn a valid datatype QName into an
+unnamespaced name.
 
 Conformance and mapping coverage remain independent. Core rules can disqualify
 a representation, as DEC-020 did for the medication event offset, but neither
@@ -1138,6 +1163,13 @@ occurrence, including repeated medication entries. A real mapped value wins in
 the same occurrence, allowing a later source discriminator to replace the
 default without changing renderer policy.
 
+Site configuration may provide the same activation-scoped completion behavior
+under `cda.fallback_if_active`. Attribute and leaf values are consumed only
+after another assignment has selected their owning branch; an attribute
+fallback cannot activate its optional element. This is suitable for local
+author identity and administration details that the dataset does not own, but
+it does not create clinical occurrences.
+
 For the selected emergency-department transaction, the CEDIS Problem Concern
 Act uses `statusCode="active"` while the presenting complaint is tracked;
 `completed` would require explicit closure evidence and would pair with the
@@ -1325,6 +1357,12 @@ the selected model and mapping. The authored contract may declare suite-wide
 mapping coverage plus per-case present/absent model fields and CDA template IDs.
 This permits mutually exclusive choices to be tested across complete records.
 Generated CDA output is not accepted as its own golden oracle.
+
+The scenario manifest may also declare local `site.cda.values`,
+`site.cda.fallback_if_active`, and input-code translations. A translation for
+an unbound dataset code may be an explicit `{code, codeSystem, displayName}`
+object; both code and code-system identity are required and remain site/input
+configuration. It cannot replace or extend a bound formal dataset terminology.
 
 The deterministic synthetic generator remains available when no scenario is
 specified, but the repository reference `testrun` uses the pinned authored set.

@@ -621,6 +621,16 @@ def _profile_extension_projection(
 
         strip(projected_root)
         output = destination / f"document-{document_index + 1}.xml"
+        # ``ElementTree`` keeps its namespace registry process-global.  Other
+        # build steps may therefore have replaced CDA's default namespace with
+        # a generated prefix before this projection is serialized.  That is
+        # not merely cosmetic: unprefixed QName values such as
+        # ``xsi:type="CE"`` resolve through the default namespace.  Preserve
+        # the normal CDA bindings so stripping a profile extension cannot
+        # change the meaning of the remaining document.
+        ET.register_namespace("", HL7_NAMESPACE)
+        ET.register_namespace("sdtc", SDTC_NAMESPACE)
+        ET.register_namespace("xsi", XSI_NAMESPACE)
         ET.ElementTree(projected_root).write(
             output, encoding="utf-8", xml_declaration=True
         )
@@ -633,6 +643,7 @@ def _copy_children(
     paths: Iterable[Path],
     names: set[str],
     namespaces: dict[str, str] | None = None,
+    identities: Collection[tuple[str, str]] | None = None,
 ) -> None:
     """Copy complete artifacts while excluding API result-envelope metadata.
 
@@ -641,6 +652,9 @@ def _copy_children(
     the definition.  Only the latter is valid publication-transform input.
     """
     seen: dict[tuple[str, str, str], ET.Element] = {}
+    selected_template_ids = {
+        identifier for identifier, _ in identities or () if identifier
+    }
     for path in paths:
         try:
             declared_namespaces = dict(
@@ -668,6 +682,16 @@ def _copy_children(
                 and bool(node.get("id") or node.get("name"))
             ]
         for node, extensional in candidates:
+            if (
+                identities is not None
+                and node.tag == "template"
+                and str(node.get("id") or "") in selected_template_ids
+                and (
+                    str(node.get("id") or ""),
+                    str(node.get("effectiveDate") or ""),
+                ) not in identities
+            ):
+                continue
             identity = (
                 node.tag,
                 str(node.get("id") or node.get("ref") or node.get("name") or ""),
@@ -772,6 +796,7 @@ def assemble_decor_closure(
     release: Mapping[str, Any],
     transaction: Mapping[str, Any],
     output: Path,
+    selected_template_revisions: Collection[tuple[str, str]] | None = None,
 ) -> Path:
     """Assemble exact fetched forms for publication-transform input.
 
@@ -833,7 +858,11 @@ def assemble_decor_closure(
 
     rules = ET.SubElement(root, "rules")
     _copy_children(
-        rules, inputs.get("templates", []), {"template"}, namespace_registry
+        rules,
+        inputs.get("templates", []),
+        {"template"},
+        namespace_registry,
+        selected_template_revisions,
     )
     ET.SubElement(root, "issues")
     for prefix, uri in namespace_registry.items():
@@ -988,6 +1017,7 @@ def generate_transaction_schematron(
     transaction: Mapping[str, Any],
     output_dir: Path,
     selected_templates: Collection[str] | None = None,
+    selected_template_revisions: Collection[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     generated = output_dir / "generated"
     if generated.exists():
@@ -1116,6 +1146,10 @@ def generate_transaction_schematron(
         "generation_message_scopes": compiled["generation_message_scopes"],
         "generation_messages_outside_selected_closure": len(outside),
         "selected_closure_templates": len(selected_templates or ()),
+        "selected_closure_template_revisions": [
+            {"id": identifier, "effective_date": effective}
+            for identifier, effective in sorted(selected_template_revisions or ())
+        ],
         "stylesheet_repairs": compiled["stylesheet_repairs"],
     })
     return compiled
@@ -1221,6 +1255,7 @@ def build_conformance_artifacts(
     release: Mapping[str, Any],
     transaction: Mapping[str, Any],
     selected_templates: Collection[str] | None = None,
+    selected_template_revisions: Collection[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Run report-only source checks and compile the exact transaction validator."""
     destination = model_dir / "conformance-validation"
@@ -1273,10 +1308,20 @@ def build_conformance_artifacts(
         })
 
     assembled = assemble_decor_closure(
-        release_dir, inputs, release, transaction, destination / "decor-assembled.xml"
+        release_dir,
+        inputs,
+        release,
+        transaction,
+        destination / "decor-assembled.xml",
+        selected_template_revisions,
     )
     generation = generate_transaction_schematron(
-        release_dir, assembled, transaction, destination, selected_templates
+        release_dir,
+        assembled,
+        transaction,
+        destination,
+        selected_templates,
+        selected_template_revisions,
     )
     outside = sum(
         1 for scope in generation.get("generation_message_scopes", [])

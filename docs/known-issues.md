@@ -577,3 +577,30 @@ the CDA profile prohibits a reason when the answer is negative. Until that
 source/cardinality mismatch is clarified, the reference cases use clinically
 plausible positive isolation indications and record the limitation in their
 manifest; the suite cannot cover the negative-isolation branch legally.
+
+The first independent validation audit of the six authored documents reported
+1,301 errors: 1,036 from the CDA/SDTC XSD phase and 265 from the generated
+Schematron phase. That number was not 1,301 independent clinical defects. Most
+were repeated consequences across six documents. In particular, 991 XSD
+messages came from losing the CDA default namespace while serializing the
+foreign-extension projection, which changed the meaning of unprefixed
+`xsi:type` QNames. The implemented compiler/renderer fixes also cover normative
+particle order, transparent includes and contained roots, required XSD choices,
+fixed section titles and code displays, legal coded null-flavor completion,
+and active-branch site fallbacks. Exact validator assembly no longer activates
+superseded revisions of a physically selected template OID. The authored local
+wildcard concepts now carry explicit site-owned code-system identities.
+
+The same audit now reports 8 errors: two XSD order errors and six Schematron
+errors, all caused by two instances of one unresolved specification/mapping
+contradiction. For Wildcard Therapie the transaction makes both the clinically
+relevant point and duration required; for the exercised Wildcard Diagnostik
+instance both are supplied. The reviewed ART-DECOR associations map the point
+to an atomic `effectiveTime` (`TS`) and the duration to a different interval
+`effectiveTime/width` (`IVL_TS`), while the template permits at most one of
+those siblings. The XSD consequently sees the second `effectiveTime` out of
+sequence, and Schematron reports the duplicate choice plus children below the
+atomic TS. Combining the point into `IVL_TS/low` would be clinically plausible,
+but it would contradict the published direct association and is therefore not
+performed silently. Resolution requires a corrected ART-DECOR association or
+an explicit reviewed mapping change for both wildcard templates.

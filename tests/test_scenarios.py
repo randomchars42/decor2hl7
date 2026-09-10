@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import csv
 import json
+import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
+
+from decor2hl7.testing import _copy_scenario_input
 
 
 TRIAGE_ROOT = "ersteinschatzung.parameter_der_ersteinschatzung"
@@ -69,6 +73,63 @@ class AuthoredScenarioTests(unittest.TestCase):
             self.assertNotEqual(bool(row[DISCHARGE]), bool(row[TRANSFER]))
             component_sum = sum(int(row[path].split()[0]) for path in GCS_COMPONENTS)
             self.assertEqual(component_sum, int(row[GCS_SUM]))
+
+    def test_authored_scenario_carries_explicit_site_cda_values(self) -> None:
+        scenario = (
+            Path(__file__).parent
+            / "fixtures/scenarios/2026.1.2/notaufnahmeregister--60"
+            / "valid-reference-cases"
+        )
+        manifest = json.loads((scenario / "scenario.json").read_text())
+        release = {"key": manifest["release"]}
+        transaction = manifest["transaction"]
+        headers: set[str] = set()
+        for source in manifest["input"]["sources"].values():
+            with (scenario / "input" / source["file"]).open(
+                encoding="utf-8-sig", newline=""
+            ) as handle:
+                headers.update(csv.DictReader(handle).fieldnames or [])
+        model: dict[str, Any] = {
+            "fields": {
+                header: {
+                    "repeat_chain": [],
+                    "type": "code" if header in manifest["codes"] else "text",
+                }
+                for header in headers
+                if header != "case_id" and not header.startswith("occurrence_")
+            },
+            "groups": {
+                path: {"repeating": True}
+                for source in manifest["input"]["sources"].values()
+                for path in source.get("occurrence_keys", {})
+            },
+        }
+        for source in manifest["input"]["sources"].values():
+            chain = list(source.get("occurrence_keys", {}))
+            with (scenario / "input" / source["file"]).open(
+                encoding="utf-8-sig", newline=""
+            ) as handle:
+                for header in csv.DictReader(handle).fieldnames or []:
+                    if header in model["fields"] and chain:
+                        model["fields"][header]["repeat_chain"] = chain
+        site: dict[str, Any] = {
+            "input": {},
+            "cda": {"values": {}, "fallback_if_active": {}},
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _, scenario_meta, _ = _copy_scenario_input(
+                scenario, Path(tmp), release, transaction, model, site
+            )
+
+        self.assertEqual(
+            site["cda"]["values"], manifest["site"]["cda"]["values"]
+        )
+        self.assertEqual(
+            site["cda"]["fallback_if_active"],
+            manifest["site"]["cda"]["fallback_if_active"],
+        )
+        self.assertEqual(scenario_meta["codes"], manifest["codes"])
 
 
 if __name__ == "__main__":

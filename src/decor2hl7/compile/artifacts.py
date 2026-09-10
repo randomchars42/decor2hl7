@@ -244,6 +244,22 @@ def selected_closure_templates(cda: Mapping[str, Any]) -> set[str]:
     return result
 
 
+def selected_closure_template_revisions(
+    cda: Mapping[str, Any],
+) -> set[tuple[str, str]]:
+    """Return exact template revisions instantiated in the selected document."""
+    result: set[tuple[str, str]] = set()
+    targets = cda.get("targets", {})
+    for target in targets.values() if isinstance(targets, Mapping) else ():
+        if not isinstance(target, Mapping) or not target.get("locations"):
+            continue
+        identifier = str(target.get("template_id") or "")
+        effective = str(target.get("template_effective_date") or "")
+        if identifier and effective:
+            result.add((identifier, effective))
+    return result
+
+
 def _selected_value_sets(model: Mapping[str, Any]) -> set[str]:
     result: set[str] = set()
     fields = model.get("fields", {})

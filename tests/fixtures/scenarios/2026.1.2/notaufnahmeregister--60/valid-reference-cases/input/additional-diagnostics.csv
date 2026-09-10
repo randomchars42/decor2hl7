@@ -1,2 +1,2 @@
 case_id,occurrence_1,diagnostik.wildcard_diagnostik.code,diagnostik.wildcard_diagnostik.definitorischer_link,diagnostik.wildcard_diagnostik.klinisch_relevante_zeitangaben.zeitpunkt,diagnostik.wildcard_diagnostik.klinisch_relevante_zeitangaben.zeitraum,diagnostik.wildcard_diagnostik.wert
-SCENARIO-03,diagnostic-1,EEG,Lokaler Leistungskatalog: Elektroenzephalographie,2026-05-03T11:00:00+02:00,30,Kein epilepsietypisches Potenzial im Routine-EEG.
+SCENARIO-03,diagnostic-1,EEG,https://example.org/aktin/services/electroencephalography,2026-05-03T11:00:00+02:00,30,Kein epilepsietypisches Potenzial im Routine-EEG.
