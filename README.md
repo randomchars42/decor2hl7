@@ -831,6 +831,26 @@ decor2hl7 send
 decor2hl7 run --send
 ```
 
+Transport is selected in the release `site.json`. The only current adapter is
+the bounded, single-document `http-post` adapter:
+
+```json
+{
+  "transport": {
+    "adapter": "http-post",
+    "url": "https://receiver.example/cda",
+    "timeout": 60,
+    "headers": {}
+  }
+}
+```
+
+For compatibility, a configuration without `adapter` still selects
+`http-post`. Unknown adapters or options are rejected before document or
+network I/O. Batch envelopes, acknowledgement parsing and idempotency are
+receiver-protocol behavior and are not configurable until such a protocol is
+specified and implemented as another built-in adapter.
+
 Runtime is intentionally boring:
 
 ```text

@@ -552,8 +552,10 @@ are still outside the portable data-to-CDA mapping semantics.
 
 ## Receiver protocol and exactly-once delivery
 
-`transport.py` intentionally uses generic HTTP POST until the actual receiver
-protocol, authentication and batch envelope are specified. Local sent-state
-cannot prove exactly-once delivery across the failure window where a POST
-succeeds but the process crashes before state is recorded. Receiver-supported
-document IDs or idempotency semantics should be used when available.
+`transport.py` exposes the bounded adapter boundary from DEC-034, but its only
+current adapter intentionally remains one-document generic HTTP POST until the
+actual receiver protocol, authentication and batch envelope are specified.
+Local sent-state cannot prove exactly-once delivery across the failure window
+where a POST succeeds but the process crashes before state is recorded.
+Receiver-supported document IDs or idempotency semantics should be used when
+available.

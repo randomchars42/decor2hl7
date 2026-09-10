@@ -358,6 +358,7 @@ class CliTests(unittest.TestCase):
             site = load_json(root / "site" / "2026.1.2" / "site.json")
             self.assertEqual(site["input"]["case_source"], "cases")
             self.assertEqual(site["input"]["sources"]["cases"]["file"], "cases.csv")
+            self.assertEqual(site["transport"]["adapter"], "http-post")
 
     def test_init_site_config_adds_defaults_without_overwriting_user_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

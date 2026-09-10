@@ -689,4 +689,6 @@ Therefore:
   added without changing mappings.
 - Nested repetition requires stable occurrence keys when more than one independent
   level/source is involved; positional guessing remains intentionally unsupported.
-- `transport.py` is generic HTTP POST until the receiver protocol is specified.
+- `transport.py` selects a built-in adapter through a closed, validated
+  configuration contract. Its only current adapter is one-document generic
+  HTTP POST; batch and acknowledgement semantics remain unspecified.

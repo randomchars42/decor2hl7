@@ -172,7 +172,9 @@ def synthetic_site(
         },
         "cda": {"values": {}},
         "state": {"rotate_days": 0},
-        "transport": {"url": None, "timeout": 60, "headers": {}},
+        "transport": {
+            "adapter": "http-post", "url": None, "timeout": 60, "headers": {},
+        },
     }
 
 

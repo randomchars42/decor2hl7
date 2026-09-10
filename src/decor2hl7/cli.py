@@ -546,7 +546,9 @@ def _site_scaffold(
             ),
         },
         "state": {"rotate_days": 90},
-        "transport": {"url": None, "timeout": 60, "headers": {}},
+        "transport": {
+            "adapter": "http-post", "url": None, "timeout": 60, "headers": {},
+        },
     }
 
 

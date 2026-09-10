@@ -1278,6 +1278,33 @@ Evidence: AKTIN maintainer clarification for templates
 `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
 `src/decor2hl7/validate.py`, `tests/test_core.py`.
 
+## DEC-034 — Bounded receiver transport adapters
+
+**Decision:** accepted
+**Implementation:** verified
+
+Site configuration selects one built-in transport adapter by exact name. Each
+adapter has a closed set of accepted options and validates them before reading
+or transmitting a document; configuration cannot name importable code or add
+undeclared protocol settings. The adapter boundary is a small typed send
+function rather than a class hierarchy.
+
+The only current adapter is `http-post`. It sends one CDA XML document as one
+HTTP or HTTPS POST and accepts only `url`, positive integer `timeout`, and
+single-line scalar `headers`. Existing site configurations without `adapter`
+continue to select `http-post`; newly generated site configuration records the
+selection explicitly. Unknown adapters and options fail before document or
+network I/O.
+
+Batch envelopes, receiver acknowledgements, authentication protocols and
+idempotency semantics are deliberately not generalized as configuration. A
+future receiver adapter must implement and validate one specified protocol in
+code. It may extend the transport result contract only together with the
+durable state changes required to interpret per-document acknowledgement.
+
+Evidence: `src/decor2hl7/transport.py`, `src/decor2hl7/cli.py`,
+`src/decor2hl7/testing.py`, `tests/test_transport.py`, `tests/test_cli.py`.
+
 ## Maintenance rule
 
 A pull request that changes project semantics must update the affected decision
