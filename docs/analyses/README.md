@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-11-aktin-medication-simple-branch.md`](2026-09-11-aktin-medication-simple-branch.md)
+  rechecks the refreshed authoritative workspace, distinguishes the dataset's
+  richer medication content from the simple branch explicitly selected by the
+  AKTIN CDA artifact, and records removal of the reference DEC-028 overlay.
 - [`2026-09-08-final-diagnosis-concern-defaults.md`](2026-09-08-final-diagnosis-concern-defaults.md)
   records the reviewed `active` lifecycle and unknown concern-start defaults
   for the aggregate final-diagnosis Concern Act, the preferred LOINC

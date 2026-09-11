@@ -319,6 +319,10 @@ choice. This is a replacement, not an attachment: the selected specialization
 must already contain the exact replaced branch, and both branches must occur at
 the same named parent element in one exact inherited choice.
 
+The example below illustrates the optional mechanism; the reference AKTIN
+mapping deliberately does not apply this medication replacement and follows
+the simple branch explicitly selected by AKTIN (`DEC-036`).
+
 ```json
 {
   "operation": "select_spec_branch",

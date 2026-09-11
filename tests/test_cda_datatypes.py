@@ -2521,6 +2521,22 @@ class CdaDatatypeTests(unittest.TestCase):
                 "replaces_template_effective_date": "2024",
                 "reason": "Reviewed selection of the richer SPEC choice",
             }
+            baseline = compile_cda(
+                [source], model, core_definition_paths=[schema],
+            )
+            baseline_old = next(
+                target for target in baseline["targets"].values()
+                if target.get("element_id") == "old-value"
+            )
+            baseline_new = next(
+                target for target in baseline["targets"].values()
+                if target.get("element_id") == "new-value"
+            )
+            self.assertTrue(baseline_old["writable"])
+            self.assertEqual(len(baseline_old["locations"]), 1)
+            self.assertFalse(baseline_new["writable"])
+            self.assertEqual(baseline_new["locations"], [])
+
             compiled = compile_cda(
                 [source], model, core_definition_paths=[schema],
                 cda_extensions=[rule],

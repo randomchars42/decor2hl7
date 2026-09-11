@@ -54,25 +54,20 @@ The medication section `1.2.276.0.76.3.1.195.10.64` and Medikation template
 `for_each` correctly binds each repeated source medication to one section
 `entry` and remains required occurrence semantics.
 
-DEC-028 now applies one reviewed exact `SPEC`-choice overlay at the Medikation
-`hl7:consumable` host. The exact UV Medication Statement parent declares the
-previously selected simple branch and UV Medication Information (detail)
-`2.16.840.1.113883.10.21.4.11@2023-02-03T13:03:38` as siblings. Selecting the
-detail branch preserves the established product name/code mappings and exposes
-the `urn:hl7-org:pharm` dose-form and ingredient model plus CDA
-`lotNumberText`. Namespace bindings are compiled and rendered; the URI by
-itself is not treated as a template relationship.
+DEC-036 restores the exact branch selected by the AKTIN Medikation artifact:
+UV Medication Information (simple)
+`2.16.840.1.113883.10.21.4.10@2021-09-29T19:15:16`. The richer detail branch is
+an inherited sibling and remains useful analysis evidence, but the AKTIN
+artifact does not select it. The reference mapping therefore does not activate
+DEC-028's medication `select_spec_branch` overlay.
 
-The reviewed mapping now adds dose form, lot number, direct ingredient name and
-code, and the exact Boolean ingredient-role crosswalk `true → ACTI`,
-`false → IACT` from ValueSet
-`2.16.840.1.113883.1.11.10430@2014-03-26`. The direct ingredient is addressed
-through an occurrence-qualified target because the contained UV Ingredient
-template is reused below three optional packaging paths as well. Together with
-product name/code, medication `sequenceNumber`, dosage narrative and route,
-this yields ten executable medication mappings and raises the reviewed
-reference mapping from 95/120 to 100/120 fields. See
-[`analyses/2026-09-06-medication-pharmacy-profile.md`](analyses/2026-09-06-medication-pharmacy-profile.md).
+The executable baseline medication mappings are product name, product code,
+medication `sequenceNumber`, dosage narrative and route. Dose form and direct
+ingredient name, code and role have no active CDA target. The simple branch
+does expose CDA `lotNumberText`, but no current association proves that source
+Chargennummer selects it; it remains unmapped rather than being promoted from
+physical compatibility alone. See
+[`analyses/2026-09-11-aktin-medication-simple-branch.md`](analyses/2026-09-11-aktin-medication-simple-branch.md).
 
 DEC-030 closes the medication entry's required narrative-link construction.
 The compiled `Medikation.text` mapping now supplies human-readable section
@@ -82,10 +77,11 @@ medication. The reference value is not a second source mapping or a reviewed
 constant. Repeated medication references are distinct, and a medication without
 dosage free text receives minimal narrative wording from its other mapped values.
 
-Ingredient strength remains deliberately unmapped: the source is unconstrained
-text while the detail profile requires structured `RTO_PQ_PQ` numerator and
-denominator semantics. No grammar, unit normalization or denominator policy is
-published. The active UV Subordinate administration template
+Ingredient strength remains deliberately unmapped: the active simple branch
+has no ingredient model. The unselected detail sibling would require structured
+`RTO_PQ_PQ` numerator and denominator semantics, while the source is
+unconstrained text and publishes no grammar, unit normalization or denominator
+policy. The active UV Subordinate administration template
 `2.16.840.1.113883.10.21.4.6` exposes alternatives for timing plus
 `doseQuantity` and `rateQuantity`. Quantity normalization now preserves scalar
 magnitudes, ranges and units, and compiled interval quantities expose exact
@@ -150,11 +146,12 @@ code `29308-4`; the permitted deprecated alternative `75324-4` is not emitted.
 The generic scalar-default runtime resolves the selected finite member to its
 compiled `codeSystem` and rejects ambiguous coding companions.
 
-The next fixture failure exposed a validator defect rather than missing
-ingredient data: UV Ingredient XML already contained `pharmhl7:code` and
-`pharmhl7:name`, but the in-process assertion evaluator only expanded `hl7`
-QNames. DEC-032 retains source-template namespace maps, uses them during
-evaluation, and declares the used prefixes in generated Schematron. Separate
+An earlier detail-profile fixture exposed a validator defect: UV Ingredient XML
+contained `pharmhl7:code` and `pharmhl7:name`, but the in-process assertion
+evaluator only expanded `hl7` QNames. DEC-032 retains source-template namespace
+maps, uses them during evaluation, and declares the used prefixes in generated
+Schematron. The baseline AKTIN mapping no longer activates that detail branch,
+but the generic extension behavior remains independently tested. Separate
 discharge-only and transfer-only synthetic scenarios now pass. The reference
 fixture stores those outcomes as `TEST-1` and `TEST-2`, respectively, and
 expects two documents. One record that sets both remains invalid by the AKTIN

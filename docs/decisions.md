@@ -50,6 +50,7 @@ is not necessarily an accepted clinical policy.
 | DEC-033 | Reviewed allergy time construction | accepted | verified |
 | DEC-034 | Bounded receiver transport adapters | accepted | verified |
 | DEC-035 | Versioned authored mapping scenarios | accepted | verified |
+| DEC-036 | Selected AKTIN medication branch is baseline authority | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -965,7 +966,7 @@ Evidence: `src/decor2hl7/compile/schematron.py`,
 ## DEC-024 — Datatype Schematron co-occurrence admissibility
 
 **Decision:** accepted
-**Implementation:** implemented
+**Implementation:** verified
 
 Generated datatype Schematron may disqualify a physical representation without
 supplying any dataset-to-CDA semantics. The compiler therefore reads a narrow,
@@ -1134,6 +1135,11 @@ An exact dependency request may reuse an already frozen successful dynamic
 artifact only when kind, id and resolved effective date match and its checksum
 still validates. This avoids a network-only duplicate cache entry without
 weakening exact revision identity.
+
+DEC-036 removes the medication detail-branch overlay from the reference AKTIN
+mapping. The generic reviewed overlay mechanism remains available, but the
+presence of an inherited sibling choice does not authorize replacing an exact
+branch selected by the transaction's CDA specialization.
 
 Evidence: `src/decor2hl7/cda/extensions.py`,
 `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
@@ -1373,6 +1379,36 @@ whole document.
 Evidence: `src/decor2hl7/testing.py`, `src/decor2hl7/cli.py`, `Makefile`,
 `tests/test_cli.py`, `tests/test_scenarios.py`,
 `tests/fixtures/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases/`.
+
+## DEC-036 — Selected AKTIN medication branch is baseline authority
+
+**Decision:** accepted
+**Implementation:** implemented
+
+The reference mapping follows the exact consumable branch explicitly selected
+by AKTIN Medikation
+`1.2.276.0.76.3.1.195.10.67@2023-12-03`: UV Medication Information (simple)
+`2.16.840.1.113883.10.21.4.10@2021-09-29T19:15:16`. The richer Universal
+Medication Statement parent's sibling detail branch remains useful gap evidence,
+but neither its availability nor the dataset's form and ingredient fields is
+authority to replace the AKTIN selection.
+
+The reference `config/cda-extensions.json` therefore contains no medication
+`select_spec_branch` rule. A downstream deployment may still use DEC-028 for a
+separately reviewed and clearly identified extended profile, but such mappings
+are not baseline AKTIN mappings and must not be published as specification-
+derived evidence.
+
+Without the overlay, the automatic rules retain product name, product code,
+dosage narrative, route and sequence number. Pharmaceutical form and direct
+ingredient name, code and role lose their active CDA targets. Although the
+simple branch physically declares `lotNumberText`, no current ART-DECOR
+association selects it for source Chargennummer, so it remains unmapped under
+DEC-011 rather than being promoted from physical compatibility alone.
+
+Evidence: `test-workplace/config/cda-extensions.json`,
+`tests/test_cda_datatypes.py`,
+`docs/analyses/2026-09-11-aktin-medication-simple-branch.md`.
 
 ## Maintenance rule
 
