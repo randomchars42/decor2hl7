@@ -312,7 +312,10 @@ For every field it preserves three distinct views:
 
 Identity-style ancestors may fill properties omitted by the selected concept.
 Fetched contained definitions are grafted until no new exact child can be
-added. This is controlled enrichment, not a union of historical datasets.
+added. The literal `contains` identity is preferred. If it is not available as
+a parsed named concept, only an explicit identity-style relationship on the
+container may locate the fetched subtree; `ADAPT` and other derivations cannot
+do so. This is controlled enrichment, not a union of historical datasets.
 
 ### 5.4 Materialise groups and fields
 

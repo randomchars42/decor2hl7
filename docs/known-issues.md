@@ -54,6 +54,18 @@ The medication section `1.2.276.0.76.3.1.195.10.64` and Medikation template
 `for_each` correctly binds each repeated source medication to one section
 `entry` and remains required occurrence semantics.
 
+On the source side, the current fetched IOPC concept
+`2.16.840.1.113883.3.1937.777.75.2.1.482@2023-12-27T14:10:52`
+contains 8 named descendant groups and 25 item datapoints. The transaction's
+Medikation group reaches that exact concept through an explicit `SPEC`
+relationship beside its literal `contains` alias. The 25-field count is
+therefore established for the current downloaded analysis artifact and does
+not depend on weak `ADAPT` grafting. It is not proof of the membership of a
+historical December 2023 snapshot: `Chargennummer` has effective date
+`2024-08-08T18:05:21`, although it is present in the currently returned draft
+dataset revision. See
+[`analyses/2026-09-11-medication-dataset-containment.md`](analyses/2026-09-11-medication-dataset-containment.md).
+
 DEC-036 restores the exact branch selected by the AKTIN Medikation artifact:
 UV Medication Information (simple)
 `2.16.840.1.113883.10.21.4.10@2021-09-29T19:15:16`. The richer detail branch is

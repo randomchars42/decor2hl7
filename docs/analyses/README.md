@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-11-medication-dataset-containment.md`](2026-09-11-medication-dataset-containment.md)
+  verifies the transaction's literal medication containment alias and exact
+  `SPEC` target, counts the current 25 item concepts, records the later
+  `Chargennummer` effective date, and proves that limiting graft fallback to
+  identity lineage changes no selected-workspace field or medication mapping.
 - [`2026-09-11-aktin-medication-simple-branch.md`](2026-09-11-aktin-medication-simple-branch.md)
   rechecks the refreshed authoritative workspace, distinguishes the dataset's
   richer medication content from the simple branch explicitly selected by the

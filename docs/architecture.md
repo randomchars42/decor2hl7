@@ -228,6 +228,11 @@ overrides and direct terminology associations. The analysis form supplies
 resolved definitions and containment. The compiler validates the pair and
 records contained additions separately.
 
+For a literal `contains` target absent from the parsed named concepts, grafting
+may follow only an explicit identity-style relationship on that container.
+Weak derivation relationships such as `ADAPT` remain evidence and cannot
+materialize a dataset subtree.
+
 `logical_domain` records dataset choices, `formal_terminology` records the exact
 transaction ValueSet binding and members, and `terminology_associations` retains
 direct links with their source concept IDs. An owned inline `conceptList` is

@@ -749,6 +749,9 @@ means the related concept/design may have been changed. Identity-style lineage
 (`SPEC`, `INHERIT`, `ORIGINAL`, `EQUIV`, `COPY`, `VERSION`) may enrich omitted
 model constraints; `ADAPT`/derivation remains evidence unless an explicit target
 mapping or transform proves the runtime semantics.
+The same boundary applies when an expanded transaction names a literal
+`contains` alias that is not a parsed concept: only an accompanying
+identity-style relationship may locate the fetched child subtree.
 When weak derivation lineage also changes the concept name, its mapping bridge is
 review-only. Datatype, structural, or Schematron compatibility cannot make that
 semantic identity actionable.

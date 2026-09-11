@@ -477,6 +477,36 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("vital", model["fields"])
             self.assertEqual(model["fields"]["vital.temp"]["repeat"], "vital")
 
+    def test_contains_fallback_uses_only_identity_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            transaction = directory / "transaction.xml"
+            external = directory / "external.xml"
+            transaction.write_text('''
+<dataset>
+  <concept type="group" shortName="specified" id="specified-host">
+    <contains ref="specified-alias"/>
+    <relationship type="SPEC" ref="external-group"/>
+  </concept>
+  <concept type="group" shortName="adapted" id="adapted-host">
+    <contains ref="adapted-alias"/>
+    <relationship type="ADAPT" ref="external-group"/>
+  </concept>
+</dataset>''', encoding="utf-8")
+            external.write_text('''
+<dataset>
+  <concept type="group" shortName="medication" id="external-group">
+    <concept type="item" shortName="value" id="external-value">
+      <name>Value</name>
+    </concept>
+  </concept>
+</dataset>''', encoding="utf-8")
+
+            model = compile_model(transaction, [external])
+
+            self.assertIn("specified.value", model["fields"])
+            self.assertNotIn("adapted.value", model["fields"])
+
     def test_transaction_source_controls_selection_and_formal_domain(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)

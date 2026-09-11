@@ -87,7 +87,15 @@ through identity lineage. Logical choices and exact formal coded domains remain
 separate; revisions are not unioned. Lossy crosswalks require an explicit
 reviewed rule.
 
+When an expanded transaction's literal `contains` target is not itself present
+as a parsed named concept, an accompanying relationship may locate the fetched
+subtree only when it is identity-style (`SPEC`, `INHERIT`, `ORIGINAL`, `EQUIV`,
+`COPY`, or `VERSION`). `ADAPT` and other derivation relationships remain
+mapping evidence and cannot supply dataset children. The literal target is
+always preferred when it is available.
+
 Evidence: `docs/analyses/2026-08-26-authority-and-artifact-audit.md`,
+`docs/analyses/2026-09-11-medication-dataset-containment.md`,
 `src/decor2hl7/compile/transaction.py`, `src/decor2hl7/compile/terminology.py`.
 
 ## DEC-004 — Artifact identity, forms and readiness

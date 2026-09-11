@@ -653,7 +653,11 @@ def _graft(base: dict[str, dict[str, Any]], extra: dict[str, dict[str, Any]]) ->
         reference = host.get("contains")
         if not reference:
             continue
-        candidates = [reference] + list(host.get("external_refs") or [])
+        # Prefer the literal containment target, then only explicit
+        # identity-style lineage.  A weak derivation such as ADAPT can inform
+        # mapping review, but it does not establish that the derived concept's
+        # children define this dataset container.
+        candidates = [reference] + list(host.get("identity_refs") or [])
         source = next((by_concept[item] for item in candidates if item in by_concept), None)
         if not source:
             continue
