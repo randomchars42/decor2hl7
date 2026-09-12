@@ -41,7 +41,7 @@ is not necessarily an accepted clinical policy.
 | DEC-024 | Datatype Schematron co-occurrence admissibility | accepted | verified |
 | DEC-025 | Conservative ordinal evidence extraction | accepted | verified |
 | DEC-026 | ART-DECOR examples are non-executable instance data | accepted | verified |
-| DEC-027 | Bounded association identity-lineage closure | accepted | verified |
+| DEC-027 | Bounded association formal-origin closure | accepted | verified |
 | DEC-028 | Exact SPEC-choice overlays and namespace-aware profile extensions | accepted | verified |
 | DEC-029 | Reviewed scalar CDA construction defaults | accepted | verified |
 | DEC-030 | Compiled entry-to-section narrative links | accepted | verified |
@@ -51,6 +51,7 @@ is not necessarily an accepted clinical policy.
 | DEC-034 | Bounded receiver transport adapters | accepted | verified |
 | DEC-035 | Versioned authored mapping scenarios | accepted | verified |
 | DEC-036 | Selected AKTIN medication branch is baseline authority | accepted | verified |
+| DEC-037 | ART-DECOR formal origins, relationships, and template prototypes | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -81,18 +82,21 @@ Evidence: `README.md`, `Project-decor2hl7.md`, `src/decor2hl7/workspace.py`,
 **Decision:** accepted
 **Implementation:** verified
 
-The exact selected transaction controls selection, cardinality and direct formal
-terminology. Source/project/history may fill only explicitly missing properties
-through identity lineage. Logical choices and exact formal coded domains remain
-separate; revisions are not unioned. Lossy crosswalks require an explicit
-reviewed rule.
+The exact selected transaction controls selection and usage cardinality.
+ART-DECOR's formal `<inherit>` and `<contains>` chain selects one terminal
+original concept, whose semantic properties supply the compiled name,
+description, datatype/value domain and associations. Logical choices and exact
+formal coded domains remain separate; revisions are not unioned. Lossy
+crosswalks require an explicit reviewed rule.
 
-When an expanded transaction's literal `contains` target is not itself present
-as a parsed named concept, an accompanying relationship may locate the fetched
-subtree only when it is identity-style (`SPEC`, `INHERIT`, `ORIGINAL`, `EQUIV`,
-`COPY`, or `VERSION`). `ADAPT` and other derivation relationships remain
-mapping evidence and cannot supply dataset children. The literal target is
-always preferred when it is available.
+Stored descendants remain those of the current concept. A literal `contains`
+target therefore supplies its stored descendants without recursively grafting
+the terminal original's children. If an ART-DECOR analysis response names an
+unavailable literal alias, resolution may use its explicit `originalId`, or the
+single synthetic terminal-original `relationship type="SPEC"` emitted by
+`getFullConcept` when all `contains` context attributes match. Ordinary
+`relationship` declarations never supply properties or children, regardless
+of type.
 
 Evidence: `docs/analyses/2026-08-26-authority-and-artifact-audit.md`,
 `docs/analyses/2026-09-11-medication-dataset-containment.md`,
@@ -215,10 +219,10 @@ the transaction's `ICD-10 Sekundärdiagnose`. It therefore remains intentionally
 unmapped: no delimiter parser, `CD.translation`, or inferred additional Problem
 Observation is introduced.
 
-The stale candidate was reached through weak `ADAPT` lineage from a differently
-named concept. Such name-drifting weak lineage remains visible as review
-evidence but is never actionable, and Schematron compatibility cannot promote
-it. This is a generic semantic guard rather than a field-name exception.
+The stale candidate was reached through an `ADAPT` relationship to a
+differently named concept. Every ART-DECOR relationship path remains visible as
+review evidence but is never actionable, and Schematron compatibility cannot
+promote it. This is a generic semantic guard rather than a field-name exception.
 
 Evidence: AKTIN maintainer clarification for template
 `1.2.276.0.76.10.4048@2016-06-22`, `src/decor2hl7/compile/mapping.py`,
@@ -395,8 +399,10 @@ The reviewed catalog currently holds one builtin and three waivers:
   Continuity of Care Document project `ccd1-` is the only publisher of the OID
   and holds exactly one revision, `2007-04-01T00:00:00`, which is already cached
   from `pmp-` under its own identity and must not substitute the requested one
-  (`DEC-004`). The omission is scoped to the SPEC refinement: both children
-  still compile from their own constraints plus the pinned CDA/RIM expansion.
+  (`DEC-004`). Under DEC-037 the missing exact SPEC target is informational
+  editor-prototype evidence: both current templates compile from their own
+  stored constraints plus executable include/contains and the pinned CDA/RIM
+  expansion.
 
 The IHE Medicine Entry
 `1.3.6.1.4.1.19376.1.9.1.3.1@2019-08-27T16:13:43` is not a candidate for a
@@ -684,6 +690,12 @@ source terminology instead locates one optional statement whose complete
 clinical payload is fixed by ART-DECOR, `mode: "presence"` activates that
 structural statement for true and omits it for false. The container remains
 non-writable as a scalar target.
+
+A coded source enumeration may drive `@negationInd` only when its complete
+non-unknown domain is exactly one positive and one negative state; an optional
+unknown state may additionally drive `nullFlavor`. A multi-valued clinical
+domain is never collapsed to boolean polarity merely because one label contains
+words such as “not”, “none”, or “without”. Its coded value remains the payload.
 
 Exact contextual ART-DECOR leaf roles, descriptions, section narrative roles
 and URL/datatype descendants may be selected only when the mapped container,
@@ -1076,7 +1088,7 @@ Evidence: `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
 `src/decor2hl7/bindings.py`, `tests/test_cda_datatypes.py`, `tests/test_core.py`,
 `docs/analyses/2026-09-06-template-examples-are-not-defaults.md`.
 
-## DEC-027 — Bounded association identity-lineage closure
+## DEC-027 — Bounded association formal-origin closure
 
 **Decision:** accepted
 **Implementation:** verified
@@ -1084,11 +1096,11 @@ Evidence: `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
 The exact concepts named by selected-template `templateAssociation/concept` and
 legacy/profile `staticAssociations/origconcept` declarations are mapping-evidence
 dependencies. `fetch` retrieves their analysis forms as concept-scoped artifacts
-and recursively closes only identity-style concept relationships: `SPEC`,
-`INHERIT`, `ORIGINAL`, `EQUIV`, `VERSION`, and `COPY`. It does not turn `ADAPT`,
-other derivation, template, terminology, or sibling-dataset evidence into a new
-recursive crawl. Exact concept scoping bounds both acquisition and the semantic
-graph consumed by `build`.
+and recursively closes only formal `<inherit>` and `<contains>` origins,
+including their compiled `originalId` locators. Every `relationship` type
+(`REPL`, `SPEC`, `GEN`, `COPY`, `ADAPT`, `EQUIV`, `VERSION`, `BACKWD`, and
+`DRIV`) remains a direct, non-recursive association endpoint. Exact concept
+scoping bounds both acquisition and the semantic graph consumed by `build`.
 
 A recovered static association proves a concept-to-legacy-template bridge, not
 that the legacy node is the selected active CDA occurrence. When its direct
@@ -1097,11 +1109,11 @@ review-only. A separate explicit template association remains independently
 actionable, while the existing DEC-015 rule may project the static association
 into the selected occurrence only when one CDA/RIM owner-particle slot and one
 in-context target are unique. Schematron support and transform generation cannot
-revive an occurrence-mismatch candidate. Weak derivation lineage (`ADAPT` and
-similar edges) whose source and related concept names disagree is likewise
-review-only; structural compatibility and Schematron constraints cannot repair
-that semantic drift. Missing lineage remains missing evidence; it never causes
-a guessed association.
+revive an occurrence-mismatch candidate. A mapping path that crosses any
+ART-DECOR `relationship` is always review-only; its type and name agreement are
+reported as provenance but cannot prove formal concept identity. Missing formal
+origin or association evidence remains missing evidence; it never causes a
+guessed association.
 
 Evidence: `src/decor2hl7/retrieval/references.py`,
 `src/decor2hl7/retrieval/fetch.py`, `src/decor2hl7/retrieval/artifacts.py`,
@@ -1114,12 +1126,12 @@ Evidence: `src/decor2hl7/retrieval/references.py`,
 **Implementation:** verified
 
 A reviewed `select_spec_branch` rule may replace one exact branch explicitly
-selected by a specialized template with one exact sibling declared at the same
-host element by an inherited `SPEC` choice. The rule fixes transaction,
+selected by a template with one exact sibling declared at the same host element
+by its first `SPEC` editor prototype. The rule fixes transaction,
 document, parent, host element, old branch and new branch identities and carries
 a review reason. Compilation fails unless the old branch is the one currently
 selected, the new branch was fetched exactly, the parent is explicitly
-reachable and open, and one exact inherited choice proves the sibling
+available as prototype evidence and open, and one exact prototype choice proves the sibling
 relationship. The operation does not infer clinical mappings from names or
 combine both choice branches.
 
@@ -1146,8 +1158,8 @@ weakening exact revision identity.
 
 DEC-036 removes the medication detail-branch overlay from the reference AKTIN
 mapping. The generic reviewed overlay mechanism remains available, but the
-presence of an inherited sibling choice does not authorize replacing an exact
-branch selected by the transaction's CDA specialization.
+presence of a prototype sibling choice does not authorize replacing an exact
+branch stored by the selected CDA template.
 
 Evidence: `src/decor2hl7/cda/extensions.py`,
 `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
@@ -1242,29 +1254,31 @@ fragment reference resolves within the document.
 Evidence: `src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
 `src/decor2hl7/bindings.py`, `tests/test_cda_datatypes.py`.
 
-## DEC-031 — Explicit child constraints in non-monotonic SPEC designs
+## DEC-031 — Direct template constraints and SPEC prototype diagnostics
 
 **Decision:** accepted
 **Implementation:** verified
 
-ART-DECOR `SPEC` formally denotes specialization, so a child is expected to
-narrow rather than broaden its parent. Published designs can nevertheless
-contain an explicit child constraint that is broader than its declared parent.
-The compiler follows the executable child design in that case: explicit child
-cardinality and mandatory flags are authoritative, while omitted properties
-are inherited. In particular, an explicit child minimum of zero clears an
-inherited mandatory flag unless the child explicitly says it is mandatory.
+ART-DECOR's executable expanded-template operation recursively resolves
+`<include>` and element `@contains`; it does not expand template
+`relationship type="SPEC"`. The first template SPEC relationship is used by
+the owner implementation as an editor prototype that offers potential nodes to
+activate. The compiler therefore builds each template from its own stored
+constraints. It does not copy omitted attributes, elements, cardinalities,
+vocabularies, assertions, or includes from a SPEC prototype.
 
-Every such minimum, maximum, or mandatory weakening is retained as a
-`spec-constraint-weakening` warning in `cda.json` and the build diagnostics.
-`build --strict-specializations` converts any warning into a build error for
-users who require monotonic specialization. This policy also applies to
-included template groups.
+When the first SPEC prototype is available, explicitly matching child and
+prototype nodes are compared diagnostically. An explicit child minimum,
+maximum, or mandatory setting that broadens the matching prototype is retained
+as a `spec-constraint-weakening` warning in `cda.json` and the build diagnostics.
+`build --strict-specializations` converts such a warning into a build error.
+An absent prototype is reported separately as
+`unresolved_template_prototypes`; it does not make the executable
+include/contains closure incomplete.
 
-The AKTIN Medikation template explicitly changes its UV Medication Statement
-parent's `statusCode` from `1..1 M` to `0..1 R`; its generated Schematron likewise
-allows omission. The effective target is therefore optional. It is omitted
-when the dataset has no medication lifecycle datum, and no ActStatus default is
+The AKTIN Medikation template stores `statusCode` as `0..1 R`, so its effective
+target is optional without needing a parent merge. It is omitted when the
+dataset has no medication lifecycle datum, and no ActStatus default is
 invented. Medication mood, order mood, administration occurrence and lifecycle
 status remain distinct clinical facts.
 
@@ -1417,6 +1431,51 @@ DEC-011 rather than being promoted from physical compatibility alone.
 Evidence: `test-workplace/config/cda-extensions.json`,
 `tests/test_cda_datatypes.py`,
 `docs/analyses/2026-09-11-aktin-medication-simple-branch.md`.
+
+## DEC-037 — ART-DECOR formal origins, relationships, and template prototypes
+
+**Decision:** accepted
+**Implementation:** verified
+
+The implementation follows the constructs used by the ART-DECOR owner code,
+without imposing one generic relationship merge or a precedence order that the
+schema does not define:
+
+- Concept `<inherit>` and `<contains>` are formal origins. They are followed
+  recursively to one terminal original. The terminal original supplies semantic
+  properties; the current stored concept supplies descendants and the
+  transaction supplies usage/cardinality.
+- A concept or template `<relationship>` is an implicit, unchecked
+  relationship. Its enumerated `type` is preserved exactly as provenance. It
+  does not establish inheritance, containment, mapping identity, or execution.
+  This prohibition is transitive through compiler heuristics: relationship
+  neighbours do not supply contextual mapping labels, and relationship-only
+  candidates cannot locate templates for generated transforms.
+- The synthetic terminal-original `relationship type="SPEC"` emitted by
+  `getFullConcept` may locate a missing compiled `contains` alias only when its
+  effective date, dataset, project prefix, and concept type corroborate the
+  adjacent formal `contains`. This is a representation repair, not ordinary
+  SPEC semantics.
+- Template `<include>` and element `@contains` form the executable recursive
+  closure. A template's first SPEC relationship is fetched as editor-prototype
+  evidence and may support diagnostics and an explicit DEC-028 overlay, but it
+  is not merged into the child template.
+- Dynamic references must be resolved and frozen by their direct ART-DECOR
+  endpoint. A dated definition embedded in another response cannot silently
+  satisfy a dynamic request.
+
+Internal and generated evidence identifiers mirror the XML vocabulary:
+`inherit`, `contains`, `originalId`, `relationship:<TYPE>`, `include`, and
+`SPEC`. Synthetic project mechanisms use visibly separate names such as
+`reviewed-extension` and `terminal-original-SPEC`.
+
+Evidence: pinned DECOR-core `DECOR.xsd`; ART-DECOR API 3.10.1
+`modules/library/util-lib.xqm` (`getOriginalForConcept`, `getFullConcept`) and
+`modules/library/util-template-lib.xqm` (`getExpandedTemplate`, editor
+prototype assembly); `src/decor2hl7/compile/transaction.py`,
+`src/decor2hl7/cda/compile.py`, `src/decor2hl7/retrieval/references.py`,
+`src/decor2hl7/retrieval/fetch.py`, `src/decor2hl7/compile/mapping.py`, and
+`tests/test_core.py`.
 
 ## Maintenance rule
 

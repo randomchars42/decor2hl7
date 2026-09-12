@@ -7,7 +7,7 @@ same release.
 
 The selected transaction and its exact artifact dependencies define build
 truth. A live project extract is fetched once as *evidence only*: it may
-provide historical associations/lineage for mapping analysis but never changes
+provide historical associations, formal origins, and relationships for mapping analysis but never changes
 model/template selection.
 """
 
@@ -40,8 +40,9 @@ from .sources import (
 from .expansion import expansion_status
 from .xml import local, parse_text
 from .references import (
-    KIND_ORDER, KINDS, Want, display_references, hard_references,
-    identity_references, references, soft_references,
+    KIND_ORDER, KINDS, TEMPLATE_PROTOTYPE_RELATIONSHIP, Want,
+    display_references, hard_references,
+    original_references, references, soft_references,
 )
 from .resolution import (
     candidate_projects as _candidate_projects,
@@ -247,7 +248,11 @@ def _satisfied(
     effective = str(want.get("effective_date") or "")
     if effective:
         return (kind, ident, effective) in have
-    return any(k == kind and i == ident for k, i, _ in have)
+    # A frozen embedded revision cannot prove a dynamic/latest request. The
+    # direct artifact response is needed to freeze the revision selected by
+    # ART-DECOR; otherwise an arbitrary older embedded definition wins merely
+    # because it appeared first in the containing analysis document.
+    return (kind, ident, "") in have
 
 def _matching_embedded(
     roots: Iterable[ET.Element | None],
@@ -298,8 +303,9 @@ def _matching_embedded(
 def _evidence_references(root: ET.Element, relevant_ids: set[str]) -> list[Want]:
     """External evidence references relevant to the selected transaction only.
 
-    The complete live *main* project is already available locally for lineage
-    and templateAssociation analysis.  This function deliberately avoids
+    The complete live *main* project is already available locally for formal
+    origins, ART-DECOR relationships, and templateAssociation analysis. This
+    function deliberately avoids
     recursively harvesting dependencies of unrelated live-project content.
     """
     found: dict[str, Want] = {}
@@ -309,7 +315,7 @@ def _evidence_references(root: ET.Element, relevant_ids: set[str]) -> list[Want]
         if kind == "concept" and node.get("id"):
             linked = {node.get("id") or ""}
             for child in list(node):
-                if local(child.tag) in {"inherit", "relationship"}:
+                if local(child.tag) in {"inherit", "contains", "relationship"}:
                     linked.update(filter(None, (child.get("ref"), child.get("originalId"))))
             selected = bool(linked & relevant_ids)
         elif kind == "templateAssociation":
@@ -2196,18 +2202,81 @@ def fetch_spec(
                 checkpoint(complete=False)
 
         def resolve_evidence(queue: deque[Want], embedded_roots: list[ET.Element | None]) -> None:
-            """Resolve direct evidence and transitively close identity lineage."""
+            """Resolve direct evidence and transitively close formal origins."""
             nonlocal resources_considered, budget_exhausted, phase
             phase = "evidence"
 
-            def next_identity(root: ET.Element, want: Want) -> list[Want]:
-                if want.get("kind") != "concept":
+            def next_evidence(root: ET.Element, want: Want) -> list[Want]:
+                if want.get("kind") == "concept":
+                    return original_references(root, {want["id"]})
+                if (
+                    want.get("role")
+                    not in {"template-prototype", "prototype-support"}
+                ):
                     return []
-                return identity_references(root, {want["id"]})
+                artifact_tag = {
+                    "template": "template",
+                    "valueset": "valueSet",
+                    "codesystem": "codeSystem",
+                    "dataset": "dataset",
+                    "concept": "concept",
+                }.get(str(want.get("kind") or ""))
+                if artifact_tag is None:
+                    return []
+                candidates = [
+                    node for node in root.iter()
+                    if local(node.tag) == artifact_tag
+                    and node.get("id") == want.get("id")
+                    and (
+                        not want.get("effective_date")
+                        or node.get("effectiveDate")
+                        == want.get("effective_date")
+                    )
+                ]
+                if len(candidates) != 1:
+                    return []
+                dependencies: list[Want] = []
+                for dependency in hard_references(candidates[0]):
+                    dependencies.append(Want(**{
+                        **dependency,
+                        "role": "prototype-support",
+                        "analysis_only": "true",
+                    }))
+                if artifact_tag == "template":
+                    # The ART-DECOR editor uses only the first SPEC
+                    # relationship as its prototype. Follow the same chain;
+                    # all structural dependencies of each prototype stay
+                    # evidence-only but make the official validator input
+                    # self-contained.
+                    relation = next((
+                        child for child in list(candidates[0])
+                        if local(child.tag) == "relationship"
+                        and child.get("template")
+                        and child.get("type")
+                        == TEMPLATE_PROTOTYPE_RELATIONSHIP
+                    ), None)
+                    if relation is not None:
+                        dependencies.append(Want(
+                            kind="template",
+                            id=relation.get("template") or "",
+                            effective_date=(
+                                ""
+                                if relation.get("flexibility")
+                                in (None, "dynamic")
+                                else relation.get("flexibility") or ""
+                            ),
+                            project=(
+                                relation.get("prefix")
+                                or want.get("project") or ""
+                            ),
+                            role="template-prototype",
+                            analysis_only="true",
+                        ))
+                return dependencies
 
             _emit(
                 progress,
-                "fetch: resolving direct evidence and identity lineage "
+                "fetch: resolving direct evidence and formal origins "
                 f"({len(queue)} initial reference(s))",
             )
             while queue and not budget_exhausted:
@@ -2248,14 +2317,16 @@ def fetch_spec(
                     if _satisfied(want, have_by_role["evidence"]):
                         visited["evidence"].add(key)
                         for node in embedded:
-                            queue.extend(next_identity(node, want))
+                            queue.extend(next_evidence(node, want))
                         continue
-                    # The complete main-project evidence snapshot is already
-                    # local; use an exact embedded resource before requesting.
-                    if embedded:
+                    # A frozen embedded revision can satisfy only an explicit
+                    # effective date. A dynamic request must reach the direct
+                    # endpoint so ART-DECOR, rather than document order,
+                    # chooses and freezes the current revision.
+                    if embedded and want.get("effective_date"):
                         visited["evidence"].add(key)
                         for node in embedded:
-                            queue.extend(next_identity(node, want))
+                            queue.extend(next_evidence(node, want))
                         continue
 
                     resources_considered += 1
@@ -2287,15 +2358,15 @@ def fetch_spec(
                             # A concept response may contain a parent/sibling
                             # subtree. Keep it available so a later exact
                             # endpoint satisfied by that inventory still gets
-                            # its own targeted identity ancestry inspected.
+                            # its own targeted formal origin inspected.
                             embedded_roots.append(root)
                             if _seed_artifact_owners(artifact_owners, root):
                                 save_artifact_owners()
                             observe_optional(root)
                             have_by_role["evidence"].update(_inventory(root))
-                            # Identity is transitive.  Do not recursively follow
-                            # ADAPT/derivation, template or terminology evidence.
-                            queue.extend(next_identity(root, want))
+                            # Formal inherit/contains origin is transitive.
+                            # Generic relationships remain evidence only.
+                            queue.extend(next_evidence(root, want))
                 pending_batch["evidence"] = []
                 checkpoint(complete=False)
 

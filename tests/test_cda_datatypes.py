@@ -1819,8 +1819,8 @@ class CdaDatatypeTests(unittest.TestCase):
             source.write_text(
                 '''<project>
   <concept id="address"><name>Anschrift</name></concept>
-  <concept id="postcode"><name>Postleitzahl</name><relationship type="SPEC" ref="postal-base"/></concept>
-  <concept id="postal-base"><name>Postleitzahl</name></concept>
+  <concept id="postcode"><name>Postleitzahl</name><inherit ref="postal-base"/></concept>
+  <concept id="postal-base"><name language="en-US">Postal code three digits</name></concept>
   <concept id="postal-three"><name language="en-US">Postal code three digits</name><relationship type="ADAPT" ref="postal-base"/></concept>
   <concept id="given"><implementation xpath="hl7:ClinicalDocument/hl7:recordTarget/hl7:patient/hl7:name/hl7:given">
     <templateLocation id="doc" effectiveDate="2026-01-01" xpath="hl7:ClinicalDocument"/>
@@ -2528,14 +2528,12 @@ class CdaDatatypeTests(unittest.TestCase):
                 target for target in baseline["targets"].values()
                 if target.get("element_id") == "old-value"
             )
-            baseline_new = next(
-                target for target in baseline["targets"].values()
-                if target.get("element_id") == "new-value"
-            )
             self.assertTrue(baseline_old["writable"])
             self.assertEqual(len(baseline_old["locations"]), 1)
-            self.assertFalse(baseline_new["writable"])
-            self.assertEqual(baseline_new["locations"], [])
+            self.assertFalse(any(
+                target.get("element_id") == "new-value"
+                for target in baseline["targets"].values()
+            ))
 
             compiled = compile_cda(
                 [source], model, core_definition_paths=[schema],
@@ -2545,14 +2543,12 @@ class CdaDatatypeTests(unittest.TestCase):
                 target for target in compiled["targets"].values()
                 if target.get("element_id") == "new-value"
             )
-            old_value = next(
-                target for target in compiled["targets"].values()
-                if target.get("element_id") == "old-value"
-            )
             self.assertTrue(new_value["writable"])
             self.assertEqual(len(new_value["locations"]), 1)
-            self.assertFalse(old_value["writable"])
-            self.assertEqual(old_value["locations"], [])
+            self.assertFalse(any(
+                target.get("element_id") == "old-value"
+                for target in compiled["targets"].values()
+            ))
             self.assertEqual(compiled["reviewed_extensions"], [rule])
 
             with self.assertRaisesRegex(ValueError, "not fetched exactly"):

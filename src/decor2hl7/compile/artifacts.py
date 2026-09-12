@@ -24,6 +24,7 @@ class CompilerInputs(TypedDict):
     transaction_analysis: Path
     model_resources: list[Path]
     terminology_resources: list[Path]
+    conformance_terminology_resources: list[Path]
     templates: list[Path]
     mapping_evidence: list[Path]
     cda_extensions: list[CdaExtension]
@@ -127,6 +128,29 @@ def compiler_inputs(release_dir: Path, transaction_dir: Path) -> CompilerInputs:
         if path not in terminology_resources:
             terminology_resources.append(path)
     templates = form_paths(available, kinds={"template"}, form="analysis")
+    # Template relationships are evidence, not structural dependencies. Make
+    # successfully fetched prototypes available for diagnostics and reviewed
+    # overlays without turning a missing prototype into a build omission.
+    prototype_evidence = [
+        record for record in evidence
+        if set(record.get("roles", []))
+        & {"template-prototype", "prototype-support"}
+    ]
+    evidence_templates = form_paths(
+        prototype_evidence, kinds={"template"}, form="analysis"
+    )
+    for path in evidence_templates:
+        if path not in templates:
+            templates.append(path)
+    conformance_terminology_resources = list(terminology_resources)
+    for form in ("analysis", "expansion"):
+        for path in form_paths(
+            prototype_evidence,
+            kinds={"valueset", "codesystem"},
+            form=form,
+        ):
+            if path not in conformance_terminology_resources:
+                conformance_terminology_resources.append(path)
 
     mapping_evidence = [
         _required_form(transaction, "source"),
@@ -148,6 +172,7 @@ def compiler_inputs(release_dir: Path, transaction_dir: Path) -> CompilerInputs:
         "transaction_analysis": transaction_analysis,
         "model_resources": model_resources,
         "terminology_resources": terminology_resources,
+        "conformance_terminology_resources": conformance_terminology_resources,
         "templates": templates,
         "mapping_evidence": mapping_evidence,
         "cda_extensions": cda_extensions,
@@ -452,6 +477,9 @@ def write_build_diagnostics(
     unavailable = list(inputs.get("unavailable_artifacts", []))
     crawl_degraded = list(inputs.get("crawl_degraded_artifacts", unavailable))
     unresolved = list(cda.get("unresolved_templates", []))
+    unresolved_prototypes = list(
+        cda.get("unresolved_template_prototypes", [])
+    )
     constraint_diagnostics = list(cda.get("constraint_diagnostics", []))
     build_degraded = _build_degraded_artifacts(
         model_dir, inputs, model or {}, cda
@@ -465,18 +493,21 @@ def write_build_diagnostics(
             "missing_document_template": "fatal",
             "identity_mismatch": "fatal",
             "spec_constraint_weakening": "explicit-child-constraint-and-warning",
+            "missing_spec_prototype": "informational-no-constraint-omission",
         },
         "crawl_degraded": crawl_degraded,
         "build_degraded": build_degraded,
         # Compatibility name retained for consumers of format 1.
         "unavailable_artifacts": unavailable,
         "unresolved_templates": unresolved,
+        "unresolved_template_prototypes": unresolved_prototypes,
         "constraint_diagnostics": constraint_diagnostics,
         "summary": {
             "unavailable_artifacts": len(unavailable),
             "crawl_degraded": len(crawl_degraded),
             "build_degraded": len(build_degraded),
             "unresolved_templates": len(unresolved),
+            "unresolved_template_prototypes": len(unresolved_prototypes),
             "constraint_diagnostics": len(constraint_diagnostics),
         },
     }
@@ -541,6 +572,28 @@ def write_build_diagnostics(
                 )
             )
         lines.append("")
+    if unresolved_prototypes:
+        lines += [
+            "## Unavailable CDA editor prototypes",
+            "",
+            "These `SPEC` targets are optional comparison evidence. Their "
+            "absence does not omit executable child-template constraints.",
+            "",
+            "| Relation | Template | Requested revision | Used by |",
+            "|---|---|---|---|",
+        ]
+        for row in unresolved_prototypes:
+            owner = row.get("used_by", {})
+            lines.append(
+                "| {} | `{}` | `{}` | `{}@{}` |".format(
+                    _cell(row.get("relation")),
+                    _cell(row.get("template")),
+                    _cell(row.get("flexibility") or "dynamic"),
+                    _cell(owner.get("template") if isinstance(owner, Mapping) else ""),
+                    _cell(owner.get("effective_date") if isinstance(owner, Mapping) else ""),
+                )
+            )
+        lines.append("")
     if constraint_diagnostics:
         lines += [
             "## CDA constraint diagnostics",
@@ -558,7 +611,7 @@ def write_build_diagnostics(
                 )
             )
         lines.append("")
-    if not crawl_degraded and not unresolved:
+    if not crawl_degraded and not unresolved and not unresolved_prototypes:
         lines += ["No dependency gaps were detected.", ""]
     (model_dir / "build-diagnostics.md").write_text(
         "\n".join(lines), encoding="utf-8"

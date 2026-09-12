@@ -1,7 +1,7 @@
 # Known boundaries after the 0.1.0 correctness pass
 
 The 0.1.0 rewrite now supports declarative semantic transforms, formal
-ART-DECOR assertion enforcement, transitive identity-lineage enrichment,
+ART-DECOR assertion enforcement, transitive formal-origin resolution,
 explicitly keyed nested repetitions and specification-derived discriminated
 repetitions. The remaining items are boundaries where
 external protocol information or broader ART-DECOR expression coverage is
@@ -57,10 +57,13 @@ The medication section `1.2.276.0.76.3.1.195.10.64` and Medikation template
 On the source side, the current fetched IOPC concept
 `2.16.840.1.113883.3.1937.777.75.2.1.482@2023-12-27T14:10:52`
 contains 8 named descendant groups and 25 item datapoints. The transaction's
-Medikation group reaches that exact concept through an explicit `SPEC`
-relationship beside its literal `contains` alias. The 25-field count is
+Medikation group has a formal `contains` whose compiled metadata identifies
+that terminal original; ART-DECOR also emits a synthetic `SPEC` relationship
+to the terminal original because the literal alias is not itself the direct
+original. The compiler accepts that SPEC only as a fully corroborated locator
+for the adjacent formal `contains`, not as inheritance. The 25-field count is
 therefore established for the current downloaded analysis artifact and does
-not depend on weak `ADAPT` grafting. It is not proof of the membership of a
+not depend on `ADAPT` or another relationship graft. It is not proof of the membership of a
 historical December 2023 snapshot: `Chargennummer` has effective date
 `2024-08-08T18:05:21`, although it is present in the currently returned draft
 dataset revision. See
@@ -73,10 +76,12 @@ an inherited sibling and remains useful analysis evidence, but the AKTIN
 artifact does not select it. The reference mapping therefore does not activate
 DEC-028's medication `select_spec_branch` overlay.
 
-The executable baseline medication mappings are product name, product code,
-medication `sequenceNumber`, dosage narrative and route. Dose form and direct
-ingredient name, code and role have no active CDA target. The simple branch
-does expose CDA `lotNumberText`, but no current association proves that source
+Under DEC-037, a generic `relationship` path cannot make a mapping executable.
+The generated `mapping-audit.json` is authoritative for which medication
+mappings remain; product name, product code, dosage narrative, and route must
+not be retained solely because an `ADAPT`, `SPEC`, `EQUIV`, `COPY`, `VERSION`,
+or other relationship connects their concepts. The simple branch does expose
+CDA `lotNumberText`, but no current formal association proves that source
 Chargennummer selects it; it remains unmapped rather than being promoted from
 physical compatibility alone. See
 [`analyses/2026-09-11-aktin-medication-simple-branch.md`](analyses/2026-09-11-aktin-medication-simple-branch.md).
@@ -241,9 +246,9 @@ It must not be written as `CD.translation`, because that would assert an
 alternative code for the primary diagnosis rather than another diagnosis; no
 semicolon parser or inferred additional Problem Observation is introduced.
 
-The prior proposal candidate came through an `ADAPT` edge to a differently
-named concept. Weak derivation lineage with such name drift is now retained
-only as review evidence. It cannot become actionable through datatype,
+The prior proposal candidate came through an `ADAPT` relationship to a
+differently named concept. Every ART-DECOR relationship path is retained only
+as review evidence. It cannot become actionable through datatype, name,
 structural, or Schematron compatibility.
 
 The post-PR #20 audit also rejects `CD.translation`: the ART-DECOR CDA datatype
@@ -258,16 +263,14 @@ The generated `mapping-audit.json` is authoritative for the current boundary:
 each unselected field carries a gate key and minimal reopening evidence rather
 than relying on this hand-maintained prose. Audit version 2 also carries an
 unproven, claim-aware list of physically admissible targets for each of the 20
-context-bearing fields that still needs a semantic mapping decision. The
-current field partition is
-`semantic:shared_target` (four), `semantic:missing_companion` (one),
-and `semantic:no_association` (twenty). One selected field additionally remains
-`terminology:closure` because ValueSet `1.2.276.0.76.11.53` is genuinely
-unresolved. The dated analyses below explain the clinical history; their
-counts may drift without superseding the audit.
+context-bearing fields that still need a semantic mapping decision. The
+current complete audit partition is `blocked_upstream:no_candidate` (eight),
+`physical:structural_container` (twenty), `semantic:shared_target` (three),
+`semantic:missing_companion` (one), `semantic:no_association` (thirty-one), and
+`terminology:closure` (one). The dated analyses below explain the clinical
+history; their counts may drift without superseding the audit.
 
-Seven non-medication datapoints remain without a suitable target after the
-fresh-snapshot audit. The insurance-number concept does have a formal historical
+The insurance-number concept has a formal historical
 chain: selected concept `.60.3.2.9.21582` identifies the HL7-DE concept
 `.77.2.2.60210`; eVent concept `.60.12.2.358` inherits that concept; and template
 `.10.2022` statically associates the eVent concept with its
@@ -275,12 +278,12 @@ chain: selected concept `.60.3.2.9.21582` identifies the HL7-DE concept
 
 That chain ends in historical participant template `.10.2022`, however, while
 the selected Kostenträger occurrence is active template `.3.1.195.10.4`.
-Concept ancestry therefore establishes semantic relatedness but not occurrence
-identity. The historical identifier has no unique CDA/RIM owner-particle
-provenance that would permit a DEC-015 projection into `.10.4`, so the candidate
-remains review-only and the active `associatedEntity/id` remains unselected.
-Reopening requires an explicit occurrence association or sufficient structural
-provenance for one unique in-context projection.
+The refreshed closure now supplies one unique CDA/RIM owner-particle slot and
+one in-context `associatedEntity/id`. DEC-015 therefore projects the formal
+static association into the active occurrence and the generated proposal
+selects it. This is a compiler decision rule backed by the formal-origin chain
+and structural uniqueness; ART-DECOR does not publish a direct association to
+the active `.10.4` occurrence.
 
 General event onset has no uniquely owned active event/problem statement. The
 MRI statement is reachable, correcting the earlier residual wording, but it
@@ -361,33 +364,21 @@ validation pass. The exact ten-member ActStatus revision is already embedded
 in a selected frozen dataset artifact and is now supplied to validator assembly
 as well as the model compiler, so no duplicate builtin is introduced.
 
-After these changes, the 2026.1.2 reference generator reports 3 messages (down
-from 65 in the published baseline and 140 during the unsafe intermediate merge).
-All three are honest undefined-content findings for two external medication
-ValueSets: `2.16.840.1.113762.1.4.1021.30` occurs twice and
-`2.16.840.1.113762.1.4.1099.12` once. Their live `$expand` responses are
-complete and carry no coded members at all: the ART-DECOR record for `1021.30`
-holds the VSAC codes only as an HTML table inside `<desc>`, and `1099.12` holds
-nothing. The content lives at VSAC under licensing this project does not carry,
-so neither can be filled.
+In the refreshed workspace the template validator remains executable and has no
+compilation errors, but reports 88 upstream generation messages, 57 outside the
+119-template selected document closure; it therefore records `complete: false`.
+The separate source-project DECOR Schematron fails on the broad live evidence
+extract with 381 errors, 1,780 warnings, and 536 information messages. These are
+reported conformance boundaries and do not restore prototype constraints or
+relationship-derived mappings.
 
-All three messages belong to rules on the C-CDA Medication Activity templates
-`2.16.840.1.113883.10.20.22.4.16` (`MedicationActivity` and
-`MedicationActivityV2`). Those templates are reachable in the assembled closure
-but hold no document location in the selected AKTIN document, whose reviewed
-effective medication branch is `UV Medication Information (detail)`. They are
-therefore classified as outside the selected closure: they stay listed in
-`generation_messages` and counted in
-`generation_messages_outside_selected_closure`, and they neither degrade the
-build nor deny `complete` (`DEC-010`, `DEC-019`). The generated stylesheet is
-executable, has no compilation errors and now reports `complete: true`.
-
-The reference mapping is now 100/120 after the five DEC-028 medication
-additions. The build diagnostics report 56 crawl-degraded artifacts, of which 3
-affect the selected build: the AKTIN ValueSet `1.2.276.0.76.11.53`, its waived
-intension CodeSystem
-`1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00`, and the waived SPEC parent
-`template:2.16.840.1.113883.10.20.1.53@2005-09-07T00:00:00`.
+The reviewed mapping currently selects 98/120 fields; the generated proposal,
+which does not treat review relationships as formal origins, selects 85/120.
+The fetch closure is build-ready with 498 resolved/cached, 21 optional missing,
+one waived, and no unavailable, partial, or error resources. Its three degraded
+dependencies are the dynamic and dated AKTIN ValueSet
+`1.2.276.0.76.11.53` plus its waived intension CodeSystem
+`1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00`.
 
 The assembler restores the QName-string namespace declarations omitted by the
 publication transform, including the two distinct pharmaceutical namespaces.

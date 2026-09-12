@@ -71,10 +71,10 @@ decor2hl7 run --input /data/aktin/export
 `--site-config DIRECTORY`; this permits a reviewed mapping to be shared while
 each site retains its own input/code configuration.
 
-When a published ART-DECOR `SPEC` child explicitly weakens a parent constraint,
-`build` follows the executable child constraint and records a warning in the
-build diagnostics. Use `build --strict-specializations` to reject such designs
-instead.
+`build` uses each template's stored constraints directly. If its first
+ART-DECOR `SPEC` editor prototype is available, explicit matching constraints
+are compared and any broadening is recorded as a diagnostic. Use
+`build --strict-specializations` to reject such designs instead.
 
 ART-DECOR network access uses **IPv4 by default** because the IPv6 route used
 during development was dramatically slower. `--ipv6` is a diagnostic override
@@ -241,9 +241,9 @@ while external evidence is fetched only for concepts/templates already relevant
 to the selected transaction. Exact concepts named by selected-template
 `templateAssociation` or `staticAssociations/origconcept` declarations are
 retrieved as analysis-only mapping evidence. Their transitive closure follows
-only identity-style concept relationships (`SPEC`, `INHERIT`, `ORIGINAL`,
-`EQUIV`, `VERSION`, `COPY`); `ADAPT`, other derivations, templates, terminology,
-and unrelated dataset siblings do not expand this evidence crawl.
+only formal `<inherit>` and `<contains>` origins (and compiled `originalId`
+locators). Every `<relationship>` type is retained as direct review evidence,
+but none expands this evidence crawl or proves mapping identity.
 `project-evidence.xml` is mapping evidence only: it never satisfies the
 representing template or another build dependency. A statically dated reference
 must resolve to that exact revision.
@@ -314,10 +314,10 @@ rejected below closed elements, for parents outside the explicit selected
 closure, when the exact target is unavailable, for CDA-illegal particles, and
 when upstream containment already selects the same target.
 
-The same file can select an exact sibling already declared by a `SPEC` parent
-choice. This is a replacement, not an attachment: the selected specialization
-must already contain the exact replaced branch, and both branches must occur at
-the same named parent element in one exact inherited choice.
+The same file can select an exact sibling already declared by the first `SPEC`
+editor prototype. This is a replacement, not an attachment: the current
+template must already contain the exact replaced branch, and both branches must
+occur at the same named parent element in one exact prototype choice.
 
 The example below illustrates the optional mechanism; the reference AKTIN
 mapping deliberately does not apply this medication replacement and follows
@@ -440,14 +440,14 @@ headline build status.
   descriptions and XML comments linking nodes, source templates and dataset
   paths.
 
-CDA `SPEC` relationships are compiled as constraint refinement at every tree
-depth. A specialized constraint inherits omitted constraints from a matching
-parent node, while parent-only prototype choices are dropped. Reused ART-DECOR
-element IDs provide structural identity when a specialization replaces a
-`contains` target; the old containment therefore cannot survive as a duplicate
-branch. `include` and `contains` nodes preserve template provenance but add no
-XML level. An explicit element reached through them satisfies the enclosing
-CDA/RIM content particle, so the compiler does not add a second generic sibling.
+CDA templates are compiled from their own stored constraints. The executable
+recursive closure follows `<include>` and element `@contains`; a template
+`relationship type="SPEC"` is fetched as editor-prototype evidence but is not
+merged into the template. Missing prototypes are reported separately and do
+not make the executable closure incomplete. `include` and `contains` nodes
+preserve template provenance but add no XML level. An explicit element reached
+through them satisfies the enclosing CDA/RIM content particle, so the compiler
+does not add a second generic sibling.
 
 Fixed element text and fixed attributes are compiled as template constraints,
 not writable targets. `conformance="NP"` nodes are prohibited and never emitted.
@@ -743,18 +743,21 @@ semantic transform before they can be executed. A strong formal association is
 therefore never discarded merely because it is not a direct datatype-compatible
 assignment.
 
-`ADAPT` relationships are followed and retained as mapping evidence, but they do
-not automatically copy omitted dataset constraints into `model.json`: adaptation
-means the related concept/design may have been changed. Identity-style lineage
-(`SPEC`, `INHERIT`, `ORIGINAL`, `EQUIV`, `COPY`, `VERSION`) may enrich omitted
-model constraints; `ADAPT`/derivation remains evidence unless an explicit target
-mapping or transform proves the runtime semantics.
-The same boundary applies when an expanded transaction names a literal
-`contains` alias that is not a parsed concept: only an accompanying
-identity-style relationship may locate the fetched child subtree.
-When weak derivation lineage also changes the concept name, its mapping bridge is
-review-only. Datatype, structural, or Schematron compatibility cannot make that
-semantic identity actionable.
+Concept `<inherit>` and `<contains>` follow ART-DECOR's formal original chain.
+The terminal original supplies semantic properties; the current stored concept
+supplies descendants and transaction usage supplies cardinality. Every
+`<relationship>` (`REPL`, `SPEC`, `GEN`, `COPY`, `ADAPT`, `EQUIV`, `VERSION`,
+`BACKWD`, or `DRIV`) is retained as review evidence only. It never copies
+properties or descendants and never makes a mapping executable. This also
+applies indirectly: relationship-neighbour labels cannot drive a contextual
+leaf selection, and a relationship-only candidate cannot locate a template for
+a generated transform.
+
+When an ART-DECOR analysis response names a literal `contains` alias that is not
+present, the compiler may use `originalId` or the unique synthetic terminal-
+original SPEC emitted by `getFullConcept`, but only when the adjacent formal
+`contains` metadata matches completely. Datatype, structural, name, or
+Schematron compatibility cannot turn an ordinary relationship into identity.
 
 Direct `implementation/@xpath` declarations are treated as explicit technical
 mapping evidence when they uniquely resolve to a current writable CDA target.
@@ -830,6 +833,10 @@ A boolean coded act uses inverse `negationInd` when that attribute is the target
 representation. Separately, `mode: "presence"` may activate an optional
 ART-DECOR statement whose complete payload is fixed and whose template is
 uniquely identified by exact source terminology; false omits the statement.
+An enumerated coded field is converted to `negationInd` only for an exact binary
+positive/negative domain, optionally plus unknown. Multi-valued clinical codes
+are not reduced to polarity because one label happens to contain a negative
+word.
 `mode: "fallback_if_active"` may fill a required target only after another value
 has activated the optional branch. It requires a review reason and cannot create
 a branch or repeat by itself.

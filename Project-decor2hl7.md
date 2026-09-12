@@ -340,7 +340,7 @@ The implementation must tolerate unavailable artifacts that are not needed to co
 
 The selected transaction is the primary authority for the current data model.
 
-Older/project material may contribute lineage or fill explicitly missing properties, but must not silently union older children or value domains into the selected transaction.
+Formal ART-DECOR `<inherit>` and `<contains>` origins may supply semantic properties from one terminal original. The current stored concept still supplies descendants and the transaction supplies usage/cardinality. Project/history relationships may contribute review evidence, but must not supply properties, union older children or value domains, or prove a mapping merely because their type is `SPEC`, `ADAPT`, `EQUIV`, `COPY`, `VERSION`, or another relationship value.
 
 The compiled model preserves distinctions such as:
 

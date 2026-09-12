@@ -851,7 +851,10 @@ def assemble_decor_closure(
     terminology = ET.SubElement(root, "terminology")
     _copy_children(
         terminology,
-        inputs.get("terminology_resources", []),
+        inputs.get(
+            "conformance_terminology_resources",
+            inputs.get("terminology_resources", []),
+        ),
         {"valueSet", "codeSystem", "conceptMap"},
         namespace_registry,
     )

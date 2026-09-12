@@ -143,13 +143,13 @@ Every dependency carries a role:
 
 - **build resources** can affect `model.json`, `cda.json`, terminology, or
   formal validation;
-- **evidence resources** may establish associations, lineage, labels, or other
+- **evidence resources** may establish associations, formal origins, labels, or other
   mapping evidence without changing the compiled specification.
 
-The crawler follows `include`, `contains`, relevant template relations,
-terminology composition, and the bounded concept-identity ancestry needed for
-mapping. It does not crawl complete unrelated projects merely because they are
-reachable by a weak relationship.
+The crawler follows executable template `include`/`contains`, terminology
+composition, first-SPEC editor prototypes as evidence, and the bounded formal
+concept origins needed for mapping. It does not crawl complete unrelated
+projects merely because they are reachable by a relationship.
 
 Reviewed `config/cda-extensions.json` records are normalised and scoped to the
 selected transaction during fetch. Their exact template dependencies join the
@@ -224,7 +224,7 @@ constraint.
 | ART-DECOR templates | Template relationships, cardinality, conformance, fixed values, vocabulary, assertions | CDA compilation | Supply omitted clinical values from examples |
 | CDA R2/RIM XSD | Legal structural classes, particles, datatype parts and scalar representations | CDA compilation | Choose a clinical mapping |
 | Generated Schematron | Effective assertions and bounded target/co-occurrence evidence | CDA annotation and mapping admissibility | Create semantic bridges on its own |
-| Reviewed CDA overlay | One exact attachment or inherited `SPEC` branch selection | Fetch closure and CDA compilation | Apply by name, generic context, or a different revision |
+| Reviewed CDA overlay | One exact attachment or first-`SPEC` prototype branch selection | Fetch closure and CDA compilation | Apply by name, generic context, or a different revision |
 | Mapping compiler policy | Candidate ranking, compatibility gates, transforms and structural-rule derivation | Mapping proposal | Turn weak similarity into reviewed clinical truth |
 | Reviewed `cda-mapping.json` | Accepted mappings, explicit transforms, structures and target defaults | Portable mapping product | Redefine `model.json` or the physical CDA profile |
 
@@ -237,16 +237,16 @@ transaction source: selected concepts and explicit overrides
                   +
 exact resource definitions and terminology
                   +
-identity-style lineage enrichment for omitted metadata only
+formal `<inherit>`/`<contains>` terminal-original properties
                   │
                   ▼
              model.json
 ```
 
-`SPEC`, `INHERIT`, `ORIGINAL`, `EQUIV`, `COPY`, and `VERSION` may enrich
-omitted metadata through identity lineage. `ADAPT` remains mapping evidence
-because adaptation may have changed meaning. Dataset-context cardinality is
-never inherited speculatively.
+Formal `<inherit>` and `<contains>` chains resolve one terminal original, which
+supplies semantic properties. The current stored concept supplies descendants;
+the transaction supplies usage cardinality. Every `<relationship>` type is
+review evidence only and never participates in that composition.
 
 ### 4.2 CDA constraint composition
 
@@ -254,8 +254,10 @@ never inherited speculatively.
 pinned CDA R2/RIM XSD legal structure
                   │
                   ▼
-effective ART-DECOR document/template constraints
-  (`SPEC`, `include`, `contains`, cardinality, conformance, fixed values)
+stored ART-DECOR document/template constraints
+  (`include`, `contains`, cardinality, conformance, fixed values)
+                  │
+                  ├── first-`SPEC` editor-prototype diagnostics
                   │
                   ├── exact reviewed attachment/branch overlay
                   │
@@ -268,10 +270,10 @@ expanded effective physical CDA tree and target registry
                 cda.json
 ```
 
-A matching explicit child constraint in a specialization overrides the
-corresponding inherited parent constraint. If that weakens a parent
-cardinality or conformance requirement, the compiler records a visible
-`SPEC`-weakening diagnostic; `--strict-specializations` makes it fatal.
+Only the current template's stored constraints execute. If its first SPEC
+editor prototype is available, matching explicit nodes are compared and any
+cardinality/conformance broadening becomes a visible `SPEC`-weakening
+diagnostic; `--strict-specializations` makes it fatal.
 
 ART-DECOR examples are instance illustrations. They do not become fixed values
 or defaults. A narrowly derived structural discriminator may use an exact
@@ -308,14 +310,16 @@ For every field it preserves three distinct views:
 - `accepted_values`: the executable input domain, using formal members when a
   formal binding exists and logical values only when no formal binding exists.
 
-### 5.3 Enrich and graft exact concept definitions
+### 5.3 Resolve formal originals and stored descendants
 
-Identity-style ancestors may fill properties omitted by the selected concept.
-Fetched contained definitions are grafted until no new exact child can be
-added. The literal `contains` identity is preferred. If it is not available as
-a parsed named concept, only an explicit identity-style relationship on the
-container may locate the fetched subtree; `ADAPT` and other derivations cannot
-do so. This is controlled enrichment, not a union of historical datasets.
+Formal `<inherit>` and `<contains>` are followed to one terminal original. Its
+semantic properties replace the alias/use concept's semantic properties, while
+the alias identity, short name, transaction cardinality, and currently stored
+descendants remain current. A literal `contains` identity is preferred for
+stored descendants. If that compiled alias is unavailable, its explicit
+`originalId` or ART-DECOR's uniquely corroborated synthetic terminal-original
+SPEC may locate the subtree. Ordinary relationships cannot do so. This is
+owner-defined origin resolution, not a union of historical datasets.
 
 ### 5.4 Materialise groups and fields
 
@@ -349,9 +353,10 @@ and the pinned CDA R2 XSD graph.
 ### 6.1 Select the document and reachable templates
 
 The representing template ID and effective date come from `model.json`.
-Template XML is indexed by exact identity. The compiler walks reachable
-`include`, `contains`, and specialization relationships and records unresolved
-references instead of substituting another revision.
+Template XML is indexed by exact identity. The compiler walks executable
+`include` and `contains` references and records unresolved references instead
+of substituting another revision. Missing first-SPEC editor prototypes are
+reported separately and do not degrade executable closure.
 
 ### 6.2 Apply reviewed overlays
 
@@ -359,22 +364,22 @@ Before effective-template construction, reviewed overlays are revalidated
 against the compiled transaction and exact document scope:
 
 - `attach` adds an exact template below an explicitly open parent slot;
-- `select_spec_branch` replaces one inherited sibling choice with another exact
-  sibling declared by the same `SPEC` parent element.
+- `select_spec_branch` replaces one stored sibling choice with another exact
+  sibling declared by the first `SPEC` editor prototype's same host element.
 
 The compiler checks transaction, document, parent, element, selected template,
 replacement template, revision, multiplicity, and CDA XSD compatibility.
 
 ### 6.3 Resolve effective ART-DECOR constraints
 
-Recursive specialization is constraint refinement rather than tree
-concatenation. Matching child nodes inherit omitted parent properties and
-override explicit ones. Transparent `include` and `contains` wrappers retain
-template identity and provenance but do not add an XML level.
+The current template's stored constraints are effective. Transparent `include`
+and `contains` wrappers recurse and retain template identity/provenance without
+adding an XML level. A template SPEC is editor-prototype evidence and is not
+merged into the executable tree.
 
 This pass establishes effective cardinality, conformance, fixed values,
 vocabulary, closed/open state, namespace bindings, assertions, and
-specialization diagnostics.
+prototype-comparison diagnostics.
 
 ### 6.4 Expand CDA/RIM structure
 
@@ -422,7 +427,7 @@ The initial physical `cda.json` contains:
 - physical target registry;
 - source-to-target index;
 - assertions and namespace maps;
-- reviewed overlay evidence and specialization diagnostics;
+- reviewed overlay evidence and SPEC prototype-comparison diagnostics;
 - unresolved templates, datatype inventory, and summary statistics.
 
 At this point `datapoints` is still empty. Logical datapoints are added only
@@ -470,11 +475,11 @@ This stage does not inspect site CSV files.
 
 The mapper parses the evidence XML into:
 
-- concept lineage and relationship graph;
-- direct and lineage-mediated `templateAssociation` edges;
+- formal-origin and relationship graph;
+- direct and formal-origin-mediated `templateAssociation` edges;
 - `staticAssociations/origconcept` edges;
 - legacy `implementation/@xpath` declarations;
-- concept names, labels, descriptions, and semantic neighbours;
+- concept names, labels, descriptions, and formal-origin label neighbours;
 - exact ValueSet members and target indexes.
 
 Evidence kinds remain visible in candidate chains such as `TA`,
@@ -638,14 +643,16 @@ Its provenance combines template `1.2.276.0.76.10.2036@2016-06-01` with the
 `IVL_TS/low` datatype part. Its value representation accepts a date or datetime
 and serializes the timestamp through `@value`.
 
-Mapping evidence reaches that target through a matching concept association, so
-Aufnahmezeitpunkt directly populates encounter start. An older association for
+The available association reaches that target only across a `SPEC` relationship
+and reverse formal-origin edge. It is therefore a visible review candidate, not
+an executable generated mapping for Aufnahmezeitpunkt. An older association for
 `dokumentationsinformationen.beginn_patientenbezogene_dokumentation.zeitpunkt_beginn_patientenbezogene_dokumentation`
-is reached only through weak `ADAPT` lineage whose concept name has changed.
+is reached only through an `ADAPT` relationship whose concept name has changed.
 AKTIN confirmed that the target profile does not use this documentation-start
 concept. The compiler therefore keeps the bridge as review evidence with
-`semantic_blocked="lineage_name_drift"`; datatype and Schematron compatibility
-cannot promote it, and the reviewed field remains `null`.
+`semantic_blocked="relationship_requires_review"`; datatype and Schematron compatibility
+cannot promote either relationship-only bridge. A reviewed mapping may still
+make an explicit domain decision, but the generated proposal remains `null`.
 
 AKTIN separately confirmed that Allergy Concern Act `effectiveTime/low` is the
 start of documenting an allergy concern, and that the emergency-department
@@ -731,7 +738,7 @@ The pipeline records failures at the boundary that can explain them:
 |---|---|
 | Fetch closure status | What was resolved, missing, unavailable, waived, partial, or truncated |
 | `build-diagnostics.json` / `.md` | Which degraded artifacts actually affect the selected build and why |
-| `constraint_diagnostics` in `cda.json` | Explicit specialization weakening or other effective-template concerns |
+| `constraint_diagnostics` in `cda.json` | Explicit broadening relative to a SPEC prototype or other effective-template concerns |
 | `schematron_evidence` in `cda.json` | Parsed/attached rule counts and unsupported bounded subsets |
 | `mapping-audit.json` | Why a field was selected, blocked, left unmapped, or offered review-only targets |
 | Generated mapping guides | Human-readable review surfaces derived from the audit and proposal |

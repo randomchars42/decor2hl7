@@ -3,13 +3,12 @@
 The generated ``cda.json`` is the boundary between ART-DECOR and runtime.
 ART-DECOR ids remain provenance; runtime assignments use generated target names.
 
-Template ``SPEC`` relationships are compiled as constraint inheritance: the
-specialized template overlays the parent constraint tree while still inheriting
-constraints that it does not redefine.  Explicit child constraints remain
-authoritative when a published design weakens its declared parent, and the
-non-monotonic refinement is retained as a build diagnostic.  ``include``
-remains a transparent constraint group and ``contains`` expands a referenced
-template below the containing XML element.
+Template ``SPEC`` relationships identify a specialization prototype. The
+published child template remains the executable design; its prototype is used
+for specialization diagnostics and reviewed branch evidence, not as another
+constraint tree to merge. ``include`` remains a transparent constraint group
+and ``contains`` expands a referenced template below the containing XML
+element.
 """
 
 from __future__ import annotations
@@ -56,7 +55,7 @@ from .model import (
 )
 
 TemplateKey = tuple[str, str]
-TEMPLATE_RELATIONS = {"SPEC", "VERSION", "COPY"}
+TEMPLATE_PROTOTYPE_RELATIONSHIP = "SPEC"
 NULLFLAVOR_CODE_SYSTEM = "2.16.840.1.113883.5.1008"
 
 
@@ -308,20 +307,14 @@ def reachable_templates(
             relation = ""
             reference = ""
             if local(node.tag) == "include" and node.get("ref"):
-                relation, reference = "INCLUDE", node.get("ref") or ""
+                relation, reference = "include", node.get("ref") or ""
             elif local(node.tag) == "element" and node.get("contains"):
                 relation = (
-                    "REVIEWED_EXTENSION"
+                    "reviewed-extension"
                     if node.get("_decor2hl7_source") == "reviewed-extension"
-                    else "CONTAINS"
+                    else "contains"
                 )
                 reference = node.get("contains") or ""
-            elif (
-                local(node.tag) == "relationship"
-                and node.get("template")
-                and (node.get("type") or "") in TEMPLATE_RELATIONS
-            ):
-                relation, reference = node.get("type") or "REL", node.get("template") or ""
             if not reference:
                 continue
             flexibility = node.get("flexibility") or ""
@@ -335,6 +328,41 @@ def reachable_templates(
             else:
                 queue.append(target)
     return found, list(missing.values())
+
+
+def _unresolved_template_prototypes(
+    reachable: Mapping[TemplateKey, ET.Element],
+    templates: dict[str, list[ET.Element]],
+) -> list[dict[str, Any]]:
+    """Report absent first-SPEC editor prototypes without degrading closure."""
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for template in reachable.values():
+        relation = next(iter(_template_relations(
+            template, {TEMPLATE_PROTOTYPE_RELATIONSHIP}
+        )), None)
+        if relation is None:
+            continue
+        reference = relation.get("template") or ""
+        flexibility = relation.get("flexibility") or ""
+        if select_template(templates, reference, flexibility) is not None:
+            continue
+        identity = (reference, flexibility, _key(template)[0])
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append({
+            "relation": TEMPLATE_PROTOTYPE_RELATIONSHIP,
+            "template": reference,
+            "flexibility": flexibility,
+            "used_by": {
+                "template": _key(template)[0],
+                "effective_date": _key(template)[1],
+            },
+            "required": False,
+            "purpose": "editor-prototype",
+        })
+    return result
 
 
 def _value_set_binding(node: ET.Element) -> dict[str, str] | None:
@@ -746,23 +774,6 @@ def _direct_template(template: ET.Element) -> list[dict[str, Any]]:
     return result
 
 
-def _merge_attribute(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str, Any]:
-    result = deepcopy(dict(parent))
-    for key in (
-        "id", "datatype", "value", "optional", "namespace_prefix",
-        "namespace_uri",
-    ):
-        if child.get(key) is not None:
-            result[key] = child.get(key)
-    if child.get("value_sets"):
-        result["value_sets"] = deepcopy(child.get("value_sets"))
-    if child.get("value_set_bindings"):
-        result["value_set_bindings"] = deepcopy(child.get("value_set_bindings"))
-    result["sources"] = _unique_sources(list(parent.get("sources", [])) + list(child.get("sources", [])))
-    result["targets"] = []
-    return result
-
-
 def _unique_sources(sources: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str]] = set()
@@ -791,124 +802,6 @@ def _sequence_key(node: Mapping[str, Any]) -> tuple[str, str]:
             key += "|contains:" + str(node.get("contains"))
         return "element", key
     return "include", str(node.get("ref") or "")
-
-
-def _merge_node(parent: Mapping[str, Any], child: Mapping[str, Any]) -> dict[str, Any]:
-    if parent.get("kind") != child.get("kind"):
-        return deepcopy(dict(child))
-    if child.get("kind") == "include":
-        result = deepcopy(dict(parent))
-        for key in ("ref", "min", "max", "mandatory", "conformance"):
-            if child.get(key) is not None:
-                result[key] = child.get(key)
-        if child.get("min") == 0 and child.get("mandatory") is not True:
-            result["mandatory"] = False
-        if child.get("ref") is not None:
-            result["flexibility"] = child.get("flexibility")
-        result["is_closed"] = bool(parent.get("is_closed")) or bool(
-            child.get("is_closed")
-        )
-        diagnostics = _unique_constraint_diagnostics(
-            list(parent.get("_constraint_diagnostics", []))
-            + list(child.get("_constraint_diagnostics", []))
-            + _spec_constraint_diagnostics(parent, child, result)
-        )
-        if diagnostics:
-            result["_constraint_diagnostics"] = diagnostics
-        return result
-
-    result = deepcopy(dict(parent))
-    result["is_closed"] = bool(parent.get("is_closed")) or bool(
-        child.get("is_closed")
-    )
-    # A specialized constraint wins when it explicitly says something.  The
-    # parent supplies only omitted constraints.
-    for key in (
-        "name", "id", "datatype", "min", "max", "mandatory", "conformance",
-        "fixed_text", "unit", "origin", "description", "template_name",
-        "template_display_name", "template_description", "namespace_prefix",
-        "namespace_uri",
-    ):
-        if child.get(key) is not None:
-            result[key] = deepcopy(child.get(key))
-    # Cardinality and mandatory are one semantic constraint in ART-DECOR: an
-    # explicit zero lower bound cannot remain mandatory. Some published
-    # templates nevertheless label a broader child as SPEC. Follow the
-    # executable child design, but retain a diagnostic instead of silently
-    # treating that broadening as a valid specialization.
-    if child.get("min") == 0 and child.get("mandatory") is not True:
-        result["mandatory"] = False
-    diagnostics = _unique_constraint_diagnostics(
-        list(parent.get("_constraint_diagnostics", []))
-        + list(child.get("_constraint_diagnostics", []))
-        + _spec_constraint_diagnostics(parent, child, result)
-    )
-    if diagnostics:
-        result["_constraint_diagnostics"] = diagnostics
-    if child.get("contains") is not None:
-        # A missing flexibility on an explicitly selected containment means
-        # dynamic/latest; it must clear a static binding inherited from SPEC.
-        result["contains"] = child.get("contains")
-        result["contains_flexibility"] = child.get("contains_flexibility")
-    result["fixed"] = {**dict(parent.get("fixed", {})), **dict(child.get("fixed", {}))}
-    if child.get("value_sets"):
-        result["value_sets"] = deepcopy(child.get("value_sets"))
-        if not child.get("codes"):
-            result["codes"] = []
-    if child.get("value_set_bindings"):
-        result["value_set_bindings"] = deepcopy(child.get("value_set_bindings"))
-    if child.get("codes"):
-        result["codes"] = deepcopy(child.get("codes"))
-        if not child.get("value_sets"):
-            # A specialization's explicit code list replaces its prototype's
-            # broader vocabulary rather than being combined with it.
-            result["value_sets"] = []
-            result["value_set_bindings"] = []
-    merged_asserts: list[dict[str, Any]] = []
-    seen_asserts: set[tuple[str, str, str, tuple[tuple[str, str], ...]]] = set()
-    for assertion in list(parent.get("asserts", [])) + list(child.get("asserts", [])):
-        assertion_namespaces = assertion.get("namespaces", {})
-        assertion_key = (
-            str(assertion.get("test") or ""),
-            str(assertion.get("role") or ""),
-            str(assertion.get("message") or ""),
-            tuple(sorted(
-                (str(prefix), str(uri))
-                for prefix, uri in assertion_namespaces.items()
-            )) if isinstance(assertion_namespaces, Mapping) else (),
-        )
-        if assertion_key not in seen_asserts:
-            seen_asserts.add(assertion_key)
-            merged_asserts.append(deepcopy(dict(assertion)))
-    result["asserts"] = merged_asserts
-    result["lets"] = {**dict(parent.get("lets", {})), **dict(child.get("lets", {}))}
-
-    parent_attrs = list(parent.get("attributes", []))
-    child_attrs = list(child.get("attributes", []))
-    by_name: dict[str, list[int]] = defaultdict(list)
-    for index, attr in enumerate(parent_attrs):
-        by_name[_xml_key("@" + str(attr.get("name") or ""))].append(index)
-    attr_counts: Counter[str] = Counter()
-    merged_attrs = deepcopy(parent_attrs)
-    for attr in child_attrs:
-        key = _xml_key("@" + str(attr.get("name") or ""))
-        occurrence = attr_counts[key]
-        attr_counts[key] += 1
-        options = by_name.get(key, [])
-        if occurrence < len(options):
-            merged_attrs[options[occurrence]] = _merge_attribute(parent_attrs[options[occurrence]], attr)
-        else:
-            merged_attrs.append(deepcopy(attr))
-    result["attributes"] = merged_attrs
-    # This merge is used for SPEC refinement.  The specialization selects the
-    # child structure at every depth; parent-only prototype choices must not
-    # reappear merely because the matching parent element itself was selected.
-    result["children"] = _refine_sequence(
-        list(parent.get("children", [])), list(child.get("children", []))
-    )
-    result["sources"] = _unique_sources(list(parent.get("sources", [])) + list(child.get("sources", [])))
-    result["targets"] = []
-    return result
 
 
 def _constraint_limit(value: Any) -> float | None:
@@ -1018,29 +911,27 @@ def _extract_constraint_diagnostics(
     return _unique_constraint_diagnostics(diagnostics)
 
 
-def _refine_sequence(parent: list[dict[str, Any]], child: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Refine only nodes explicitly selected by a specialization.
+def _prototype_constraint_diagnostics(
+    prototype: list[dict[str, Any]], current: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compare explicitly matching nodes without merging the prototype.
 
-    Parent constraints are inherited by matching child nodes, but parent-only
-    prototype choices are never materialized.  Reused ART-DECOR element ids
-    are stronger structural identity than a sequence key, which is important
-    when a specialization replaces ``contains`` while keeping the wrapper id.
+    ART-DECOR uses the first SPEC relationship as an editor prototype. The
+    stored specialized template is the executable design. This comparison
+    keeps non-monotonic explicit constraints visible while leaving omitted
+    prototype properties and nodes omitted.
     """
     parent_occ: dict[tuple[str, str], list[int]] = defaultdict(list)
     parent_by_id: dict[str, list[int]] = defaultdict(list)
-    for index, node in enumerate(parent):
+    for index, node in enumerate(prototype):
         parent_occ[_sequence_key(node)].append(index)
         if node.get("kind") == "element" and node.get("id"):
             parent_by_id[str(node.get("id"))].append(index)
 
     used: set[int] = set()
     result: list[dict[str, Any]] = []
-    for node in child:
+    for node in current:
         key = _sequence_key(node)
-        # Pair repeated same-name constraints in source order.  Because matched
-        # parent indices are removed from consideration, the next unmatched
-        # choice is the correct occurrence; applying an additional occurrence
-        # offset here would skip every second sibling.
         choices = [index for index in parent_occ.get(key, []) if index not in used]
         match = choices[0] if choices else None
         if match is None and node.get("kind") == "element" and node.get("id"):
@@ -1048,10 +939,14 @@ def _refine_sequence(parent: list[dict[str, Any]], child: list[dict[str, Any]]) 
             if by_id:
                 match = by_id[0]
         if match is None:
-            result.append(deepcopy(node))
-        else:
-            used.add(match)
-            result.append(_merge_node(parent[match], node))
+            continue
+        used.add(match)
+        parent_node = prototype[match]
+        result.extend(_spec_constraint_diagnostics(parent_node, node, node))
+        result.extend(_prototype_constraint_diagnostics(
+            list(parent_node.get("children", [])),
+            list(node.get("children", [])),
+        ))
     return result
 
 def _effective_template(
@@ -1063,19 +958,27 @@ def _effective_template(
     key = _key(template)
     if key in memo:
         return deepcopy(memo[key])
-    if key in stack:
-        return _direct_template(template)
     effective = _direct_template(template)
-    for relation in _template_relations(template, {"SPEC"}):
-        parent = select_template(
+    # The owner implementation uses the first SPEC relationship as the editor
+    # prototype. It does not expand SPEC in getExpandedTemplate. Preserve the
+    # same order and use the prototype only to diagnose explicit broadening.
+    relation = next(iter(_template_relations(
+        template, {TEMPLATE_PROTOTYPE_RELATIONSHIP}
+    )), None)
+    if relation is not None:
+        prototype = select_template(
             templates,
             relation.get("template") or "",
             relation.get("flexibility"),
         )
-        if parent is None or _key(parent) in stack:
-            continue
-        parent_nodes = _effective_template(parent, templates, memo, stack + (key,))
-        effective = _refine_sequence(parent_nodes, effective)
+        if prototype is not None and _key(prototype) not in stack + (key,):
+            diagnostics = _prototype_constraint_diagnostics(
+                _direct_template(prototype), effective
+            )
+            if diagnostics and effective:
+                effective[0]["_constraint_diagnostics"] = (
+                    _unique_constraint_diagnostics(diagnostics)
+                )
     memo[key] = deepcopy(effective)
     return effective
 
@@ -2967,6 +2870,9 @@ def compile_cda(
         explicit_reachable, extensions,
     )
     reachable, missing = reachable_templates(templates, template_id, template_effective)
+    unresolved_prototypes = _unresolved_template_prototypes(
+        reachable, templates
+    )
     if strict and missing:
         formatted = ", ".join(
             f"{row.get('relation')} {row.get('template')} @ {row.get('flexibility') or 'dynamic'}"
@@ -3075,6 +2981,7 @@ def compile_cda(
         "assertions": assertions,
         "document": document,
         "unresolved_templates": missing,
+        "unresolved_template_prototypes": unresolved_prototypes,
         "datatype_inventory": inventory,
         "cda_model": {
             "definitions": len(definitions),
@@ -3089,6 +2996,7 @@ def compile_cda(
             "writable_value_targets": sum(bool(target.get("writable")) for target in targets.values()),
             "assertions": len(assertions),
             "constraint_diagnostics": len(constraint_diagnostics),
+            "unresolved_template_prototypes": len(unresolved_prototypes),
             "elements": element_count,
             "attributes": attribute_count,
         },

@@ -38,9 +38,7 @@ class Want(TypedDict, total=False):
 
 
 KINDS = {"dataset", "concept", "template", "valueset", "codesystem"}
-IDENTITY_RELATIONSHIPS = {
-    "SPEC", "INHERIT", "ORIGINAL", "EQUIV", "VERSION", "COPY",
-}
+TEMPLATE_PROTOTYPE_RELATIONSHIP = "SPEC"
 KIND_ORDER = {
     "dataset": 0,
     "template": 1,
@@ -54,7 +52,7 @@ def collect_references(
     root: ET.Element,
     *,
     soft: bool,
-    identity_only: bool = False,
+    original_only: bool = False,
     selected_concepts: set[str] | None = None,
 ) -> list[Want]:
     """Extract recursive dependencies or direct mapping-evidence references."""
@@ -79,8 +77,8 @@ def collect_references(
             "effective_date": "" if effective in (None, "dynamic") else str(effective),
             "project": project or project_context,
             "role": role or (
-                "identity-lineage"
-                if identity_only else "mapping-evidence"
+                "formal-origin"
+                if original_only else "mapping-evidence"
                 if soft else "structure"
             ),
         }
@@ -180,13 +178,9 @@ def collect_references(
                     )
                 continue
             if tag == "relationship" and node.get("template"):
-                if (node.get("type") or "") in {"SPEC", "VERSION", "COPY"}:
-                    add(
-                        "template",
-                        node.get("template"),
-                        node.get("flexibility"),
-                        node.get("prefix"),
-                    )
+                # Object relationships are implicit, unchecked hints in the
+                # DECOR contract. Even SPEC is an editor prototype rather than
+                # part of the executable include/contains closure.
                 continue
             if tag == "element":
                 add("template", node.get("contains"), node.get("flexibility"))
@@ -284,14 +278,15 @@ def collect_references(
                 )
             continue
 
-        # Mapping evidence is fetched directly.  The caller may subsequently
-        # close only the identity subset through ``identity_references``.
-        identity_selected = (
-            not identity_only
+        # Mapping evidence is fetched directly. The caller may subsequently
+        # close only formal inherit/contains origins through
+        # ``original_references``. Generic relationships never become origin.
+        original_selected = (
+            not original_only
             or not selected_concepts
             or enclosing_concept in selected_concepts
         )
-        if tag == "inherit" and identity_selected:
+        if tag in {"inherit", "contains"} and original_selected:
             add(
                 "concept",
                 node.get("ref"),
@@ -299,24 +294,20 @@ def collect_references(
                 node.get("prefix"),
                 node.get("datasetId"),
                 node.get("datasetEffectiveDate"),
-                analysis_only=identity_only,
+                analysis_only=original_only,
             )
             add(
                 "concept",
                 node.get("originalId"),
                 node.get("originalEffectiveDate"),
                 node.get("originalPrefix"),
-                analysis_only=identity_only,
+                analysis_only=original_only,
             )
         elif tag == "relationship":
             if (
                 node.get("ref")
                 and parent_tag == "concept"
-                and identity_selected
-                and (
-                    not identity_only
-                    or (node.get("type") or "") in IDENTITY_RELATIONSHIPS
-                )
+                and not original_only
             ):
                 add(
                     "concept",
@@ -325,22 +316,23 @@ def collect_references(
                     node.get("prefix"),
                     node.get("datasetId"),
                     node.get("datasetEffectiveDate"),
-                    analysis_only=identity_only,
                 )
-            if (
-                not identity_only
-                and node.get("template")
-                and (node.get("type") or "") not in {"SPEC", "VERSION", "COPY"}
-            ):
+            if not original_only and node.get("template"):
                 add(
                     "template",
                     node.get("template"),
                     node.get("flexibility"),
                     node.get("prefix"),
+                    role=(
+                        "template-prototype"
+                        if (node.get("type") or "")
+                        == TEMPLATE_PROTOTYPE_RELATIONSHIP
+                        else "mapping-evidence"
+                    ),
                 )
-        elif not identity_only and tag == "origconcept":
-            # Association evidence needs the exact endpoint and its identity
-            # ancestry, not every sibling in its containing dataset. Keeping
+        elif not original_only and tag == "origconcept":
+            # Association evidence needs the exact endpoint and its formal
+            # origin, not every sibling in its containing dataset. Keeping
             # this request concept-scoped bounds both the crawl and the graph
             # later indexed by the mapping compiler.
             add(
@@ -350,11 +342,11 @@ def collect_references(
                 node.get("ident") or node.get("prefix"),
                 node.get("datasetId"),
                 node.get("datasetEffectiveDate"),
-                role="association-lineage",
+                role="association-endpoint",
                 analysis_only=True,
             )
         elif (
-            not identity_only
+            not original_only
             and tag == "concept"
             and parent_tag == "templateAssociation"
         ):
@@ -365,7 +357,7 @@ def collect_references(
                 node.get("prefix"),
                 node.get("datasetId"),
                 node.get("datasetEffectiveDate"),
-                role="association-lineage",
+                role="association-endpoint",
                 analysis_only=True,
             )
 
@@ -400,12 +392,12 @@ def soft_references(root: ET.Element) -> list[Want]:
     return collect_references(root, soft=True)
 
 
-def identity_references(
+def original_references(
     root: ET.Element, selected_concepts: set[str] | None = None,
 ) -> list[Want]:
-    """Identity-only concept ancestry safe for transitive evidence closure."""
+    """Formal inherit/contains origins safe for transitive closure."""
     return collect_references(
-        root, soft=True, identity_only=True,
+        root, soft=True, original_only=True,
         selected_concepts=selected_concepts,
     )
 

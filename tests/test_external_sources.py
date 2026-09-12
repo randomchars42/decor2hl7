@@ -511,10 +511,20 @@ class ExternalSourceTests(unittest.TestCase):
             self.assertGreater(first_call_count, 0)
             self.assertEqual(mocked.call_count, 0)
             self.assertTrue(result["closure"]["crawl_complete"])
-            self.assertTrue(result["closure"]["degraded"])
+            self.assertFalse(result["closure"]["degraded"])
             self.assertIn(
                 "template:1.3.6.1.4.1.19376.1.5.3.1.4.9",
                 result["closure"]["waived"],
+            )
+            self.assertIn(
+                "template-prototype",
+                result["closure"]["resource_roles"][
+                    "template:1.3.6.1.4.1.19376.1.5.3.1.4.9"
+                ],
+            )
+            self.assertNotIn(
+                "template:1.3.6.1.4.1.19376.1.5.3.1.4.9",
+                result["closure"]["build_resources"],
             )
             self.assertTrue((release_dir / "manifest.json").is_file())
 

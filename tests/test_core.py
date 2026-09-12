@@ -42,7 +42,8 @@ from decor2hl7.retrieval.catalog import parse_releases, parse_transactions, tran
 from decor2hl7.retrieval.fetch import (
     RequestBudgetExceeded, _candidate_projects, _evidence_references, _fetch_want,
     _inventory, _payload_matches_request, _resolved_effective_date,
-    display_references, fetch_spec, hard_references, identity_references,
+    _satisfied, display_references, fetch_spec, hard_references,
+    original_references,
     soft_references,
 )
 from decor2hl7.retrieval.api import REQUIRED_PATHS, artifact_representations
@@ -477,25 +478,62 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("vital", model["fields"])
             self.assertEqual(model["fields"]["vital.temp"]["repeat"], "vital")
 
-    def test_contains_fallback_uses_only_identity_lineage(self) -> None:
+    def test_contains_uses_only_exact_terminal_original_locator(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             transaction = directory / "transaction.xml"
             external = directory / "external.xml"
             transaction.write_text('''
 <dataset>
+  <concept type="group" shortName="literal" id="literal-host">
+    <contains ref="literal-group" flexibility="2024-01-01"
+      originalId="external-group" originalEffectiveDate="2023-12-27"/>
+  </concept>
+  <concept type="group" shortName="original" id="original-host">
+    <contains ref="missing-alias" flexibility="2024-01-01"
+      originalId="external-group" originalEffectiveDate="2023-12-27"/>
+  </concept>
   <concept type="group" shortName="specified" id="specified-host">
-    <contains ref="specified-alias"/>
-    <relationship type="SPEC" ref="external-group"/>
+    <contains ref="specified-alias" flexibility="2023-12-28"
+      prefix="external-" datasetId="external-dataset"
+      datasetEffectiveDate="2023-10-25" iType="group"
+      iEffectiveDate="2023-12-27"/>
+    <relationship type="SPEC" ref="external-group" flexibility="2023-12-27"
+      prefix="external-" datasetId="external-dataset"
+      datasetEffectiveDate="2023-10-25" iType="group"
+      iEffectiveDate="2023-12-27"/>
   </concept>
   <concept type="group" shortName="adapted" id="adapted-host">
-    <contains ref="adapted-alias"/>
-    <relationship type="ADAPT" ref="external-group"/>
+    <contains ref="adapted-alias" flexibility="2023-12-28"
+      prefix="external-" datasetId="external-dataset"
+      datasetEffectiveDate="2023-10-25" iType="group"
+      iEffectiveDate="2023-12-27"/>
+    <relationship type="ADAPT" ref="external-group" flexibility="2023-12-27"
+      prefix="external-" datasetId="external-dataset"
+      datasetEffectiveDate="2023-10-25" iType="group"
+      iEffectiveDate="2023-12-27"/>
+  </concept>
+  <concept type="group" shortName="ordinary_spec" id="ordinary-spec-host">
+    <contains ref="ordinary-alias" flexibility="2023-12-28"
+      prefix="other-" datasetId="other-dataset"
+      datasetEffectiveDate="2023-10-25" iType="group"
+      iEffectiveDate="2023-12-27"/>
+    <relationship type="SPEC" ref="external-group" flexibility="2023-12-27"
+      prefix="external-" datasetId="external-dataset"
+      datasetEffectiveDate="2023-10-25" iType="group"
+      iEffectiveDate="2023-12-27"/>
   </concept>
 </dataset>''', encoding="utf-8")
             external.write_text('''
 <dataset>
-  <concept type="group" shortName="medication" id="external-group">
+  <concept type="group" shortName="literal-source" id="literal-group"
+    effectiveDate="2024-01-01">
+    <concept type="item" shortName="literal_value" id="literal-value">
+      <name>Literal value</name>
+    </concept>
+  </concept>
+  <concept type="group" shortName="medication" id="external-group"
+    effectiveDate="2023-12-27">
     <concept type="item" shortName="value" id="external-value">
       <name>Value</name>
     </concept>
@@ -504,8 +542,24 @@ class CoreTests(unittest.TestCase):
 
             model = compile_model(transaction, [external])
 
+            self.assertIn("literal.literal_value", model["fields"])
+            self.assertNotIn("literal.value", model["fields"])
+            self.assertIn("original.value", model["fields"])
             self.assertIn("specified.value", model["fields"])
             self.assertNotIn("adapted.value", model["fields"])
+            self.assertNotIn("ordinary_spec.value", model["fields"])
+            self.assertEqual(
+                model["groups"]["specified"]["contains_resolution"],
+                "terminal-original-SPEC",
+            )
+            self.assertEqual(
+                model["groups"]["literal"]["contains_resolution"],
+                "contains",
+            )
+            self.assertEqual(
+                model["groups"]["original"]["contains_resolution"],
+                "originalId",
+            )
 
     def test_transaction_source_controls_selection_and_formal_domain(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -546,11 +600,11 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(len(field["terminology_associations"]), 2)
             self.assertEqual(
                 {row["scope"] for row in field["terminology_associations"]},
-                {"lineage-concept", "related-concept"},
+                {"original-concept", "related-concept"},
             )
             self.assertEqual(
                 [(row["code"], row["scope"]) for row in field["codes"]],
-                [("B", "lineage-concept")],
+                [("B", "original-concept")],
             )
             defaults = mapping.code_mapping_defaults(model)["fields"]["status"]
             self.assertEqual(defaults["A"], "Alpha")
@@ -881,6 +935,29 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["target"], "Timing.offset")
 
+    def test_context_labels_follow_formal_origins_not_relationships(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "concepts.xml"
+            source.write_text(
+                """<decor><dataset>
+                <concept id="current"><name>Current</name>
+                  <inherit ref="original"/>
+                  <relationship type="ADAPT" ref="related"/>
+                </concept>
+                <concept id="original"><name>Formal label</name></concept>
+                <concept id="related"><name>Relationship label</name></concept>
+                </dataset></decor>""",
+                encoding="utf-8",
+            )
+            labels, neighbours = mapping_compiler._formal_origin_label_index(
+                [source]
+            )
+        evidence = mapping_compiler._formal_origin_labels(
+            "current", labels, neighbours
+        )
+        self.assertIn(("original", 1, "Formal label"), evidence)
+        self.assertFalse(any(row[0] == "related" for row in evidence))
+
     def test_cda_guide_merges_xml_context_and_explains_candidates(self) -> None:
         def element(name: str, children: list[dict] | None = None, **values: object) -> dict:
             return {
@@ -1179,16 +1256,16 @@ class CoreTests(unittest.TestCase):
                 "groups": {},
                 "fields": {},
             }
-            # The strict compiler still refuses an incomplete closure; the
-            # tolerant build path omits and reports it (`DEC-010`).
-            with self.assertRaisesRegex(ValueError, "closure is incomplete"):
-                compile_cda([project], model)
-            compiled = compile_cda_model([project], model)
+            # SPEC is an optional editor prototype, not part of the
+            # executable include/contains closure. Its exact absence remains
+            # visible but does not make either compile mode incomplete.
+            compiled = compile_cda([project], model)
+            self.assertEqual(compiled["unresolved_templates"], [])
             self.assertIn(
                 ("SPEC", "product", "2005-09-07"),
                 {
                     (row["relation"], row["template"], row["flexibility"])
-                    for row in compiled["unresolved_templates"]
+                    for row in compiled["unresolved_template_prototypes"]
                 },
             )
             child = {
@@ -2069,7 +2146,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(rows[0]["kind"], "SCHEMATRON_CONSTRAINT")
         self.assertIn("SCHEMATRON_CONSTRAINT(required)", rows[0]["chain"])
 
-    def test_weak_lineage_name_drift_stays_review_only(self) -> None:
+    def test_relationship_paths_stay_review_only_but_contains_is_origin(self) -> None:
         target = {
             "template_id": "encounter", "template_effective_date": "2026",
             "element_id": "low", "kind": "element", "writable": True,
@@ -2095,24 +2172,66 @@ class CoreTests(unittest.TestCase):
             "source_index": {"encounter|ID:low": ["Encounter.low"]},
             "targets": {"Encounter.low": target},
         }
-        candidates = mapping_compiler._ta_candidates(
-            field,
-            {"current": {("ADAPT", "legacy")}},
+        for relationship in (
+            "REPL", "SPEC", "GEN", "COPY", "ADAPT", "EQUIV",
+            "VERSION", "BACKWD", "DRIV",
+        ):
+            with self.subTest(relationship=relationship):
+                candidates = mapping_compiler._ta_candidates(
+                    field,
+                    {"current": {(f"relationship:{relationship}", "legacy")}},
+                    associations,
+                    {"legacy": "Admission time"},
+                    cda_model,
+                )
+                self.assertEqual(len(candidates), 1)
+                candidate = candidates[0]
+                self.assertFalse(candidate["actionable"])
+                self.assertEqual(
+                    candidate["semantic_blocked"],
+                    "relationship_requires_review",
+                )
+                self.assertIn("relationship name drift", candidate["warnings"])
+                self.assertTrue(any(
+                    "not formal concept inheritance" in warning
+                    for warning in candidate["warnings"]
+                ))
+                strengthened = mapping_compiler._schematron_constraint_candidates(
+                    field, candidates, cda_model, None,
+                )
+                self.assertEqual(len(strengthened), 1)
+                self.assertFalse(strengthened[0]["actionable"])
+                transformed = mapping_compiler._semantic_transform_candidates(
+                    {
+                        **field,
+                        "type": "code",
+                        "accepted_values": {
+                            "Present": {"synonyms": []},
+                            "Not present": {"synonyms": []},
+                        },
+                    },
+                    candidates,
+                    {"targets": {
+                        **cda_model["targets"],
+                        "Encounter.negationInd": {
+                            **target,
+                            "path": "hl7:observation/@negationInd",
+                            "datatype": "BL",
+                        },
+                    }},
+                )
+                self.assertEqual(transformed, [])
+
+        contained = mapping_compiler._ta_candidates(
+            {**field, "name": "Admission time"},
+            {"current": {("contains", "legacy")}},
             associations,
             {"legacy": "Admission time"},
             cda_model,
         )
-        self.assertEqual(len(candidates), 1)
-        candidate = candidates[0]
-        self.assertFalse(candidate["actionable"])
-        self.assertEqual(candidate["semantic_blocked"], "lineage_name_drift")
-        self.assertIn("lineage name drift", candidate["warnings"])
-
-        strengthened = mapping_compiler._schematron_constraint_candidates(
-            field, candidates, cda_model, None,
-        )
-        self.assertEqual(len(strengthened), 1)
-        self.assertFalse(strengthened[0]["actionable"])
+        self.assertEqual(len(contained), 1)
+        self.assertTrue(contained[0]["actionable"])
+        self.assertEqual(contained[0]["confidence"], "STRONG")
 
     def test_semantic_negation_transform_beats_unrelated_named_code_slot(self) -> None:
         model = {"groups": {}, "fields": {"measures.isolation": {
@@ -2153,6 +2272,46 @@ class CoreTests(unittest.TestCase):
             audit["fields"]["measures.isolation"]["alternatives"][0]["target"],
             "isolation.statusCode",
         )
+
+    def test_semantic_negation_does_not_collapse_a_multivalued_domain(self) -> None:
+        model = {"groups": {}, "fields": {"triage.complaint": {
+            "name": "Complaint", "short_name": "Complaint", "concept": "complaint",
+            "type": "code", "repeat_chain": [], "value_sets": ["complaints"],
+            "codes": [], "accepted_values": {
+                "Chest pain": {"synonyms": []},
+                "Pain not caused by trauma": {"synonyms": []},
+                "Headache": {"synonyms": []},
+            },
+        }}}
+        common = {
+            "template_id": "complaint", "template_name": "complaint",
+            "template_display_name": "Complaint", "renderable": True,
+            "writable": True, "locations": ["0.0"], "repeat_ancestors": [],
+            "datatype_derived": False,
+        }
+        cda_model: dict[str, Any] = {"targets": {
+            "complaint.value": {
+                **common, "path": "hl7:observation/hl7:value", "datatype": "CD",
+                "value_sets": ["complaints"],
+                "value_representation": {"kind": "coded"}, "logical_types": ["code"],
+            },
+            "complaint.negationInd": {
+                **common, "path": "hl7:observation/@negationInd", "datatype": "BL",
+                "value_representation": {"kind": "boolean"},
+                "logical_types": ["boolean"],
+            },
+        }}
+        proposal, audit, _, _ = mapping_compiler.cda_mapping_audit(
+            model, cda_model, []
+        )
+        self.assertEqual(
+            proposal["fields"]["triage.complaint"], "complaint.value"
+        )
+        self.assertFalse(any(
+            row["target"] == "complaint.negationInd"
+            and row["kind"] == "TRANSFORM"
+            for row in audit["fields"]["triage.complaint"]["alternatives"]
+        ))
 
     def test_boolean_act_presence_uses_template_negation_semantics(self) -> None:
         model = {"groups": {}, "fields": {"diagnostics.spine_xray": {
@@ -2278,6 +2437,13 @@ class CoreTests(unittest.TestCase):
             "entry": {
                 "path": "hl7:section/hl7:entry", "locations": ["0.2"],
                 "renderable": True, "repeatable": True,
+            },
+            # Document plumbing can be physically nearer and even look type-
+            # compatible in a reduced fixture; it is never a clinical repeat
+            # payload fallback.
+            "entry.realmCode": {
+                **common, "path": "hl7:entry/hl7:realmCode",
+                "element_name": "hl7:realmCode", "locations": ["0.2.0"],
             },
             "organizer.effectiveTime": {
                 **common, "path": "hl7:organizer/hl7:effectiveTime",
@@ -3933,14 +4099,55 @@ class CoreTests(unittest.TestCase):
             <relationship type="SPEC" ref="old-concept" flexibility="2020-01-01" prefix="aktin-" datasetId="old-dataset" datasetEffectiveDate="2020-01-01"/>
             <contains ref="external-root" datasetId="external-dataset" datasetEffectiveDate="2023-01-01" prefix="ext-"/>
           </concept>
+          <template id="doc">
+            <relationship type="SPEC" template="prototype" flexibility="2019"/>
+            <relationship type="VERSION" template="old-template" flexibility="2018"/>
+          </template>
         </dataset>''')
         hard = hard_references(root)
         soft = soft_references(root)
         self.assertEqual({row["id"] for row in hard if row["kind"] == "dataset"}, {"external-dataset"})
         self.assertNotIn("old-dataset", {row["id"] for row in hard})
-        self.assertEqual({row["id"] for row in soft if row["kind"] == "concept"}, {"old-concept"})
+        self.assertEqual(
+            {row["id"] for row in soft if row["kind"] == "concept"},
+            {"old-concept", "external-root"},
+        )
+        self.assertEqual(
+            {
+                (row["id"], row["role"])
+                for row in soft if row["kind"] == "template"
+            },
+            {
+                ("prototype", "template-prototype"),
+                ("old-template", "mapping-evidence"),
+            },
+        )
+        self.assertNotIn(
+            "prototype", {row["id"] for row in hard if row["kind"] == "template"}
+        )
 
-    def test_association_endpoints_and_identity_lineage_are_typed(self) -> None:
+    def test_dynamic_request_is_not_satisfied_by_arbitrary_frozen_embed(self) -> None:
+        inventory = {
+            ("valueset", "1.2.3", "2015-01-01"),
+            ("template", "4.5.6", ""),
+        }
+        self.assertFalse(_satisfied(
+            {"kind": "valueset", "id": "1.2.3", "effective_date": ""},
+            inventory,
+        ))
+        self.assertTrue(_satisfied(
+            {
+                "kind": "valueset", "id": "1.2.3",
+                "effective_date": "2015-01-01",
+            },
+            inventory,
+        ))
+        self.assertTrue(_satisfied(
+            {"kind": "template", "id": "4.5.6", "effective_date": ""},
+            inventory,
+        ))
+
+    def test_association_endpoints_and_formal_origins_are_typed(self) -> None:
         root = ET.fromstring('''<project>
           <concept id="child">
             <inherit ref="parent" effectiveDate="2020" prefix="base-"
@@ -3950,6 +4157,12 @@ class CoreTests(unittest.TestCase):
               prefix="base-"/>
             <relationship type="ADAPT" ref="adapted" flexibility="2017"
               prefix="weak-"/>
+          </concept>
+          <concept id="contained-child">
+            <contains ref="contained-parent" flexibility="2021"
+              prefix="base-" originalId="contained-original"
+              originalEffectiveDate="2019"
+              originalPrefix="original-"/>
           </concept>
           <templateAssociation templateId="active" effectiveDate="2026">
             <concept ref="dynamic-endpoint" effectiveDate="2025"
@@ -3979,10 +4192,12 @@ class CoreTests(unittest.TestCase):
                 ("original", "2019", "original-", "mapping-evidence"),
                 ("spec", "2018", "base-", "mapping-evidence"),
                 ("adapted", "2017", "weak-", "mapping-evidence"),
-                ("dynamic-endpoint", "2025", "source-", "association-lineage"),
-                ("static-endpoint", "2016", "external-", "association-lineage"),
-                ("second-static-endpoint", "2016", "external-", "association-lineage"),
-                ("bare-static-endpoint", "2014", "bare-", "association-lineage"),
+                ("contained-parent", "2021", "base-", "mapping-evidence"),
+                ("contained-original", "2019", "original-", "mapping-evidence"),
+                ("dynamic-endpoint", "2025", "source-", "association-endpoint"),
+                ("static-endpoint", "2016", "external-", "association-endpoint"),
+                ("second-static-endpoint", "2016", "external-", "association-endpoint"),
+                ("bare-static-endpoint", "2014", "bare-", "association-endpoint"),
             },
         )
         self.assertEqual(
@@ -4001,21 +4216,22 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(
             {
                 (row["id"], row["effective_date"], row["role"])
-                for row in identity_references(root)
+                for row in original_references(root)
             },
             {
-                ("parent", "2020", "identity-lineage"),
-                ("original", "2019", "identity-lineage"),
-                ("spec", "2018", "identity-lineage"),
+                ("parent", "2020", "formal-origin"),
+                ("original", "2019", "formal-origin"),
+                ("contained-parent", "2021", "formal-origin"),
+                ("contained-original", "2019", "formal-origin"),
             },
         )
         self.assertTrue(all(
             row.get("analysis_only")
             for row in soft
-            if row.get("role") == "association-lineage"
+            if row.get("role") == "association-endpoint"
         ))
         self.assertTrue(all(
-            row.get("analysis_only") for row in identity_references(root)
+            row.get("analysis_only") for row in original_references(root)
         ))
 
     def test_known_owner_stops_broad_repository_probe(self) -> None:
@@ -5264,7 +5480,7 @@ class CoreTests(unittest.TestCase):
                 for url in calls
             ))
 
-    def test_soft_evidence_closes_identity_but_not_weak_relationships(self) -> None:
+    def test_soft_evidence_closes_formal_origin_but_not_relationships(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release_dir = Path(tmp) / "spec" / "2026.1.2"
             tx_dir = release_dir / "transactions" / "tx"
@@ -5355,7 +5571,7 @@ class CoreTests(unittest.TestCase):
                 result["closure"]["evidence_resources"],
             )
             self.assertIn(
-                "association-lineage",
+                "association-endpoint",
                 result["closure"]["resource_roles"][
                     "concept:association@2016|context=association-dataset@2016"
                 ],
@@ -5429,7 +5645,7 @@ class CoreTests(unittest.TestCase):
         b = {"values": {}, "instances": {"med": [{"source": "medications", "row": 99, "values": {"drug": "A"}}]}}
         self.assertEqual(state.fingerprint(a), state.fingerprint(b))
 
-    def test_spec_refinement_drops_parent_only_nested_choices_and_replaces_contains(self) -> None:
+    def test_spec_prototype_does_not_merge_parent_constraints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project.xml"
             project.write_text('''<project>
@@ -5441,6 +5657,7 @@ class CoreTests(unittest.TestCase):
               </template>
               <template id="base" effectiveDate="2020-01-01" name="Base">
                 <element name="hl7:ClinicalDocument" id="root">
+                  <attribute name="classCode" value="BASE"/>
                   <element name="hl7:component" id="component" contains="old" flexibility="2020-01-01" minimumMultiplicity="1" maximumMultiplicity="1">
                     <element name="hl7:oldChoice" id="old-choice" datatype="ST"/>
                   </element>
@@ -5449,6 +5666,7 @@ class CoreTests(unittest.TestCase):
               <template id="doc" effectiveDate="2026-01-01" name="Doc">
                 <relationship type="SPEC" template="base" flexibility="2020-01-01"/>
                 <element name="hl7:ClinicalDocument" id="root">
+                  <attribute name="moodCode" value="EVN"/>
                   <element name="hl7:component" id="component" contains="new" flexibility="2026-01-01" maximumMultiplicity="1">
                     <element name="hl7:newChoice" id="new-choice" datatype="ST"/>
                   </element>
@@ -5459,18 +5677,20 @@ class CoreTests(unittest.TestCase):
                 [project],
                 {"meta": {"template_id": "doc", "template_effective_date": "2026-01-01"}, "groups": {}, "fields": {}},
             )
-            old_choice = [t for t in compiled["targets"].values() if t.get("element_id") == "old-choice"][0]
             new_choice = [t for t in compiled["targets"].values() if t.get("element_id") == "new-choice"][0]
-            old_value = [t for t in compiled["targets"].values() if t.get("element_id") == "old-value"][0]
             new_value = [t for t in compiled["targets"].values() if t.get("element_id") == "new-value"][0]
-            self.assertEqual(old_choice.get("locations"), [])
-            self.assertEqual(old_value.get("locations"), [])
+            self.assertFalse(any(
+                target.get("element_id") in {"old-choice", "old-value"}
+                for target in compiled["targets"].values()
+            ))
             self.assertEqual(len(new_choice.get("locations", [])), 1)
             self.assertEqual(len(new_value.get("locations", [])), 1)
             component = compiled["document"][0]["children"][0]
             self.assertEqual(component["contains"], "new")
             self.assertEqual(component["contains_flexibility"], "2026-01-01")
-            self.assertEqual(component["min"], 1)  # inherited from the matched SPEC wrapper
+            self.assertEqual(component["min"], 0)
+            self.assertEqual(compiled["document"][0]["fixed"], {"moodCode": "EVN"})
+            self.assertEqual(compiled["stats"]["reachable_templates"], 2)
 
     def test_codes_mapping_must_resolve_to_canonical_value(self) -> None:
         errors = validate.check_config(
@@ -6062,22 +6282,34 @@ class CoreTests(unittest.TestCase):
 
 
 
-    def test_identity_inheritance_is_transitive_but_adapt_is_not_identity(self) -> None:
+    def test_formal_original_enrichment_excludes_all_relationship_types(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             tx = d / "tx.xml"; extra = d / "extra.xml"
             tx.write_text('''<dataset>
-              <concept type="item" shortName="derived" id="derived"><name>Derived</name><relationship type="SPEC" ref="mid"/></concept>
+              <concept type="item" shortName="inherited" id="inherited"><name>Inherited</name><inherit ref="mid" effectiveDate="2020" originalId="root" originalEffectiveDate="2019"/></concept>
+              <concept type="item" shortName="contained" id="contained"><name>Contained</name><contains ref="mid" flexibility="2020" originalId="root" originalEffectiveDate="2019"/></concept>
+              <concept type="item" shortName="specific" id="specific"><name>Specific</name><relationship type="SPEC" ref="root"/></concept>
               <concept type="item" shortName="adapted" id="adapted"><name>Adapted</name><relationship type="ADAPT" ref="root"/></concept>
+              <concept type="item" shortName="equivalent" id="equivalent"><name>Equivalent</name><relationship type="EQUIV" ref="root"/></concept>
+              <concept type="item" shortName="copied" id="copied"><name>Copied</name><relationship type="COPY" ref="root"/></concept>
+              <concept type="item" shortName="versioned" id="versioned"><name>Versioned</name><relationship type="VERSION" ref="root"/></concept>
             </dataset>''', encoding="utf-8")
             extra.write_text('''<dataset>
-              <concept type="item" shortName="mid" id="mid"><name>Mid</name><inherit ref="root"/></concept>
-              <concept type="item" shortName="root" id="root"><name>Root</name><valueDomain type="quantity"><property unit="mg"/></valueDomain></concept>
+              <concept type="item" shortName="mid" id="mid" effectiveDate="2020"><name>Mid</name><inherit ref="root" effectiveDate="2019"/></concept>
+              <concept type="item" shortName="root" id="root" effectiveDate="2019"><name>Root</name><valueDomain type="quantity"><property unit="mg"/></valueDomain></concept>
             </dataset>''', encoding="utf-8")
             model = compile_model(tx, [extra])
-            self.assertEqual(model["fields"]["derived"]["type"], "quantity")
-            self.assertEqual(model["fields"]["derived"]["unit"], "mg")
-            self.assertEqual(model["fields"]["adapted"]["type"], "text")
+            self.assertEqual(model["fields"]["inherited"]["type"], "quantity")
+            self.assertEqual(model["fields"]["inherited"]["unit"], "mg")
+            self.assertEqual(model["fields"]["inherited"]["name"], "Root")
+            self.assertEqual(model["fields"]["contained"]["type"], "quantity")
+            self.assertEqual(model["fields"]["contained"]["unit"], "mg")
+            self.assertEqual(model["fields"]["contained"]["name"], "Root")
+            for path in (
+                "specific", "adapted", "equivalent", "copied", "versioned",
+            ):
+                self.assertEqual(model["fields"][path]["type"], "text")
 
 
 

@@ -48,7 +48,7 @@
       "source_version": "HL7 CCD 1.0 'Product' template; only revision 2007-04-01T00:00:00 is published",
       "completeness": "spec-only",
       "license": "HL7 Continuity of Care Document publication; consulted as evidence only",
-      "reason": "Settled absence, reviewed 2026-09-03. This SPEC parent is requested at 2005-09-07T00:00:00 by the medication branch. The Continuity of Care Document project ccd1- is the only publisher of the OID and holds exactly one revision, 2007-04-01T00:00:00, confirmed by the project template list and by the cross-project lookup /template/2.16.840.1.113883.10.20.1.53. The 2007-04-01 revision is already cached from pmp- and must not substitute the requested one (DEC-004). Its children 1.3.6.1.4.1.19376.1.5.3.1.4.7.2 and 1.2.276.0.76.10.4025 compile from their own constraints plus the pinned CDA/RIM expansion, so the omission is scoped to the SPEC refinement (DEC-010)."
+      "reason": "Settled absence, reviewed 2026-09-03 and reclassified by DEC-037. This first-SPEC editor prototype is requested at 2005-09-07T00:00:00 by the medication branch. The Continuity of Care Document project ccd1- is the only publisher of the OID and holds exactly one revision, 2007-04-01T00:00:00, confirmed by the project template list and cross-project lookup. The published revision must not substitute the requested one (DEC-004). The absence is informational prototype evidence: current templates compile from their own stored constraints plus executable include/contains and the pinned CDA/RIM expansion (DEC-031, DEC-037)."
     }
   }
 }

@@ -10,6 +10,12 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-11-art-decor-origin-relationship-prototype-semantics.md`](2026-09-11-art-decor-origin-relationship-prototype-semantics.md)
+  implements the ART-DECOR owner distinction between formal concept origins,
+  implicit unchecked relationships, executable template containment, and the
+  first SPEC editor prototype; records the authoritative rebuild and 94→85
+  generated-mapping comparison; and supersedes earlier executable-relationship
+  conclusions.
 - [`2026-09-11-medication-dataset-containment.md`](2026-09-11-medication-dataset-containment.md)
   verifies the transaction's literal medication containment alias and exact
   `SPEC` target, counts the current 25 item concepts, records the later

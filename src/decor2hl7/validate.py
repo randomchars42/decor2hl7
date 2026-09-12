@@ -568,8 +568,8 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
         source_key = assertion_key[:4]
         compiled_nodes = compiled_by_source.get(source_key, [])
         if not compiled_nodes:
-            # The source element itself is not part of the effective specialized
-            # document (for example a parent-only prototype choice). Its assert
+            # The source element itself is not part of the executable document
+            # (for example an editor-prototype-only choice). Its assert
             # is therefore not an effective runtime constraint.
             continue
         match = next((

@@ -404,19 +404,76 @@ def _value_domain(domain: ET.Element, node: dict[str, Any]) -> None:
 def _association_scope(
     source_concept: str | None,
     selected_concept: str | None,
-    identity_refs: Iterable[str] = (),
+    original_concepts: Iterable[str] = (),
 ) -> str:
     """Classify a direct association without discarding its provenance."""
     source = str(source_concept or "")
     selected = str(selected_concept or "")
     if source and source == selected:
         return "selected-concept"
-    # ART-DECOR keeps the predecessor conceptId on associations copied through
-    # inheritance. Require the explicit identity edge: suffix similarity alone
-    # also occurs for option concepts and is not semantic evidence.
-    if source and source in {str(value) for value in identity_refs if value}:
-        return "lineage-concept"
+    # ART-DECOR keeps the original conceptId on associations copied through
+    # formal inherit/contains compilation. Require that explicit original:
+    # suffix similarity also occurs for option concepts and is not evidence.
+    if source and source in {
+        str(value) for value in original_concepts if value
+    }:
+        return "original-concept"
     return "related-concept"
+
+
+def _reference_metadata(node: ET.Element, *, contains: bool) -> dict[str, str]:
+    """Preserve the owner-defined inherit/contains reference attributes."""
+    result = {
+        "ref": node.get("ref") or "",
+        (
+            "flexibility" if contains else "effective_date"
+        ): (
+            node.get("flexibility") if contains
+            else node.get("effectiveDate")
+        ) or "",
+        "prefix": node.get("prefix") or "",
+        "dataset_id": node.get("datasetId") or "",
+        "dataset_effective_date": node.get("datasetEffectiveDate") or "",
+        "original_id": node.get("originalId") or "",
+        "original_effective_date": node.get("originalEffectiveDate") or "",
+        "original_prefix": node.get("originalPrefix") or "",
+        # ``i*`` is the terminology used by the ART-DECOR compiled response
+        # for the resolved referenced concept.
+        "i_type": node.get("iType") or "",
+        "i_effective_date": node.get("iEffectiveDate") or "",
+        "i_status_code": node.get("iStatusCode") or "",
+    }
+    return {key: value for key, value in result.items() if value}
+
+
+def _relationship_metadata(node: ET.Element) -> dict[str, str]:
+    """Retain an ART-DECOR relationship as provenance, never as inheritance."""
+    result = {
+        "type": node.get("type") or "REL",
+        "ref": node.get("ref") or "",
+        "flexibility": node.get("flexibility") or "",
+        "prefix": node.get("prefix") or "",
+        "dataset_id": node.get("datasetId") or "",
+        "dataset_effective_date": node.get("datasetEffectiveDate") or "",
+        "i_type": node.get("iType") or "",
+        "i_effective_date": node.get("iEffectiveDate") or "",
+        "i_status_code": node.get("iStatusCode") or "",
+    }
+    return {key: value for key, value in result.items() if value}
+
+
+def _formal_original_ids(node: Mapping[str, Any]) -> list[str]:
+    """Return only ids from formal inherit/contains original resolution."""
+    values: list[str] = []
+    for kind in ("inherit", "contains"):
+        reference = node.get(kind)
+        if not isinstance(reference, Mapping):
+            continue
+        values.extend((
+            str(reference.get("ref") or ""),
+            str(reference.get("original_id") or ""),
+        ))
+    return list(dict.fromkeys(value for value in values if value))
 
 
 def _concept_node(concept: ET.Element, path: str, parent: str | None) -> dict[str, Any]:
@@ -440,9 +497,10 @@ def _concept_node(concept: ET.Element, path: str, parent: str | None) -> dict[st
         "value_set_refs": [],
         "codes": [],
         "contains": None,
-        "external_refs": [],
-        "identity_refs": [],
+        "inherit": None,
+        "relationships": [],
         "terminology_associations": [],
+        "effective_date": concept.get("effectiveDate") or "",
     }
     for child in concept:
         kind = local(child.tag)
@@ -460,17 +518,11 @@ def _concept_node(concept: ET.Element, path: str, parent: str | None) -> dict[st
                 "effective_date": child.get("effectiveDate") or child.get("flexibility") or "",
             })
         elif kind == "contains" and child.get("ref"):
-            result["contains"] = child.get("ref")
+            result["contains"] = _reference_metadata(child, contains=True)
         elif kind == "inherit" and child.get("ref"):
-            result["external_refs"].append(child.get("ref"))
-            result["identity_refs"].append(child.get("ref"))
-            if child.get("originalId"):
-                result["external_refs"].append(child.get("originalId"))
-                result["identity_refs"].append(child.get("originalId"))
+            result["inherit"] = _reference_metadata(child, contains=False)
         elif kind == "relationship" and child.get("ref"):
-            result["external_refs"].append(child.get("ref"))
-            if (child.get("type") or "") in {"SPEC", "INHERIT", "ORIGINAL", "EQUIV", "COPY", "VERSION"}:
-                result["identity_refs"].append(child.get("ref"))
+            result["relationships"].append(_relationship_metadata(child))
         elif kind == "terminologyAssociation":
             association = {
                 "source_concept_id": child.get("conceptId") or concept.get("id"),
@@ -498,10 +550,10 @@ def _concept_node(concept: ET.Element, path: str, parent: str | None) -> dict[st
         scope = _association_scope(
             association.get("source_concept_id"),
             concept.get("id"),
-            result["identity_refs"],
+            _formal_original_ids(result),
         )
         association["scope"] = scope
-        if association.get("code") and scope in {"selected-concept", "lineage-concept"}:
+        if association.get("code") and scope in {"selected-concept", "original-concept"}:
             result["codes"].append({
                 "code": association.get("code"),
                 "code_system": association.get("code_system"),
@@ -512,8 +564,6 @@ def _concept_node(concept: ET.Element, path: str, parent: str | None) -> dict[st
                 "applies_to_selected_concept": True,
                 "form": "analysis",
             })
-    result["external_refs"] = list(dict.fromkeys(result["external_refs"]))
-    result["identity_refs"] = list(dict.fromkeys(result["identity_refs"]))
     result["value_sets"] = list(dict.fromkeys(result["value_sets"]))
     seen_refs: set[tuple[str, str]] = set()
     refs: list[dict[str, str]] = []
@@ -588,7 +638,7 @@ def _apply_source_selections(
             applied["scope"] = _association_scope(
                 applied.get("source_concept_id"),
                 node.get("concept"),
-                node.get("identity_refs", []),
+                _formal_original_ids(node),
             )
             if applied not in node["terminology_associations"]:
                 node["terminology_associations"].append(applied)
@@ -601,7 +651,7 @@ def _apply_source_selections(
                 })
             code = str(applied.get("code") or "")
             scope = str(applied.get("scope") or "related-concept")
-            if code and scope in {"selected-concept", "lineage-concept"}:
+            if code and scope in {"selected-concept", "original-concept"}:
                 candidate = {
                     "code": code,
                     "code_system": applied.get("code_system"),
@@ -646,23 +696,130 @@ def _parse_nodes(root: ET.Element) -> dict[str, dict[str, Any]]:
     return nodes
 
 
-def _graft(base: dict[str, dict[str, Any]], extra: dict[str, dict[str, Any]]) -> int:
-    by_concept = {node.get("concept"): path for path, node in extra.items() if node.get("concept")}
+def _concept_catalog(
+    node_sets: Iterable[dict[str, dict[str, Any]]],
+) -> dict[str, list[tuple[dict[str, dict[str, Any]], str, dict[str, Any]]]]:
+    catalog: dict[
+        str, list[tuple[dict[str, dict[str, Any]], str, dict[str, Any]]]
+    ] = {}
+    for nodes in node_sets:
+        for path, node in nodes.items():
+            concept = str(node.get("concept") or "")
+            if concept:
+                catalog.setdefault(concept, []).append((nodes, path, node))
+    return catalog
+
+
+def _select_concept(
+    catalog: Mapping[
+        str, list[tuple[dict[str, dict[str, Any]], str, dict[str, Any]]]
+    ],
+    concept_id: str,
+    effective_date: str = "",
+) -> tuple[dict[str, dict[str, Any]], str, dict[str, Any]] | None:
+    rows = list(catalog.get(concept_id, []))
+    if effective_date:
+        rows = [
+            row for row in rows
+            if str(row[2].get("effective_date") or "") == effective_date
+        ]
+    elif len(rows) > 1:
+        newest = max(str(row[2].get("effective_date") or "") for row in rows)
+        rows = [
+            row for row in rows
+            if str(row[2].get("effective_date") or "") == newest
+        ]
+    # An ambiguous concept revision must not be chosen by input order.
+    return rows[0] if len(rows) == 1 else None
+
+
+def _terminal_original_spec(
+    host: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """Recognize ART-DECOR's compiled terminal-original SPEC locator.
+
+    ``getFullConcept`` emits this relationship only after it has followed a
+    formal inherit/contains chain. Matching the complete contains context keeps
+    an ordinary SPEC relationship from becoming a structural reference.
+    """
+    contains = host.get("contains")
+    if not isinstance(contains, Mapping):
+        return None
+    original_effective = str(contains.get("i_effective_date") or "")
+    dataset_id = str(contains.get("dataset_id") or "")
+    if not original_effective or not dataset_id:
+        return None
+    matches: set[tuple[str, str]] = set()
+    for relationship in host.get("relationships", []):
+        if not isinstance(relationship, Mapping):
+            continue
+        if str(relationship.get("type") or "") != "SPEC":
+            continue
+        reference = str(relationship.get("ref") or "")
+        flexibility = str(relationship.get("flexibility") or "")
+        if not reference or flexibility != original_effective:
+            continue
+        if str(relationship.get("dataset_id") or "") != dataset_id:
+            continue
+        for key in ("dataset_effective_date", "prefix", "i_type"):
+            expected = str(contains.get(key) or "")
+            actual = str(relationship.get(key) or "")
+            if expected and actual != expected:
+                break
+        else:
+            related_effective = str(
+                relationship.get("i_effective_date") or ""
+            )
+            if related_effective and related_effective != original_effective:
+                continue
+            matches.add((reference, flexibility))
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _graft_contains(
+    base: dict[str, dict[str, Any]],
+    extra_sets: Iterable[dict[str, dict[str, Any]]],
+) -> int:
+    """Attach only a formally contained concept's stored descendants."""
+    extras = list(extra_sets)
+    catalog = _concept_catalog(extras)
     additions: dict[str, dict[str, Any]] = {}
     for host_path, host in list(base.items()):
-        reference = host.get("contains")
-        if not reference:
+        contains = host.get("contains")
+        if not isinstance(contains, Mapping):
             continue
-        # Prefer the literal containment target, then only explicit
-        # identity-style lineage.  A weak derivation such as ADAPT can inform
-        # mapping review, but it does not establish that the derived concept's
-        # children define this dataset container.
-        candidates = [reference] + list(host.get("identity_refs") or [])
-        source = next((by_concept[item] for item in candidates if item in by_concept), None)
-        if not source:
+        literal = (
+            str(contains.get("ref") or ""),
+            str(contains.get("flexibility") or ""),
+            "contains",
+        )
+        original = (
+            str(contains.get("original_id") or ""),
+            str(contains.get("original_effective_date") or ""),
+            "originalId",
+        )
+        terminal = _terminal_original_spec(host)
+        candidates = [literal]
+        if original[0]:
+            candidates.append(original)
+        if terminal is not None:
+            candidates.append((*terminal, "terminal-original-SPEC"))
+        selected = next(
+            (
+                (*resolved, resolution)
+                for concept_id, effective, resolution in candidates
+                if concept_id
+                for resolved in [_select_concept(catalog, concept_id, effective)]
+                if resolved is not None
+            ),
+            None,
+        )
+        if selected is None:
             continue
+        source_nodes, source, source_node, resolution = selected
         prefix = source + "."
-        for old_path, old in extra.items():
+        host_added = 0
+        for old_path, old in source_nodes.items():
             if not old_path.startswith(prefix):
                 continue
             suffix = old_path[len(prefix):]
@@ -675,87 +832,112 @@ def _graft(base: dict[str, dict[str, Any]], extra: dict[str, dict[str, Any]]) ->
             copied["parent"] = host_path if parent == source else host_path + "." + str(parent)[len(prefix):]
             copied["merged_from"] = old.get("concept")
             additions[new_path] = copied
-        if additions:
-            host["contains_merged"] = reference
+            host_added += 1
+        if host_added:
+            host["contains_resolved_to"] = source_node.get("concept")
+            host["contains_resolution"] = resolution
     base.update(additions)
     return len(additions)
 
 
-def _enrich_identity(
+def _apply_original_concept_properties(
     base: dict[str, dict[str, Any]], extra_sets: Iterable[dict[str, dict[str, Any]]]
 ) -> int:
-    """Fill omitted value-domain metadata through identity lineage transitively.
+    """Apply semantic properties from the one formal terminal original.
 
-    Cardinality/requiredness are deliberately *not* inherited: those belong to
-    the dataset context in which the concept is used.  ADAPT/DRIV/GEN are not
-    present in ``identity_refs`` and therefore never participate.
+    This mirrors ART-DECOR ``getFullConcept``: the transaction/use concept
+    retains identity, short name, and usage cardinality, while the terminal
+    original supplies name, description, datatype/value domain, and semantic
+    associations. ART-DECOR relationships (SPEC, ADAPT, EQUIV, COPY, VERSION,
+    and others) never participate.
     """
-    catalog: dict[str, dict[str, Any]] = {}
-    for node in base.values():
-        concept = str(node.get("concept") or "")
-        if concept:
-            catalog[concept] = node
-    for nodes in extra_sets:
-        for node in nodes.values():
-            concept = str(node.get("concept") or "")
-            if concept and concept not in catalog:
-                catalog[concept] = node
+    extras = list(extra_sets)
+    catalog = _concept_catalog([base, *extras])
 
-    scalar_keys = ("type", "unit", "precision", "min_value", "max_value", "min_length", "max_length")
+    scalar_keys = (
+        "name", "description", "type", "unit", "precision", "min_value",
+        "max_value", "min_length", "max_length",
+    )
     list_keys = (
         "value_sets", "value_set_refs", "codes", "options",
         "terminology_associations",
     )
     changed = 0
-    done: set[str] = set()
+    done: set[tuple[str, str]] = set()
 
-    def enrich(node: dict[str, Any], visiting: set[str]) -> bool:
-        nonlocal changed
-        cid = str(node.get("concept") or "")
-        if cid and cid in done:
-            return False
-        if cid and cid in visiting:
-            return False
+    def terminal_original(
+        node: dict[str, Any], visiting: set[tuple[str, str]],
+    ) -> dict[str, Any] | None:
+        identity = (
+            str(node.get("concept") or ""),
+            str(node.get("effective_date") or ""),
+        )
+        if identity in visiting:
+            return None
+        reference = node.get("inherit") or node.get("contains")
+        if not isinstance(reference, Mapping):
+            return None
         branch = set(visiting)
-        if cid:
-            branch.add(cid)
+        branch.add(identity)
+        ref = str(reference.get("ref") or "")
+        effective = str(
+            reference.get("effective_date")
+            or reference.get("flexibility")
+            or ""
+        )
+        selected = _select_concept(catalog, ref, effective) if ref else None
+        if selected is not None:
+            direct = selected[2]
+            return terminal_original(direct, branch) or direct
+        original_id = str(reference.get("original_id") or "")
+        original_effective = str(
+            reference.get("original_effective_date") or ""
+        )
+        selected = (
+            _select_concept(catalog, original_id, original_effective)
+            if original_id else None
+        )
+        return selected[2] if selected is not None else None
+
+    def enrich(node: dict[str, Any]) -> bool:
+        nonlocal changed
+        identity = (
+            str(node.get("concept") or ""),
+            str(node.get("effective_date") or ""),
+        )
+        if identity in done:
+            return False
+        source = terminal_original(node, set())
         copied_any = False
-        inherited_from: list[str] = list(node.get("identity_inherited_from", []))
-        for raw_ref in node.get("identity_refs", []):
-            ref = str(raw_ref or "")
-            source = catalog.get(ref)
-            if source is None or source is node:
-                continue
-            enrich(source, branch)
+        if source is not None and source is not node:
             copied = False
             for key in scalar_keys:
-                if node.get(key) in (None, "") and source.get(key) not in (None, ""):
+                if (
+                    source.get(key) not in (None, "")
+                    and node.get(key) != source.get(key)
+                ):
                     node[key] = source.get(key); copied = True
             for key in list_keys:
-                if not node.get(key) and source.get(key):
+                if node.get(key) != source.get(key):
                     node[key] = [
                         dict(item) if isinstance(item, Mapping) else item
                         for item in source.get(key, [])
                     ]; copied = True
-            if not node.get("option_details") and source.get("option_details"):
+            if node.get("option_details") != source.get("option_details"):
                 node["option_details"] = {
                     str(key): dict(value) if isinstance(value, Mapping) else value
                     for key, value in source.get("option_details", {}).items()
                 }; copied = True
-            if copied:
-                copied_any = True
-                if ref not in inherited_from:
-                    inherited_from.append(ref)
-        if inherited_from:
-            node["identity_inherited_from"] = inherited_from
-        if cid:
-            done.add(cid)
+            node["original_concept"] = source.get("concept")
+            copied_any = copied
+        done.add(identity)
         if copied_any:
             changed += 1
         return copied_any
 
-    for node in catalog.values():
-        enrich(node, set())
+    for rows in catalog.values():
+        for _, _, node in rows:
+            enrich(node)
     return changed
 
 def _repeat_chain_for(path: str, nodes: Mapping[str, Mapping[str, Any]]) -> list[str]:
@@ -985,14 +1167,14 @@ def compile_model(
 
     _expand_value_sets(value_sets, code_systems)
 
-    _enrich_identity(nodes, [extra_nodes for extra_nodes, _ in extras])
+    extra_node_sets = [extra_nodes for extra_nodes, _ in extras]
+    _apply_original_concept_properties(nodes, extra_node_sets)
 
     changed = True
     while changed:
         changed = False
-        for extra_nodes, _ in extras:
-            if _graft(nodes, extra_nodes):
-                changed = True
+        if _graft_contains(nodes, extra_node_sets):
+            changed = True
 
     groups: dict[str, dict[str, Any]] = {}
     fields: dict[str, dict[str, Any]] = {}
@@ -1012,7 +1194,22 @@ def compile_model(
             "repeat_chain": _repeat_chain_for(model_path, nodes),
         }
         if node.get("kind") == "group":
-            groups[model_path] = {**common, "repeating": bool(node.get("repeating")), "contains": node.get("contains")}
+            contains = node.get("contains")
+            groups[model_path] = {
+                **common,
+                "repeating": bool(node.get("repeating")),
+                "contains": (
+                    contains.get("ref")
+                    if isinstance(contains, Mapping) else None
+                ),
+                **(
+                    {
+                        "contains_resolved_to": node["contains_resolved_to"],
+                        "contains_resolution": node["contains_resolution"],
+                    }
+                    if node.get("contains_resolved_to") else {}
+                ),
+            }
             continue
         field = {
             **common,

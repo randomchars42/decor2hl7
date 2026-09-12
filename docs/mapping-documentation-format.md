@@ -573,6 +573,13 @@ selected transaction does not provide uses the reviewed target default
 For a selected mapping, name the strongest evidence and any semantic step needed
 for execution.
 
+Evidence-chain identifiers should mirror ART-DECOR syntax: `inherit`,
+`contains`, `originalId`, reverse forms such as `inherit^-1`, and
+`relationship:<TYPE>`. A chain crossing `relationship:<TYPE>` is always marked
+review-only; the relationship type, name agreement, datatype compatibility, or
+Schematron support cannot make it executable. Template `SPEC` describes editor-
+prototype provenance and is not presented as inherited executable constraints.
+
 Good example:
 
 ```markdown

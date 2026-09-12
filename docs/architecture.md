@@ -164,7 +164,7 @@ Important rules retained from the prototype:
     transaction; snapshot the normalized record in `closure.json` for
     reproducible build input. An `attach` operation still requires an open CDA
     core slot. A `select_spec_branch` operation instead requires that the exact
-    selected and replacement branches are siblings of one inherited `SPEC`
+    selected and replacement branches are siblings of the first `SPEC` editor-prototype
     choice at the same parent element. Generic context, names and project
     evidence never create either edge or selection.
 17. Resolve a reviewed malformed identity only through an exact catalog
@@ -178,11 +178,11 @@ Important rules retained from the prototype:
     `expansion-evidence` and crawl-degradation evidence.
 20. Treat exact concepts named by `templateAssociation/concept` and
     `staticAssociations/origconcept` as analysis-only mapping evidence. Close
-    their ancestry transitively through `SPEC`, `INHERIT`, `ORIGINAL`, `EQUIV`,
-    `VERSION`, and `COPY`, but not through `ADAPT`, other derivations, template
-    references, terminology references, or a whole external dataset. A concept
-    response may contain siblings; only a separately requested association
-    endpoint causes that sibling's own identity ancestry to be traversed.
+    their formal origins transitively through `<inherit>`, `<contains>`, and
+    compiled `originalId`, but never recursively through an ART-DECOR
+    `<relationship>`. A concept response may contain siblings; only a
+    separately requested association endpoint causes that sibling's own formal
+    origin to be traversed.
 
 `manifest.json` answers “what is cached for this release?”; transaction
 `closure.json` answers “which cached resources belong to this transaction?” It
@@ -228,10 +228,12 @@ overrides and direct terminology associations. The analysis form supplies
 resolved definitions and containment. The compiler validates the pair and
 records contained additions separately.
 
-For a literal `contains` target absent from the parsed named concepts, grafting
-may follow only an explicit identity-style relationship on that container.
-Weak derivation relationships such as `ADAPT` remain evidence and cannot
-materialize a dataset subtree.
+Concept `<inherit>` and `<contains>` recursively select one terminal original.
+That original supplies semantic properties; the current stored concept supplies
+descendants and transaction usage supplies cardinality. If a compiled literal
+`contains` alias is absent, `originalId` or the uniquely corroborated synthetic
+terminal-original SPEC emitted by ART-DECOR may locate the stored subtree.
+Ordinary relationships never materialize a dataset subtree.
 
 `logical_domain` records dataset choices, `formal_terminology` records the exact
 transaction ValueSet binding and members, and `terminology_associations` retains
@@ -267,7 +269,7 @@ physical/type/occurrence checks and does not become semantic evidence merely by
 bypassing the generated proposal interface. ART-DECOR identifiers are
 provenance, not runtime addresses.
 
-Compilation first resolves template relationships and specialization, then
+Compilation first resolves executable `<include>` and element `@contains`, then
 derives the effective CDA model inventory. `cda/core.py` indexes the fetched
 pinned XSD graph and recursively follows structural classes, datatype aliases
 and inheritance; `cda/datatypes.py` contains only the scalar XML serialization
@@ -326,8 +328,8 @@ therefore cross an ART-DECOR constraint, a CDA structural class, an HL7
 datatype, and its writable XML representation without class knowledge in
 mapping or rendering.
 
-`isClosed` propagates from templates and elements through `SPEC` refinement and
-the compiled tree. CDA/RIM expansion types explicit particles in both open and
+`isClosed` propagates from templates and elements through the executable
+include/contains tree. CDA/RIM expansion types explicit particles in both open and
 closed contexts, but materializes omitted particles only in open contexts. A
 reviewed CDA extension is an in-memory containment constraint with distinct
 provenance. Compilation rejects it unless its exact parent is already in the
@@ -337,12 +339,11 @@ particle and contained template root. The attachment does not modify cached
 ART-DECOR XML. Its selected root suppresses omitted alternative core branches
 at the synthetic wrapper without closing the attached template's own content.
 
-`SPEC` is recursive constraint refinement, not tree concatenation. Matching
-child constraints inherit omitted parent properties and override explicit ones;
-parent-only prototype choices are dropped at every depth. A specialized
-structural node with the same ART-DECOR element ID replaces an inherited
-`contains` target; this prevents legacy and replacement branches from being
-emitted together.
+A template's first `relationship type="SPEC"` is editor-prototype evidence. It
+is fetched for diagnostics and reviewed DEC-028 choice replacement, but is not
+part of the executable tree and is never merged into the current template.
+Only explicit current-template constraints execute. Missing prototypes are
+reported independently from unresolved executable includes/contains.
 
 Fixed text/attributes are executable constraints rather than writable data
 targets. `NP` nodes prohibit their complete physical subtree; synthesized
@@ -393,10 +394,11 @@ they record configured attachments or resolution rules actually used by an
 executable selection and are not themselves semantic evidence.
 Evidence includes:
 
-- direct/lineage-mediated `templateAssociation` (`TA`)
+- direct/formal-origin-mediated `templateAssociation` (`TA`)
 - ART-DECOR `staticAssociations/origconcept` links (`STATIC_ASSOC`)
 - version-tolerant TA resolution
-- `SPEC`, `INHERIT`, reverse lineage, `ORIGINAL`, `ADAPT`, etc.
+- `inherit`, `contains`, `originalId`, their reverse evidence edges, and
+  review-only `relationship:<TYPE>` edges
 - direct legacy `implementation/@xpath` declarations (`XPATH`)
 - guarded template-name (`NAME`) bridge
 - exact terminology/value-set/datatype combinations (`TERM`, `VS`, `DT`)
@@ -431,10 +433,12 @@ executable. An independently resolved `templateAssociation` remains a separate
 candidate; only the unique in-context CDA/RIM-slot projection above may make the
 static association cross template revisions. Generated Schematron can strengthen
 compatible evidence but cannot override this guard.
-Weak derivation lineage is also non-executable when the current and related
-concept names disagree. The bridge remains visible for review, but structural,
-datatype, and Schematron compatibility cannot establish the missing semantic
-identity.
+Every ART-DECOR `relationship:<TYPE>` path is non-executable. The bridge and
+its exact type remain visible for review, but name agreement, structural,
+datatype, and Schematron compatibility cannot establish formal concept
+identity. Contextual label traversal follows only `inherit`, `contains`, and
+`originalId`; relationship-only candidates are also excluded as locators for
+generated transforms.
 
 The XSD graph also carries `complexType/@mixed`. A mixed-content root receives
 an element-text value representation during compilation, so mappings such as a
@@ -452,12 +456,11 @@ all other values become `nullFlavor="OTH"` while retaining source wording for
 the companion text. ValueSet membership, structure and datatype roles are
 compiled evidence; the renderer has no domain- or template-specific branch.
 
-Identity-style lineage may enrich omitted dataset constraints. `ADAPT` and other
-derivation relationships are deliberately not treated as automatic identity
-inheritance, because the adaptation may have changed the value domain or meaning.
-Identity enrichment is transitive for `SPEC`/`INHERIT`/`ORIGINAL`/`EQUIV`/`COPY`/
-`VERSION` and fills omitted value-domain metadata only; dataset-context
-cardinality is never inherited through lineage.
+Formal `<inherit>` and `<contains>` chains resolve one terminal original.
+Following ART-DECOR `getFullConcept`, that original supplies semantic
+properties while the current stored concept supplies descendants and the
+transaction supplies usage cardinality. ART-DECOR relationships do not
+participate, regardless of type.
 
 Mapping values can be direct target strings or declarative rule objects. A field
 may control more than one target (for example Tetanusschutz `negationInd` and

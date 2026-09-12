@@ -38,9 +38,11 @@ from .structural import (
 # generated structures use ``repeat_by_discriminator``.
 _fanout_rule = _repeat_by_discriminator_rule
 
-STRONG_EDGES = {"SPEC", "INHERIT", "ORIGINAL", "EQUIV", "VERSION", "COPY"}
-REVERSE_EDGES = {"INHERIT^-1", "ORIGINAL^-1", "SPEC^-1"}
-WEAK_EDGES = {"ADAPT", "DRIV", "GEN", "CONTAINS", "REL"}
+FORMAL_ORIGIN_EDGES = {"inherit", "contains", "originalId"}
+FORMAL_ORIGIN_REVERSE_EDGES = {
+    "inherit^-1", "contains^-1", "originalId^-1",
+}
+RELATIONSHIP_EDGE_PREFIX = "relationship:"
 CONFIDENCE = {"CONTEXT": 0, "WEAK": 1, "MEDIUM": 2, "STRONG": 3}
 GENERIC_SHORTNAMES = {
     "zeitpunkt", "zeitraum", "code", "wert", "name", "identifikation",
@@ -147,13 +149,21 @@ def _graph_and_associations(
                 for child in list(node):
                     kind = local(child.tag)
                     if kind == "inherit" and child.get("ref"):
-                        graph[source].add(("INHERIT", child.get("ref") or ""))
+                        graph[source].add(("inherit", child.get("ref") or ""))
                         if child.get("originalId"):
-                            graph[source].add(("ORIGINAL", child.get("originalId") or ""))
+                            graph[source].add(("originalId", child.get("originalId") or ""))
                     elif kind == "relationship" and child.get("ref"):
-                        graph[source].add((child.get("type") or "REL", child.get("ref") or ""))
+                        graph[source].add((
+                            RELATIONSHIP_EDGE_PREFIX
+                            + (child.get("type") or "unspecified"),
+                            child.get("ref") or "",
+                        ))
                     elif kind == "contains" and child.get("ref"):
-                        graph[source].add(("CONTAINS", child.get("ref") or ""))
+                        graph[source].add(("contains", child.get("ref") or ""))
+                        if child.get("originalId"):
+                            graph[source].add((
+                                "originalId", child.get("originalId") or "",
+                            ))
             elif local(node.tag) == "templateAssociation" and node.get("templateId"):
                 template_id = node.get("templateId") or ""
                 effective = node.get("effectiveDate") or ""
@@ -174,22 +184,23 @@ def _graph_and_associations(
     reverse: dict[str, set[tuple[str, str]]] = defaultdict(set)
     for source, edges in graph.items():
         for kind, target in edges:
-            if kind in {"INHERIT", "ORIGINAL", "SPEC"}:
+            if kind in FORMAL_ORIGIN_EDGES:
                 reverse[target].add((kind + "^-1", source))
     for source, edges in reverse.items():
         graph[source].update(edges)
     return graph, associations, names
 
 
-def _semantic_concept_index(
+def _formal_origin_label_index(
     xml_paths: Iterable[Path],
 ) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
-    """Build an undirected terminology-label graph for contextual matching.
+    """Build an undirected formal-origin label graph for contextual matching.
 
-    This graph is intentionally separate from the directed lineage graph used
-    to prove template associations.  ADAPT and other weak relations may expose
-    multilingual designations, but they must not silently become identity
-    edges for direct mappings.
+    This graph is intentionally separate from the directed formal-origin graph
+    used to prove template associations.  Only ``inherit``, ``contains`` and
+    their compiled ``originalId`` locators may contribute labels.  Generic
+    relationships are review hints and cannot indirectly create an executable
+    mapping through a lexical descendant rule.
     """
     labels: dict[str, set[str]] = defaultdict(set)
     neighbours: dict[str, set[str]] = defaultdict(set)
@@ -211,7 +222,7 @@ def _semantic_concept_index(
                     if original:
                         neighbours[concept_id].add(original)
                         neighbours[original].add(concept_id)
-                elif kind in {"relationship", "contains"}:
+                elif kind == "contains":
                     reference = child.get("ref") or ""
                 if reference:
                     neighbours[concept_id].add(reference)
@@ -487,7 +498,7 @@ def _projected_association_targets(
     return []
 
 
-def _lineage(
+def _concept_evidence_paths(
     start: str, graph: Mapping[str, set[tuple[str, str]]], depth: int = 8
 ) -> list[tuple[str, list[tuple[str, str]]]]:
     result: list[tuple[str, list[tuple[str, str]]]] = [(start, [])]
@@ -511,9 +522,15 @@ def _lineage(
 
 def _edge_confidence(path: list[tuple[str, str]], version_shift: bool = False) -> str:
     kinds = [edge for edge, _ in path]
-    if any(edge in WEAK_EDGES or edge not in STRONG_EDGES | REVERSE_EDGES | WEAK_EDGES for edge in kinds):
+    if any(
+        edge.startswith(RELATIONSHIP_EDGE_PREFIX)
+        or edge not in FORMAL_ORIGIN_EDGES | FORMAL_ORIGIN_REVERSE_EDGES
+        for edge in kinds
+    ):
         return "WEAK"
-    if version_shift or any(edge in REVERSE_EDGES for edge in kinds):
+    if version_shift or any(
+        edge in FORMAL_ORIGIN_REVERSE_EDGES for edge in kinds
+    ):
         return "MEDIUM"
     return "STRONG"
 
@@ -568,11 +585,11 @@ def _ta_candidates(
             association
         )
     concept_id = str(field.get("concept") or "")
-    lineage = _lineage(concept_id, graph)
+    evidence_paths = _concept_evidence_paths(concept_id, graph)
     source_index = cda.get("source_index", {})
     targets = cda.get("targets", {})
     result: list[dict[str, Any]] = []
-    for related, path in lineage:
+    for related, path in evidence_paths:
         for association in association_index.get(related, []):
             template_id = str(association.get("template_id") or "")
             effective = str(association.get("effective_date") or "")
@@ -628,7 +645,13 @@ def _ta_candidates(
                 confidence = _edge_confidence(path, version_shift or specialization)
                 score = 100
                 for edge, _ in path:
-                    score -= 25 if edge in WEAK_EDGES else 12 if edge in REVERSE_EDGES else 3
+                    score -= (
+                        25
+                        if edge.startswith(RELATIONSHIP_EDGE_PREFIX)
+                        else 12
+                        if edge in FORMAL_ORIGIN_REVERSE_EDGES
+                        else 3
+                    )
                 if version_shift:
                     score -= 8
                 if specialization:
@@ -677,21 +700,30 @@ def _ta_candidates(
                     warning = "requires transform or a different CDA payload"
                     if warning not in warnings and not occurrence_mismatch:
                         warnings.insert(0, warning)
-                lineage_name_drift = bool(
-                    any(edge in WEAK_EDGES for edge, _ in path)
+                relationship_path = any(
+                    edge.startswith(RELATIONSHIP_EDGE_PREFIX)
+                    for edge, _ in path
+                )
+                relationship_name_drift = bool(
+                    relationship_path
                     and not _names_agree(
                         str(field.get("name") or ""),
                         concept_names.get(related),
                     )
                 )
-                if lineage_name_drift:
-                    # A derivation edge may have changed the concept's meaning.
-                    # Structural and datatype compatibility cannot repair that
-                    # missing semantic identity, so retain the bridge only as
-                    # review evidence.
+                if relationship_path:
+                    # DECOR.xsd defines object relationships as implicit,
+                    # unchecked hints. Their type remains useful provenance,
+                    # but a relationship path cannot prove an executable
+                    # dataset-to-template association.
                     actionable = False
+                    warnings.append(
+                        "ART-DECOR relationship is review evidence, not "
+                        "formal concept inheritance"
+                    )
+                if relationship_name_drift:
                     score -= 20
-                    warnings.append("lineage name drift")
+                    warnings.append("relationship name drift")
                 mapping = (
                     {"target": name, "transform": transform}
                     if transform is not None else None
@@ -713,8 +745,10 @@ def _ta_candidates(
                     warnings=warnings,
                     mapping=mapping,
                 )
-                if lineage_name_drift:
-                    candidate["semantic_blocked"] = "lineage_name_drift"
+                if relationship_path:
+                    candidate["semantic_blocked"] = (
+                        "relationship_requires_review"
+                    )
                 if occurrence_mismatch:
                     candidate["occurrence_mismatch"] = True
                 result.append(candidate)
@@ -1377,7 +1411,11 @@ def _template_ids_for_transform(
     # Existing formal/terminology evidence is the preferred template locator.
     ordered: list[tuple[str, str]] = []
     for candidate in candidates:
-        if candidate.get("occurrence_mismatch"):
+        if (
+            candidate.get("occurrence_mismatch")
+            or candidate.get("semantic_blocked")
+            == "relationship_requires_review"
+        ):
             continue
         target = candidate.get("node", {})
         tid = str(target.get("template_id") or "")
@@ -1430,7 +1468,14 @@ def _semantic_transform_candidates(
     options = list(accepted_values(field))
     if options:
         classes = {label: _option_class(str(label)) for label in options}
-        if "positive" in classes.values() and "negative" in classes.values():
+        polar_states = [
+            kind for kind in classes.values() if kind in {"positive", "negative"}
+        ]
+        # negationInd represents the polarity of one statement.  It cannot
+        # carry a multi-valued clinical domain merely because one of its labels
+        # happens to contain "not", "none", or "without".  Admit only a
+        # binary positive/negative state (plus an optional unknown state).
+        if sorted(polar_states) == ["negative", "positive"]:
             for tid, confidence in template_ids:
                 negations = [
                     (name, target) for name, target in targets.items()
@@ -1880,7 +1925,7 @@ def _semantic_words(value: str) -> set[str]:
     }
 
 
-def _related_labels(
+def _formal_origin_labels(
     concept_id: str,
     labels: Mapping[str, set[str]],
     neighbours: Mapping[str, set[str]],
@@ -2323,7 +2368,10 @@ def _repeat_scope_candidates(
         return []
     anchor_parts = str(anchor_locations[0]).split(".")
     matches: list[tuple[int, str, Mapping[str, Any]]] = []
-    for name, target in cda.get("targets", {}).items():
+    # Reuse the ordinary payload-leaf boundary. Without it, removing an
+    # unrelated semantic bridge can expose a nearest document-plumbing leaf
+    # such as ``realmCode`` and turn that infrastructure into a false mapping.
+    for name, target in _cda_target_candidate_pool(cda).items():
         locations = list(target.get("locations", []))
         if (
             not target.get("writable") or target.get("prohibited")
@@ -2370,7 +2418,7 @@ def _context_descendant_candidates(
     if not isinstance(context_node, Mapping) or not context_node:
         return []
     concept_id = str(field.get("concept") or "")
-    evidence = _related_labels(concept_id, labels, neighbours)
+    evidence = _formal_origin_labels(concept_id, labels, neighbours)
     evidence.append((concept_id, 0, " ".join(
         str(field.get(key) or "") for key in ("name", "short_name", "description")
     )))
@@ -2417,7 +2465,7 @@ def _context_descendant_candidates(
     return [_candidate(
         name, target,
         _context_chain(context) + [
-            f"RELATED_LABEL({label})", "CDA_DESCENDANT",
+            f"FORMAL_ORIGIN_LABEL({label})", "CDA_DESCENDANT",
         ],
         "STRONG" if negative_depth == 0 else "MEDIUM",
         92 + negative_depth * 4,
@@ -2792,7 +2840,7 @@ def _cda_mapping_analysis(
 ) -> tuple[dict[str, Any], dict[str, Any], str, str]:
     xml_paths = list(xml_paths)
     graph, associations, concept_names = _graph_and_associations(xml_paths)
-    semantic_labels, semantic_neighbours = _semantic_concept_index(xml_paths)
+    semantic_labels, formal_origin_neighbours = _formal_origin_label_index(xml_paths)
     implementations = _implementation_paths(xml_paths)
     indexes = _mapping_indexes(cda)
     details: dict[str, dict[str, Any]] = {}
@@ -2848,7 +2896,7 @@ def _cda_mapping_analysis(
         )
         candidates = _deduplicate(candidates + _context_descendant_candidates(
             field, inherited_context, cda, semantic_labels,
-            semantic_neighbours, occurrence_mapping,
+            formal_origin_neighbours, occurrence_mapping,
         ) + _context_description_candidates(
             field, inherited_context, cda, occurrence_mapping,
         ) + _choice_branch_candidates(
@@ -3162,7 +3210,8 @@ def _cda_mapping_analysis(
         if close:
             return f"MULTIPLE({len(close) + 1})"
         indirect_tokens = {
-            "INHERIT^-1", "ORIGINAL^-1", "SPEC^-1", "TA_VERSION", "TA_SPEC",
+            "inherit^-1", "contains^-1", "originalId^-1",
+            "TA_VERSION", "TA_SPEC",
             "OPEN_CODED_DOMAIN", "ART_DECOR_EXAMPLE",
         }
         if primary.get("confidence") == "STRONG" and not any(
@@ -3224,7 +3273,7 @@ def _cda_mapping_analysis(
             kind = str(primary.get("kind") or "")
             reasons = {
                 "XPATH": "An explicit ART-DECOR implementation XPath identifies this CDA target.",
-                "TA": "A formal template association connects the datapoint lineage to this CDA element.",
+                "TA": "A formal template association connects the datapoint or one of its formal origins to this CDA element.",
                 "STATIC_ASSOC": "An ART-DECOR static association connects the datapoint to this CDA element.",
                 "STATIC_ASSOC_SLOT": (
                     "An ART-DECOR static association identifies a CDA/RIM base slot, "
