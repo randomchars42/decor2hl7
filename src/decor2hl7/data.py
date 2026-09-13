@@ -36,8 +36,13 @@ def is_null(raw: Any, site: Mapping[str, Any]) -> bool:
 
 def _parse_datetime(raw: str, field: Mapping[str, Any], site: Mapping[str, Any]) -> str:
     source = raw.strip()
-    if field.get("precision") in {"YMDHM", "YMDHMS"} and len(source) <= 10:
+    precision = str(field.get("precision") or "")
+    minimum = precision.rstrip("!")
+    if minimum in {"YMDHM", "YMDHMS"} and len(source) <= 10:
         raise ValueError(f"datetime value {raw!r} has no time of day")
+    if len(source) <= 10:
+        value = dt.date.fromisoformat(source)
+        return value.isoformat()
     text = source.replace(" ", "T", 1)
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
@@ -45,13 +50,19 @@ def _parse_datetime(raw: str, field: Mapping[str, Any], site: Mapping[str, Any])
     if value.tzinfo is None:
         zone = str(site.get("timezone") or "Europe/Berlin")
         value = value.replace(tzinfo=ZoneInfo(zone))
-    precision = field.get("precision")
-    if precision == "YMD":
+    if precision == "YMD!":
         return value.date().isoformat()
-    if precision in {"YMDHM", "YMDHMS"}:
-        timespec = "minutes" if precision == "YMDHM" else "seconds"
-        return value.isoformat(timespec=timespec)
-    return value.isoformat()
+    # Precision values without ``!`` are minima in the owner schema. Preserve
+    # seconds/fractions supplied by the source instead of truncating them to
+    # the minimum accepted precision.
+    time_part = text.split("T", 1)[1] if "T" in text else ""
+    clock = re.split(r"Z|[+-]\d\d:\d\d$", time_part, maxsplit=1)[0]
+    timespec = (
+        "microseconds" if "." in clock else
+        "seconds" if clock.count(":") >= 2 else
+        "minutes"
+    )
+    return value.isoformat(timespec=timespec)
 
 
 def _parse_date(raw: str) -> str:

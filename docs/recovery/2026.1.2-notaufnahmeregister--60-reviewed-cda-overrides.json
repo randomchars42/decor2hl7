@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "decision": "DEC-038",
+  "release": {
+    "key": "2026.1.2",
+    "date": "2026-04-27T18:50:33"
+  },
+  "transaction": {
+    "key": "notaufnahmeregister--60",
+    "id": "2.16.840.1.113883.2.6.60.3.4.60",
+    "effective_date": "2026-03-25T00:00:00"
+  },
+  "base": "model/<release>/<transaction>/cda-mapping.proposed.json",
+  "merge_semantics": "Shallow-merge field_overrides into fields and target_default_overrides into target_defaults; preserve all other generated keys.",
+  "expected": {
+    "dataset_fields": 120,
+    "generated_mapped_fields": 85,
+    "reviewed_mapped_fields": 98,
+    "field_override_count": 13,
+    "target_default_override_count": 7
+  },
+  "identity": {
+    "model_sha256": "650ffff2d3ee8a8d8c2691c6ef72c5ad6131174d6a919a52de3607e6fb7df47b",
+    "cda_sha256": "8d2dc82fc974133db023956d3b5a6b8b09dd33dc25222a758b061f70dcf332cf"
+  },
+  "target_alias_migrations": {
+    "CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.low@20160601": "CDAEncompassingEncounter.low",
+    "CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.high@20160601": "CDAEncompassingEncounter.high",
+    "CDAEncompassingEncounter.componentOf.encompassingEncounter.dischargeDispositionCode@20160601": "CDAEncompassingEncounter.dischargeDispositionCode",
+    "Problemobservationeddiagnosis.observation.value.originalText@20170213": "Problemobservationeddiagnosis.originalText",
+    "Problemobservationeddiagnosis.observation.value@20170213": "Problemobservationeddiagnosis.observation.value",
+    "Problemobservationeddiagnosis.observation.negationInd@20170213": "Problemobservationeddiagnosis.negationInd",
+    "Problemobservationeddiagnosis.observation.effectiveTime.low@20170213": "Problemobservationeddiagnosis.low",
+    "Problemobservationeddiagnosis.observation.code@20170213": "Problemobservationeddiagnosis.code",
+    "Problemconcernacteddiagnoses.act.entryRelationship.sequenceNumber@20160622": "Problemconcernacteddiagnoses.sequenceNumber",
+    "Problemconcernacteddiagnoses.act.entryRelationship@20160622": "Problemconcernacteddiagnoses.entryRelationship",
+    "Problemconcernacteddiagnoses.act.statusCode@20160622": "Problemconcernacteddiagnoses.statusCode",
+    "Problemconcernacteddiagnoses.act.effectiveTime.low@20160622": "Problemconcernacteddiagnoses.low",
+    "UVMedicationInformationsimple.manufacturedProduct.manufacturedMaterial.code@20210929": "UVMedicationInformationsimple.code",
+    "Isolationindication.observation.value@20240814": "Isolationindication.value",
+    "Referralto.act.code@20251201": "Referralto.act.code",
+    "VitalSignsSection.section.entry@20251201": "VitalSignsSection.entry"
+  },
+  "field_overrides": {
+    "patient.anschrift.postleitzahl": "CDArecordTargetnnar.recordTarget.patientRole.addr.postalCode",
+    "patient.identifikatoren.patienten_id": "PatientIdentifier.id",
+    "administrative_aufnahmeinformationen.aufnahmezeitpunkt": [
+      "CDAEncompassingEncounter.low",
+      {
+        "target": "Allergyconcernact.low",
+        "mode": "fallback_if_active",
+        "reason": "AKTIN confirmed that the emergency-department collection time may populate the Allergy Concern Act start; this reviewed mapping uses Aufnahmezeitpunkt and must not activate an otherwise absent allergy branch."
+      }
+    ],
+    "notfallanamnese.beschwerden_bei_vorstellung.ereigniseintritt": "Problemobservationcedis.observation.effectiveTime.low",
+    "notfallanamnese.zeitpunkt_erster_arztkontakt": "CDADocumentationOf.documentationOf.serviceEvent.performer.time.low",
+    "diagnostik.bildgebende_diagnostik.magnetresonanztomographie.untersuchungsregion": "Magneticresonanceimaging.observation.targetSiteCode",
+    "diagnostik.bildgebende_diagnostik.rontgen.untersuchungsregion": "Plainradiography.observation.targetSiteCode",
+    "abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose": "Problemobservationeddiagnosis.originalText",
+    "abschlussdiagnosen.abschlussdiagnose.icd10": "Problemobservationeddiagnosis.observation.value",
+    "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname": "UVMedicationInformationsimple.manufacturedProduct.manufacturedMaterial.name",
+    "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelcode": {
+      "target": "UVMedicationInformationsimple.code",
+      "transform": {
+        "type": "code_system",
+        "code_system": "1.2.276.0.76.4.6"
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.freitext": "Medikation.text",
+    "masnahmen.medikamentose_therapie.medikation.dosierung.art_der_anwendung": "Medikation.routeCode"
+  },
+  "target_default_overrides": {
+    "Allergyintoleranceobservation.effectiveTime": {
+      "nullFlavor": "UNK",
+      "reason": "The transaction does not provide the allergy onset; AKTIN confirmed that the required Allergy Intolerance Observation effectiveTime may therefore carry nullFlavor UNK."
+    },
+    "Allergyintoleranceobservation.statusCode": {
+      "value": "completed",
+      "reason": "This is the status of the Allergy Intolerance Observation assertion, not whether the allergy or concern has ended. The active template examples consistently represent the completed assertion with ActStatus completed."
+    },
+    "Problemconcernactcedis.statusCode": {
+      "value": "active",
+      "reason": "The presenting complaint is represented as an actively tracked concern; completed requires explicit closure evidence and a corresponding concern effectiveTime.high."
+    },
+    "Problemconcernacteddiagnoses.statusCode": {
+      "value": "active",
+      "reason": "The final-diagnosis Concern Act represents diagnoses that remain clinically relevant for handoff. The transaction contains no concern-closure datum; completed requires explicit evidence that tracking ended and a corresponding concern effectiveTime.high."
+    },
+    "Problemconcernacteddiagnoses.low": {
+      "nullFlavor": "UNK",
+      "reason": "The transaction does not provide when the final-diagnosis concern became active; the applicable concern-start time exists but is unknown."
+    },
+    "Problemobservationeddiagnosis.code": {
+      "value": "29308-4",
+      "reason": "This element identifies the statement as a diagnosis observation. The template explicitly prefers LOINC 29308-4 over 75324-4."
+    },
+    "Medikation.moodCode": {
+      "value": "EVN",
+      "reason": "The current transaction includes only medication given during treatment in the emergency department. Medication history and future recommendations require an explicit per-medication source discriminator."
+    }
+  }
+}

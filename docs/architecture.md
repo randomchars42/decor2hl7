@@ -60,6 +60,7 @@ src/decor2hl7/
         structural.py   cardinality/terminology → structural rules
         reports.py      readable effective CDA + mapping guide
     cda/
+        art_decor.py    exhaustive owner-grammar construct classification
         core.py         pinned CDA/RIM + HL7 V3 XSD definition graph
         datatypes.py    scalar XML serialization policy
         model.py        typed node/value-target/value-representation IR
@@ -71,7 +72,7 @@ src/decor2hl7/
     cooccurrence.py     conservative datatype-shape admissibility
     validate.py         config + record/source-constraint validation
     transforms.py       small declarative mapping transforms
-    assertions.py       ART-DECOR assert evaluator + Schematron output
+    assertions.py       ART-DECOR assert/report evaluator + Schematron output
     conformance.py      pinned packages + XSD/Schematron validation gates
     validation/
         XsdValidator.java  JAXP full-schema validation adapter
@@ -466,7 +467,7 @@ Mapping values can be direct target strings or declarative rule objects. A field
 may control more than one target (for example Tetanusschutz `negationInd` and
 `nullFlavor`) without introducing target-specific renderer code.
 
-`cda-mapping.json` version 7 separates scalar transforms, structural bindings,
+`cda-mapping.json` version 8 separates scalar transforms, structural bindings,
 and CDA completion policy. The compiler emits only rules supported by explicit
 cardinality, terminology, and template evidence:
 
@@ -506,6 +507,12 @@ cardinality, terminology, and template evidence:
   not provide. Required complex elements may receive a null flavor only when
   their compiled datatype surface exposes an optional writable `@nullFlavor`.
   A real mapped value wins in its own occurrence.
+
+Every referenced mapping target also records its exact and revision-independent
+ART-DECOR owner identity. Human-readable target labels can change between
+template revisions; ordinary initialization migrates a stale label only when
+template OID, element ID and path resolve to one unique current target.
+`--reset` discards reviewed mapping state and starts from the proposal.
 
 Compiled datatype targets may also carry `non_null_requires`. Proposal
 generation treats a dependent component as review-only until the required

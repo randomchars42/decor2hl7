@@ -9,7 +9,7 @@ from typing import Any, Mapping, Sequence, cast
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape, quoteattr
 
-from ..bindings import required_unmapped_null_flavor
+from ..bindings import required_construction_gaps, required_unmapped_null_flavor
 from ..transforms import cda_target_name, mapping_rules
 
 
@@ -1587,9 +1587,9 @@ def _structural_and_completion_lines(
     lines += [
         "## Accepted required-CDA completion",
         "",
-        f"General rule: an active required leaf without a mapped value receives "
+        f"General rule: an active required nullable leaf without a mapped value receives "
         f"`nullFlavor=\"{required_unmapped_null_flavor(mapping)}\"`. A real mapped "
-        "value always takes precedence.",
+        "value always takes precedence. Mandatory (`M`) values cannot use this rule.",
         "",
     ]
     if isinstance(target_defaults, Mapping) and target_defaults:
@@ -1620,6 +1620,23 @@ def _structural_and_completion_lines(
         lines.append("")
     else:
         lines += ["No target-specific defaults are configured.", ""]
+    gaps = required_construction_gaps(cda, mapping)
+    if gaps:
+        lines += [
+            "### Configuration still required",
+            "",
+            "The generated proposal cannot yet construct every active mandatory "
+            "CDA slot. Supply each value through a reviewed mapping, site value, "
+            "structural constant, or target default that the compiled target "
+            "legally permits:",
+            "",
+        ]
+        lines.extend(f"- {problem}" for problem in gaps)
+        lines.append("")
+    else:
+        lines += [
+            "All active mandatory CDA slots have a configured value source.", "",
+        ]
     return lines
 
 

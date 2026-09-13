@@ -1563,6 +1563,23 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             data.normalize_value("2026-08-21", {"type": "datetime", "precision": "YMDHM"}, {}, {"timezone": "Europe/Berlin", "input": {}})
 
+    def test_datetime_minimum_precision_preserves_more_precise_input(self) -> None:
+        site = {"timezone": "Europe/Berlin", "input": {}}
+        self.assertEqual(
+            data.normalize_value(
+                "2026-08-21T12:34:56+02:00",
+                {"type": "datetime", "precision": "YMDHM"}, {}, site,
+            ),
+            "2026-08-21T12:34:56+02:00",
+        )
+        self.assertEqual(
+            data.normalize_value(
+                "2026-08-21T12:34:56+02:00",
+                {"type": "datetime", "precision": "YMD"}, {}, site,
+            ),
+            "2026-08-21T12:34:56+02:00",
+        )
+
     def test_multiple_primary_rows_are_rejected_without_mutation(self) -> None:
         rows = [{"main": "0", "v": "a"}, {"main": "1", "v": "b"}, {"main": "1", "v": "c"}]
         ordered, problems = data._order_rows(rows, {"column": "main", "true_values": ["1"], "false_value": "0"})
@@ -3564,6 +3581,113 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(any("Coded.value" in error and "reason must be non-empty" in error for error in errors))
         self.assertTrue(any("Coded.value" in error and "compiled code constraint" in error for error in errors))
         self.assertTrue(any("Compound.value" in error and "compound non-null companions" in error for error in errors))
+
+    def test_mapping_check_reports_unsupplied_mandatory_cda_leaf(self) -> None:
+        leaf = {
+            "kind": "element", "name": "hl7:confidentialityCode",
+            "datatype": "CE", "min": 1, "max": 1, "mandatory": True,
+            "conformance": "M", "attributes": [], "codes": [], "fixed": {},
+            "children": [], "targets": ["Header.confidentiality"],
+            "origin": {
+                "template_id": "1.2.3", "template_effective_date": "2026-01-01",
+                "path": "hl7:confidentialityCode",
+            },
+        }
+        target = {
+            **leaf, "name": "Header.confidentiality", "locations": ["0.0"],
+            "renderable": True, "writable": True, "has_children": False,
+            "logical_types": ["code"],
+            "value_representation": {
+                "kind": "coded", "attributes": ["code"],
+                "scalar_attribute": "code",
+            },
+        }
+        compiled = {
+            "targets": {"Header.confidentiality": target},
+            "document": [{
+                "kind": "element", "name": "hl7:ClinicalDocument",
+                "min": 1, "max": 1, "mandatory": True,
+                "fixed": {"classCode": "DOCCLIN"}, "attributes": [],
+                "targets": [], "children": [leaf],
+            }],
+        }
+        errors = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}}, {"fields": {}},
+        )
+        self.assertTrue(any(
+            "mandatory CDA element hl7:confidentialityCode" in error
+            for error in errors
+        ))
+
+        errors = validate.check_config(
+            {"fields": {"privacy": {"type": "code"}}}, compiled,
+            {"fields": {"privacy": None}},
+            {"fields": {"privacy": "Header.confidentiality"}},
+        )
+        self.assertFalse(any("mandatory CDA element" in error for error in errors))
+
+    def test_mapping_target_identity_migrates_unique_owner_slot(self) -> None:
+        owner = "1.2.3|ID:slot-7|PATH:hl7:observation/hl7:value"
+        current = {
+            "version": 7,
+            "fields": {"finding": {
+                "target": "OldFinding.value", "cda_target": "OldFinding.value",
+            }},
+            "target_identities": {"OldFinding.value": {
+                "cda_target": "OldFinding.value",
+                "revisionless_source_key": owner,
+            }},
+        }
+        proposed = {"target_identities": {"NewFinding.value": {
+            "cda_target": "NewFinding.value",
+            "revisionless_source_key": owner,
+        }}}
+        compiled = {"targets": {"NewFinding.value": {
+            "template_id": "1.2.3", "template_effective_date": "2027-01-01",
+            "element_id": "slot-7", "path": "hl7:observation/hl7:value",
+            "source_key": "1.2.3@2027-01-01|ID:slot-7|PATH:hl7:observation/hl7:value",
+        }}}
+
+        changed = mapping_compiler.migrate_mapping_target_identities(
+            current, proposed, compiled
+        )
+
+        self.assertEqual(changed, 1)
+        self.assertEqual(current["version"], 8)
+        self.assertEqual(current["fields"]["finding"], {
+            "target": "NewFinding.value", "cda_target": "NewFinding.value",
+        })
+        self.assertEqual(
+            current["target_identities"]["NewFinding.value"]
+            ["revisionless_source_key"], owner,
+        )
+
+    def test_mapping_target_identity_does_not_guess_ambiguous_slot(self) -> None:
+        owner = "1.2.3|ID:slot-7|PATH:hl7:observation/hl7:value"
+        current = {
+            "fields": {"finding": "OldFinding.value"},
+            "target_identities": {"OldFinding.value": {
+                "revisionless_source_key": owner,
+            }},
+        }
+        compiled = {"targets": {
+            name: {
+                "template_id": "1.2.3", "element_id": "slot-7",
+                "path": "hl7:observation/hl7:value",
+            }
+            for name in ("Finding.value_as_CD", "Finding.value_as_ST")
+        }}
+
+        changed = mapping_compiler.migrate_mapping_target_identities(
+            current, {"target_identities": {}}, compiled
+        )
+
+        self.assertEqual(changed, 0)
+        self.assertEqual(current["fields"]["finding"], "OldFinding.value")
+        self.assertEqual(
+            current["target_identities"]["OldFinding.value"]
+            ["revisionless_source_key"], owner,
+        )
 
     def test_coded_target_default_inherits_unique_compiled_coding(self) -> None:
         target = {

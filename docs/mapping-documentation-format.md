@@ -42,6 +42,8 @@ Together the reports should answer:
 3. Which decisions remain, and what may the reviewer choose?
 4. What will each JSON choice produce?
 5. Why was a mapping or candidate proposed?
+6. Which mandatory CDA slots still need explicit configuration before the
+   proposal can render a document?
 
 ## Required organization
 

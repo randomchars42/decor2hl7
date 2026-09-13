@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 
 from ..retrieval.xml import child_text, local, parse_file
 from ..retrieval.expansion import normalized_value_sets
+from ..semantics import binding_strength
 from ..transforms import mapping_rules, selected_cda_targets
 
 
@@ -46,6 +47,8 @@ def value_set_members(
             for concept in value_set.iter():
                 kind = local(concept.tag)
                 if kind not in {"concept", "exception", "items"}:
+                    continue
+                if str(concept.get("type") or "").upper() == "A":
                     continue
                 code = concept.get("code") or ""
                 system = concept.get("codeSystem") or ""
@@ -106,9 +109,13 @@ def members_for_target(
     target: Mapping[str, Any],
     value_sets: Mapping[ValueSetKey, list[dict[str, Any]]],
 ) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
-    bindings = [
+    declared_bindings = [
         item for item in (target.get("value_set_bindings") or [])
         if isinstance(item, Mapping) and item.get("id")
+    ]
+    bindings = [
+        item for item in declared_bindings
+        if binding_strength(item) == "required"
     ]
     if bindings:
         # One discriminator binding is expected.  Ambiguous simultaneous
@@ -129,6 +136,10 @@ def members_for_target(
         if not binding["effective_date"] and len(resolved_versions) == 1:
             binding["effective_date"] = resolved_versions.pop()
         return members, binding
+    if declared_bindings:
+        # Extensible, preferred, and example bindings are terminology hints;
+        # they cannot prove a structural discriminator or closed code gate.
+        return [], None
     oids = [str(oid) for oid in target.get("value_sets", [])]
     if not oids:
         oids = sorted({

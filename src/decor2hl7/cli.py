@@ -401,11 +401,30 @@ def cmd_build(args: argparse.Namespace) -> int:
         f"{cda['stats'].get('datapoints', 0)} logical mapped datapoints"
     )
     constraint_diagnostics = list(cda.get("constraint_diagnostics", []))
-    if constraint_diagnostics:
+    specialization_diagnostics = [
+        row for row in constraint_diagnostics
+        if row.get("code") == "spec-constraint-weakening"
+    ]
+    if specialization_diagnostics:
         _say(
             "warning: "
-            f"{len(constraint_diagnostics)} CDA SPEC constraint weakening(s); "
+            f"{len(specialization_diagnostics)} CDA SPEC constraint weakening(s); "
             "explicit child constraints were used; see "
+            f"{model_dir / 'build-diagnostics.md'}"
+        )
+    other_diagnostics = [
+        row for row in constraint_diagnostics
+        if row.get("code") != "spec-constraint-weakening"
+    ]
+    if other_diagnostics:
+        error_count = sum(
+            str(row.get("severity") or "").casefold() in {"fatal", "error"}
+            for row in other_diagnostics
+        )
+        _say(
+            "warning: "
+            f"{len(other_diagnostics)} owner-rule diagnostic(s), "
+            f"{error_count} error-level; see "
             f"{model_dir / 'build-diagnostics.md'}"
         )
     audit_path = model_dir / "mapping-audit.json"
@@ -749,12 +768,30 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         root, release, transaction, getattr(args, "cda_mapping", None)
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    created = copy_if_missing(source, destination)
+    reset = bool(getattr(args, "reset", False))
+    if reset:
+        write_json(destination, load_json(source))
+        created = False
+        _say("reset   " + str(destination))
+    else:
+        created = copy_if_missing(source, destination)
     if created:
         _say("created " + str(destination))
-    else:
+    elif not reset:
         migrated = _migrate_repeat_by_discriminator(source, destination)
-        from .compile.mapping import _mapping_configuration_notes
+        from .compile.mapping import (
+            _mapping_configuration_notes, migrate_mapping_target_identities,
+        )
+        current_mapping = load_json(destination)
+        previous_identities = current_mapping.get("target_identities")
+        target_migrations = migrate_mapping_target_identities(
+            current_mapping, load_json(source), cda
+        )
+        if (
+            target_migrations
+            or current_mapping.get("target_identities") != previous_identities
+        ):
+            write_json(destination, current_mapping)
         audit = load_json(_require(model_dir / "mapping-audit.json"))
         notes = _merge_mapping_configuration_notes(
             source,
@@ -766,6 +803,8 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         changes = []
         if migrated:
             changes.append(f"migrated {migrated} discriminator rule(s)")
+        if target_migrations:
+            changes.append(f"migrated {target_migrations} CDA target reference(s)")
         if notes:
             changes.append(f"refreshed {notes} configuration note(s)")
         suffix = f" ({'; '.join(changes)})" if changes else ""
@@ -783,9 +822,9 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         _copy_generated_guide(model_dir / guide_name, destination.parent / guide_name)
     mapping = load_json(destination)
     lock = destination.parent / "mapping-lock.json"
-    if not lock.exists():
+    if reset or not lock.exists():
         write_json(lock, _mapping_lock(release, transaction, model, cda, mapping))
-        _say("created " + str(lock))
+        _say(("updated " if reset else "created ") + str(lock))
     else:
         _say("kept    " + str(lock))
     return 0
@@ -1379,6 +1418,13 @@ def parser() -> argparse.ArgumentParser:
 
     q = sub.add_parser("init-cda-mapping", help="initialize the shareable dataset-to-CDA mapping bundle")
     _add_runtime_config_overrides(q, site=False)
+    q.add_argument(
+        "--reset", action="store_true",
+        help=(
+            "replace the reviewed mapping with the current generated proposal "
+            "and refresh its model lock"
+        ),
+    )
     q.set_defaults(func=cmd_init_cda_mapping)
 
     q = sub.add_parser("init-site-config", help="initialize local CSV/code/site configuration")

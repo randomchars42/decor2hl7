@@ -6,8 +6,8 @@ from typing import Any, Iterable, Mapping
 
 
 _ASSUMED_NON_NULL = object()
-_TRANSPARENT = {"include", "template", "datatype_choice"}
-_STRUCTURAL_TRANSPARENT = {"include", "template"}
+_TRANSPARENT = {"include", "template", "choice", "datatype_choice"}
+_STRUCTURAL_TRANSPARENT = {"include", "template", "choice"}
 
 
 def _location(value: Any) -> tuple[int, ...] | None:

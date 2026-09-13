@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 
 from .assertions import evaluate as evaluate_assertion
 from .bindings import (
+    required_construction_gaps,
     for_each_target_positions,
     covered_shared_claims,
     non_null_requirement_satisfied,
@@ -379,6 +380,10 @@ def check_config(
                 )
     errors.extend(validate_target_defaults(cda, cda_mapping))
     errors.extend(validate_structures(model, cda, cda_mapping))
+    errors.extend(
+        f"cda-mapping: {problem}"
+        for problem in required_construction_gaps(cda, cda_mapping, site)
+    )
     return errors
 
 
@@ -395,6 +400,30 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
             prohibited = str(node.get("conformance") or "").upper() == "NP"
             if prohibited and (node.get("mandatory") or int(node.get("min") or 0) > 0):
                 errors.append(f"compiled CDA node {key} is NP but also required")
+            if node.get("kind") == "choice":
+                minimum = int(node.get("min") or 0)
+                maximum = node.get("max")
+                alternatives = list(node.get("children", []))
+                if minimum < 0 or (
+                    isinstance(maximum, int) and maximum < minimum
+                ):
+                    errors.append(
+                        f"compiled CDA choice {key} has invalid bounds "
+                        f"{minimum}..{maximum}"
+                    )
+                if not alternatives and minimum:
+                    errors.append(
+                        f"compiled CDA choice {key} requires alternatives but has none"
+                    )
+                invalid = [
+                    str(child.get("kind") or "") for child in alternatives
+                    if child.get("kind") not in {"element", "include", "choice"}
+                ]
+                if invalid:
+                    errors.append(
+                        f"compiled CDA choice {key} has invalid alternatives: "
+                        + ", ".join(invalid)
+                    )
             for attr_index, attr in enumerate(node.get("attributes", [])):
                 attr_key = ".".join(map(str, here + (100000 + attr_index,))); locations[attr_key] = attr
                 if attr.get("optional") is False and attr.get("value") is None and not attr.get("targets"):
@@ -425,21 +454,21 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
             errors.append(f"CDA value target {name} has {len(target_locations)} physical locations")
         if target.get("writable") and not target.get("logical_types"):
             errors.append(f"CDA value target {name} has no compiled logical types")
-    # Error-level ART-DECOR assertions must be executable by the built-in
+    # Error-level ART-DECOR validation rules must be executable by the built-in
     # validator.  Evaluate them against an empty context only to distinguish
     # supported syntax from unsupported syntax; True/False is irrelevant here.
     dummy_root = ET.Element("{urn:hl7-org:v3}ClinicalDocument")
     dummy_context = ET.SubElement(dummy_root, "{urn:hl7-org:v3}observation")
-    for assertion in cda.get("assertions", []):
-        if str(assertion.get("role") or "error").casefold() != "error":
+    for rule in cda.get("validation_rules", cda.get("assertions", [])):
+        if str(rule.get("role") or "error").casefold() not in {"fatal", "error"}:
             continue
         result = evaluate_assertion(
-            str(assertion.get("test") or ""), dummy_context, dummy_root, assertion.get("lets", {})
+            str(rule.get("test") or ""), dummy_context, dummy_root, rule.get("lets", {})
         )
         if result is None:
             errors.append(
-                "compiled CDA contains unsupported error-level ART-DECOR assert: "
-                + str(assertion.get("test") or "")
+                "compiled CDA contains unsupported error-level ART-DECOR "
+                f"{rule.get('kind') or 'assert'}: {rule.get('test') or ''}"
             )
     return errors
 
@@ -447,7 +476,7 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
 def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable[Path]) -> list[str]:
     """Independent check of explicit source constraints without invoking the compiler."""
     source_by_id: dict[tuple[str, str, str, str], ET.Element] = {}
-    source_assertions: dict[tuple[str, str, str, str, str, str], dict[str, str]] = {}
+    source_rules: dict[tuple[str, str, str, str, str, str, str], dict[str, str]] = {}
     templates: set[tuple[str, str]] = set()
     for path in sorted(set(xml_paths)):
         try:
@@ -476,14 +505,16 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
                             for child in list(node)
                             if local(child.tag) == "let" and child.get("name") and child.get("value")
                         }
-                        for assertion in list(node):
-                            if local(assertion.tag) != "assert" or not assertion.get("test"):
+                        for rule in list(node):
+                            rule_kind = local(rule.tag)
+                            if rule_kind not in {"assert", "report"} or not rule.get("test"):
                                 continue
                             key = (
                                 tid, eff, node.get("id") or "", physical_path,
-                                assertion.get("test") or "", assertion.get("role") or "error",
+                                rule_kind, rule.get("test") or "",
+                                rule.get("role") or "error",
                             )
-                            source_assertions[key] = lets
+                            source_rules[key] = lets
                     collect(node, current_path)
 
             collect(template)
@@ -564,8 +595,8 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
                     compiled_by_source[source_key].append(node)
             structural(list(node.get("children", [])))
     structural(list(cda.get("document", [])))
-    for assertion_key, source_lets in source_assertions.items():
-        source_key = assertion_key[:4]
+    for rule_key, source_lets in source_rules.items():
+        source_key = rule_key[:4]
         compiled_nodes = compiled_by_source.get(source_key, [])
         if not compiled_nodes:
             # The source element itself is not part of the executable document
@@ -575,16 +606,17 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
         match = next((
             node for node in compiled_nodes
             if any(
-                str(item.get("test") or "") == assertion_key[4]
-                and str(item.get("role") or "error") == assertion_key[5]
-                for item in node.get("asserts", [])
+                str(item.get("kind") or "assert") == rule_key[4]
+                and str(item.get("test") or "") == rule_key[5]
+                and str(item.get("role") or "error") == rule_key[6]
+                for item in node.get("validation_rules", node.get("asserts", []))
             )
         ), None)
         if match is None:
             errors.append(
-                "source verification: lost ART-DECOR assert "
-                f"{assertion_key[4]!r} from {assertion_key[0]}@"
-                f"{assertion_key[1]}:{assertion_key[2]}"
+                f"source verification: lost ART-DECOR {rule_key[4]} "
+                f"{rule_key[5]!r} from {rule_key[0]}@"
+                f"{rule_key[1]}:{rule_key[2]}"
             )
             continue
         compiled_lets = match.get("lets", {}) if isinstance(match.get("lets"), Mapping) else {}
@@ -592,7 +624,7 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
             if str(compiled_lets.get(let_name) or "") != let_value:
                 errors.append(
                     "source verification: ART-DECOR assert "
-                    f"{assertion_key[4]!r} lost let ${let_name}={let_value!r}"
+                    f"{rule_key[5]!r} lost let ${let_name}={let_value!r}"
                 )
     return errors
 

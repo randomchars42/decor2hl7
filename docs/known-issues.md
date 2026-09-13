@@ -183,7 +183,7 @@ unavailable.
 
 ## Transform vocabulary
 
-`cda-mapping.json` version 7 accepts direct target names, small declarative
+`cda-mapping.json` version 8 accepts direct target names, small declarative
 rules, and explicit structural bindings. The built-in scalar transform vocabulary is deliberately limited to `identity`,
 `enum`, `ordinal`, `not`, `code_system`, and `coded_fallback`. The generated proposal uses it for the currently
 proven AKTIN semantics for Tetanusschutz, Isolation, modified Rankin, and
@@ -372,8 +372,26 @@ extract with 381 errors, 1,780 warnings, and 536 information messages. These are
 reported conformance boundaries and do not restore prototype constraints or
 relationship-derived mappings.
 
-The reviewed mapping currently selects 98/120 fields; the generated proposal,
-which does not treat review relationships as formal origins, selects 85/120.
+The source-controlled recovery overlay would select 98/120 fields; the
+authoritative workspace is currently reset to the generated proposal, which
+does not treat review relationships as formal origins and selects 85/120.
+Because generated reference-workspace directories may be Git-ignored, deleting
+and recreating `mapping/` would otherwise lose 13 proposal-null reviewed field
+choices and seven reviewed target defaults. DEC-038 preserves those decisions
+in a compact source-controlled overlay pinned to the current model and CDA
+hashes. Applying the overlay is currently a documented manual shallow merge;
+there is no general CLI command that imports arbitrary decision overlays.
+
+The reset proposal is deliberately not production-complete. Static mapping
+validation currently reports twelve distinct mandatory construction gaps:
+confidentiality and language codes, author name, encounter start, four
+act/observation status or start values, two medication `moodCode` attributes,
+the subordinate medication status, and one observation code. These were
+previously masked by reviewed target defaults or discovered only during
+rendering. They require explicit evidence/review; the compiler does not infer
+their clinical or administrative values. Document ID, set ID, version, creation
+time, custodian identity/name, and narrative links are separately named
+document-production roles and are not counted as mapping gaps.
 The fetch closure is build-ready with 498 resolved/cached, 21 optional missing,
 one waived, and no unavailable, partial, or error resources. Its three degraded
 dependencies are the dynamic and dated AKTIN ValueSet

@@ -377,9 +377,28 @@ and `contains` wrappers recurse and retain template identity/provenance without
 adding an XML level. A template SPEC is editor-prototype evidence and is not
 merged into the executable tree.
 
-This pass establishes effective cardinality, conformance, fixed values,
-vocabulary, closed/open state, namespace bindings, assertions, and
-prototype-comparison diagnostics.
+Before composition, `cda/art_decor.py` accounts for every template-design
+child. `element`, `attribute`, bounded `choice`, `include`, and `context` are
+structure; `property`, `vocabulary`, `text`, `let`, `defineVariable`, `assert`,
+and `report` carry executable validation semantics. An unknown grammar child is
+fatal. `constraint` is preserved free-form prose because the owner schema types
+it as markup and the owner Schematron transform does not execute it. Examples,
+descriptions, comments, classification, purpose/copyright, FHIR annotations,
+and relationship metadata are retained or accounted for but do not execute.
+
+The executable pass order is: select the exact current revision and lifecycle;
+expand formal `include`/`contains`; preserve choice alternatives and aggregate
+bounds; overlay current cardinality, conformance, closedness, fixed values,
+properties and vocabulary; expand legal CDA/RIM structure; expand datatype
+flavours and scalar representations; then attach assertions/reports and
+generated Schematron evidence. Template `SPEC` remains prototype comparison
+evidence throughout and is not inserted into this sequence.
+
+This establishes binding strength, `minInclude`/`maxInclude`, fraction and
+length bounds, namespace/context attributes, variable definitions, assertions,
+reports, textual constraints, and prototype-comparison diagnostics as explicit
+compiled properties. A conditional (`C`) rule without a machine-readable
+condition is diagnosed; prose is never promoted into executable XPath.
 
 ### 6.4 Expand CDA/RIM structure
 
@@ -571,7 +590,7 @@ The final part of `build` writes:
 | `cda-expanded-readable.xml` / `.md` | Human-readable effective CDA hierarchy |
 | final `cda.json` | Physical target registry plus mapping-derived logical datapoints |
 
-The proposal uses mapping version 7 and separates:
+The proposal uses mapping version 8 and separates:
 
 - `fields`: source field to logical target selections and scalar transforms;
 - `structures`: named occurrence, repetition, discriminator, and coalescing
@@ -580,6 +599,8 @@ The proposal uses mapping version 7 and separates:
   target leaves;
 - `target_defaults`: reviewed exact target-specific completion values and
   reasons;
+- `target_identities`: exact and revision-independent ART-DECOR owner identity
+  for every referenced readable target name;
 - `configuration_notes`: short provenance for relevant acquisition/profile
   configuration.
 
@@ -624,6 +645,18 @@ already exists, reviewer selections are preserved. The command may apply a
 narrow compatible structural-rule migration and refresh generated
 configuration notes, but it does not overwrite field choices merely because a
 new proposal differs.
+
+`init-cda-mapping --reset` is the explicit destructive counterpart: it replaces
+all reviewed field, structure and default choices with the current generated
+proposal and refreshes the mapping lock. On an ordinary initialization, stale
+target labels migrate only through one unique stored owner identity; an
+ambiguous identity never falls back to a name or path guess.
+
+A generated proposal is not necessarily a complete document configuration.
+`check-cda-mapping` traverses the same active cardinality and choice structure
+as rendering and reports mandatory slots for which neither the template,
+mapping, structural rules, site configuration nor document-production roles
+can supply a value. It does not invent defaults to make the check pass.
 
 The three generated mapping guides are refreshed beside the reviewed mapping.
 `mapping-lock.json` records release, transaction, model, CDA, and mapping

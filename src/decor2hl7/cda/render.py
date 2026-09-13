@@ -7,6 +7,7 @@ ids are provenance only; an element does not need an id to be writable.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import hashlib
 import re
 import xml.etree.ElementTree as ET
@@ -199,17 +200,171 @@ def _set_xsi_type(element: ET.Element, representation: Mapping[str, Any]) -> Non
         element.set(f"{{{XSI}}}type", str(xsi_type))
 
 
+def _constraint_scalar(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return value.get("value")
+    return value
+
+
+def _fraction_digits(value: Any) -> int | None:
+    try:
+        decimal = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return max(0, -decimal.as_tuple().exponent)
+
+
+def _property_hard_match(rule: Mapping[str, Any], value: Any) -> bool:
+    scalar = _constraint_scalar(value)
+    if rule.get("value") is not None and str(scalar) != str(rule["value"]):
+        return False
+    for key in ("unit", "currency"):
+        if rule.get(key) is not None and (
+            not isinstance(value, Mapping)
+            or str(value.get(key) or "") != str(rule[key])
+        ):
+            return False
+    length = len(str(scalar)) if scalar is not None else 0
+    if rule.get("min_length") is not None and length < int(rule["min_length"]):
+        return False
+    if rule.get("max_length") is not None and length > int(rule["max_length"]):
+        return False
+    return True
+
+
+def _property_advisory_match(rule: Mapping[str, Any], value: Any) -> bool:
+    scalar = _constraint_scalar(value)
+    try:
+        number = Decimal(str(scalar))
+    except (InvalidOperation, ValueError):
+        return False
+    if rule.get("min_include") is not None and number < Decimal(
+        str(rule["min_include"])
+    ):
+        return False
+    if rule.get("max_include") is not None and number > Decimal(
+        str(rule["max_include"])
+    ):
+        return False
+    raw_digits = str(rule.get("fraction_digits") or "")
+    if raw_digits:
+        digits = _fraction_digits(scalar)
+        if digits is None:
+            return False
+        wanted = int(re.sub(r"\D", "", raw_digits))
+        if raw_digits.endswith("!") and digits != wanted:
+            return False
+        if raw_digits.endswith(".") and digits > wanted:
+            return False
+        if not raw_digits.endswith(("!", ".")) and digits < wanted:
+            return False
+    return True
+
+
+def _validate_compiled_value(
+    value: Any, target: Mapping[str, Any], node: Mapping[str, Any],
+    problems: list[str] | None,
+    terminology_constraints: Mapping[str, Any] | None = None,
+) -> None:
+    """Enforce executable ART-DECOR datatype and property constraints."""
+    if isinstance(value, Mapping) and value.get("nullFlavor"):
+        return
+    datatype = str(node.get("datatype") or target.get("datatype") or "").upper()
+    scalar = _constraint_scalar(value)
+    if datatype == "INT.POS":
+        try:
+            valid = Decimal(str(scalar)) > 0
+        except InvalidOperation:
+            valid = False
+        if not valid:
+            raise ValueError("INT.POS value must be greater than zero")
+    elif datatype in {"TS.DATE.MIN", "TS.DATETIME.MIN"}:
+        rendered = _cda_timestamp(str(scalar))
+        minimum = 8 if datatype == "TS.DATE.MIN" else 14
+        if not re.match(rf"^[0-9]{{{minimum}}}", rendered):
+            raise ValueError(
+                f"{datatype} value must have at least {minimum} timestamp digits"
+            )
+    elif datatype == "CS.LANG":
+        code = value.get("code") if isinstance(value, Mapping) else scalar
+        if code and not re.fullmatch(
+            r"(?:[a-z]{2,3}(?:-[a-z]{2})?|[ix](?:-[a-z\d]{2,8})+)",
+            str(code), re.I,
+        ):
+            raise ValueError(f"CS.LANG code {code!r} is not an RFC 3066 tag")
+
+    required_bindings = [
+        terminology_constraints.get(str(key), {})
+        for key in target.get("required_binding_constraints", [])
+        if isinstance(terminology_constraints, Mapping)
+    ]
+    resolved_bindings = [
+        binding for binding in required_bindings
+        if isinstance(binding, Mapping) and binding.get("resolved")
+    ]
+    if resolved_bindings and isinstance(value, Mapping) and value.get("code"):
+        code = str(value.get("code") or "")
+        system = str(value.get("codeSystem") or value.get("code_system") or "")
+        if not any(
+            any(
+                code == str(member[0])
+                and (not str(member[1]) or not system or system == str(member[1]))
+                for member in binding.get("members", [])
+            )
+            for binding in resolved_bindings
+        ):
+            identities = ", ".join(
+                str(binding.get("id") or "") for binding in resolved_bindings
+            )
+            raise ValueError(
+                f"code {code!r} is outside required ART-DECOR binding(s) {identities}"
+            )
+
+    raw_properties = node.get("properties")
+    if raw_properties is None:
+        raw_properties = target.get("properties") or []
+    properties = [
+        rule for rule in raw_properties
+        if isinstance(rule, Mapping)
+    ]
+    hard = [
+        rule for rule in properties
+        if any(rule.get(key) is not None for key in (
+            "unit", "currency", "value", "min_length", "max_length",
+        ))
+    ]
+    if hard and not any(_property_hard_match(rule, value) for rule in hard):
+        raise ValueError("CDA value violates ART-DECOR property constraints")
+    advisory = [
+        rule for rule in properties
+        if any(rule.get(key) is not None for key in (
+            "min_include", "max_include", "fraction_digits",
+        ))
+    ]
+    if advisory and not any(
+        _property_advisory_match(rule, value) for rule in advisory
+    ) and problems is not None:
+        problems.append(
+            "CDA value is outside the ART-DECOR recommended range or fraction digits"
+        )
+
+
 def _write_value(
     element: ET.Element,
     value: Any,
     target: Mapping[str, Any],
     node: Mapping[str, Any],
+    problems: list[str] | None = None,
+    terminology_constraints: Mapping[str, Any] | None = None,
 ) -> None:
     representation = target.get("value_representation")
     if not isinstance(representation, Mapping) or not representation.get("kind"):
         raise ValueError(
             f"CDA value target {target.get('path') or node.get('name')} has no compiled value representation"
         )
+    _validate_compiled_value(
+        value, target, node, problems, terminology_constraints
+    )
     _set_xsi_type(element, representation)
     if (
         isinstance(value, Mapping)
@@ -799,6 +954,41 @@ def _render_transparent(
     )
     if not required and not active:
         return []
+    if parent is None and node.get("attributes"):
+        raise ValueError(
+            "ART-DECOR template-context attributes have no XML owner"
+        )
+    for attribute in node.get("attributes", []):
+        name = str(attribute.get("name") or "")
+        value = attribute.get("value")
+        if not name:
+            continue
+        if value is None and attribute.get("optional") is False:
+            raise ValueError(
+                f"required ART-DECOR context attribute @{name} has no value"
+            )
+        if value is not None and parent is not None:
+            qname = _qname(
+                name, str(attribute.get("namespace_uri") or "") or None,
+            )
+            current = parent.get(qname)
+            if current is not None and current != str(value):
+                raise ValueError(
+                    f"conflicting ART-DECOR context attribute @{name}: "
+                    f"{current!r} != {value!r}"
+                )
+            parent.set(qname, str(value))
+    validation_rules = list(
+        node.get("validation_rules", node.get("asserts", []))
+    )
+    if validation_rules:
+        if parent is None:
+            raise ValueError(
+                "ART-DECOR template-context validation rule has no XML owner"
+            )
+        assertion_contexts.append((
+            parent, validation_rules, dict(node.get("lets", {}))
+        ))
     xsi_type = node.get("xsi_type")
     if xsi_type and parent is not None:
         key = f"{{{XSI}}}type"
@@ -828,6 +1018,69 @@ def _render_transparent(
     return result
 
 
+def _render_choice(
+    node: Mapping[str, Any],
+    parent: ET.Element | None,
+    assignments: Mapping[str, Any],
+    target_defaults: Mapping[str, Any],
+    active_locations: set[tuple[int, ...]],
+    cda: Mapping[str, Any],
+    location: tuple[int, ...],
+    null_flavor: str,
+    problems: list[str],
+    assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]],
+    occurrence: tuple[int, ...],
+    physical_values: Mapping[tuple[int, ...], tuple[Any, Mapping[str, Any]]],
+) -> list[ET.Element]:
+    """Render only the selected alternatives of one ART-DECOR choice."""
+    children = list(node.get("children", []))
+    selected: list[int] = []
+    for index, child in enumerate(children):
+        child_location = location + (index,)
+        if (
+            _subtree_has_assignment(child, assignments, occurrence)
+            or _has_physical_value_below(child_location, physical_values)
+            or any(
+                candidate[:len(child_location)] == child_location
+                for candidate in active_locations
+            )
+        ):
+            selected.append(index)
+    minimum = int(node.get("min") or 0)
+    maximum = node.get("max")
+    if isinstance(maximum, int) and len(selected) > maximum:
+        raise ValueError(
+            "generated CDA selects too many ART-DECOR choice alternatives: "
+            f"{len(selected)} > {maximum}"
+        )
+    if len(selected) < minimum:
+        for index in range(len(children)):
+            if index not in selected:
+                selected.append(index)
+            if len(selected) >= minimum:
+                break
+    if len(selected) < minimum:
+        raise ValueError(
+            "generated CDA cannot satisfy ART-DECOR choice minimum: "
+            f"{len(selected)} < {minimum}"
+        )
+    result: list[ET.Element] = []
+    for index in selected:
+        child = children[index]
+        # Once the group has selected an alternative, that particle occurs at
+        # least once even when its own source multiplicity was omitted/zero.
+        # The branch's maximum and repeated-value handling remain unchanged.
+        if not _has_required_content(child):
+            child = dict(child)
+            child["min"] = 1
+        result.extend(_render_node(
+            child, parent, assignments, target_defaults,
+            active_locations, cda, location + (index,), null_flavor,
+            problems, assertion_contexts, occurrence, physical_values,
+        ))
+    return result
+
+
 def _render_node(
     node: Mapping[str, Any],
     parent: ET.Element | None,
@@ -845,6 +1098,12 @@ def _render_node(
     ] | None = None,
 ) -> list[ET.Element]:
     physical_values = physical_values or {}
+    if node.get("kind") == "choice":
+        return _render_choice(
+            node, parent, assignments, target_defaults, active_locations, cda,
+            location, null_flavor, problems, assertion_contexts, occurrence,
+            physical_values,
+        )
     if node.get("kind") in {"include", "template", "datatype_choice"}:
         return _render_transparent(
             node, parent, assignments, target_defaults, active_locations, cda, location,
@@ -919,8 +1178,13 @@ def _render_node_once(
         ))
     )
 
-    if node.get("asserts"):
-        assertion_contexts.append((element, list(node.get("asserts", [])), dict(node.get("lets", {}))))
+    validation_rules = list(
+        node.get("validation_rules", node.get("asserts", []))
+    )
+    if validation_rules:
+        assertion_contexts.append((
+            element, validation_rules, dict(node.get("lets", {}))
+        ))
 
     conditional_fixed_attributes = {
         str(attr.get("name") or "")
@@ -1049,7 +1313,10 @@ def _render_node_once(
     )
     if assigned is not None:
         target = physical_target or cda.get("targets", {}).get(str(target_name), {})
-        _write_value(element, assigned, target, node)
+        _write_value(
+            element, assigned, target, node, problems,
+            cda.get("terminology_constraints", {}),
+        )
     elif len(node.get("codes") or []) == 1:
         codes = node.get("codes") or []
         target = next(
@@ -1075,6 +1342,8 @@ def _render_node_once(
             },
             target,
             node,
+            problems,
+            cda.get("terminology_constraints", {}),
         )
     elif default is not None:
         default_name = next(
@@ -1082,7 +1351,9 @@ def _render_node_once(
             "",
         )
         _write_value(
-            element, default, cda.get("targets", {}).get(default_name, {}), node
+            element, default, cda.get("targets", {}).get(default_name, {}),
+            node, problems,
+            cda.get("terminology_constraints", {}),
         )
     for attr in node.get("attributes", []):
         name = str(attr.get("name") or "")
@@ -1144,6 +1415,8 @@ def _render_node_once(
                 {"nullFlavor": compatible},
                 completion_target,
                 node,
+                problems,
+                cda.get("terminology_constraints", {}),
             )
 
     if (
@@ -1181,7 +1454,9 @@ def _render_node_once(
                 legal_values[0] if legal_values else null_flavor,
             )
             _write_value(
-                element, {"nullFlavor": selected_flavor}, target, node
+                element, {"nullFlavor": selected_flavor}, target, node,
+                problems,
+                cda.get("terminology_constraints", {}),
             )
         else:
             element.set("nullFlavor", null_flavor)
@@ -1204,8 +1479,17 @@ def emit(
 
     generation_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     organization = site.get("organization", {})
+    document_root = site.get("identifiers", {}).get("document_root")
     system_values = {
         "document_generation_time": generation_time,
+        "document_identifier": {
+            "root": document_root or "",
+            "extension": f"{record.get('key')}-{document_version}",
+        },
+        "document_set_identifier": {
+            "root": document_root or "", "extension": str(record.get("key")),
+        },
+        "document_version_number": document_version,
         "custodian_organization_identifier": (
             {"root": organization.get("oid")}
             if isinstance(organization, Mapping) and organization.get("oid") else None
@@ -1225,16 +1509,6 @@ def emit(
             assignments.setdefault(str(name), value)
 
     variables = {"key": record.get("key"), "document_version": document_version}
-    document_root = site.get("identifiers", {}).get("document_root")
-    if document_root:
-        standard_values = {
-            "CDAid.id": {"root": document_root, "extension": f"{record.get('key')}-{document_version}"},
-            "CDAsetIdversionNumber.setId": {"root": document_root, "extension": str(record.get("key"))},
-            "CDAsetIdversionNumber.versionNumber": document_version,
-        }
-        for name, value in standard_values.items():
-            if name in targets and targets[name].get("renderable") and len(targets[name].get("locations", [])) == 1:
-                assignments.setdefault(name, value)
 
     for name, value in site.get("cda", {}).get("values", {}).items():
         if name in targets and targets[name].get("renderable") and len(targets[name].get("locations", [])) == 1:

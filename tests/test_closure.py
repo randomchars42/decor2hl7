@@ -84,9 +84,11 @@ class ReferenceClosureTests(unittest.TestCase):
             inputs["templates"], cda, selected_closure_templates(cda)
         )
         self.assertEqual(parity["declared"], 1525)
-        self.assertEqual(parity["compiled"], 1504)
-        self.assertEqual(parity["declared_only"], 24)
-        self.assertEqual(len(parity["fixed_structural_attributes"]), 24)
+        # Six template-context attributes are executable endpoints and remain
+        # attached to their owning elements instead of being flattened away.
+        self.assertEqual(parity["compiled"], 1510)
+        self.assertEqual(parity["declared_only"], 18)
+        self.assertEqual(len(parity["fixed_structural_attributes"]), 18)
         self.assertEqual(len(parity["reviewed_branch_replacements"]), 0)
         self.assertEqual(parity["unexpected_missing"], [])
 
@@ -135,7 +137,7 @@ class ReferenceClosureTests(unittest.TestCase):
             ]
         )
 
-    def test_datatype_cooccurrence_narrows_cedis_without_mapping_loss(self) -> None:
+    def test_datatype_cooccurrence_narrows_cedis_after_mapping_reset(self) -> None:
         model = self._load(self.model_dir / "model.json")
         cda = self._load(self.model_dir / "cda.json")
         audit = self._load(self.model_dir / "mapping-audit.json")
@@ -186,8 +188,8 @@ class ReferenceClosureTests(unittest.TestCase):
         ]
         self.assertFalse(parent["available"])
         self.assertTrue(parent["conformance_conflicts"])
-        self.assertFalse(low["available"])
-        self.assertEqual(low["claimed_by"], [path])
+        self.assertTrue(low["available"])
+        self.assertEqual(low["claimed_by"], [])
         self.assertEqual(low["conformance_conflicts"], [])
 
     @staticmethod

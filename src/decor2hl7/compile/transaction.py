@@ -12,6 +12,17 @@ from ..retrieval.xml import child_text, clean, local, parse_file
 from ..workspace import write_json
 
 NULLFLAVOR_CS = "2.16.840.1.113883.5.1008"
+OBJECT_RELATIONSHIP_MEANINGS = {
+    "REPL": "replacement",
+    "SPEC": "specialization",
+    "GEN": "generalization",
+    "COPY": "design-copy",
+    "ADAPT": "adaptation",
+    "EQUIV": "design-equivalence",
+    "VERSION": "version",
+    "BACKWD": "backward-compatible",
+    "DRIV": "model-derived",
+}
 TYPE_NAMES = {
     "string": "text",
     "text": "text",
@@ -116,6 +127,8 @@ def _parse_value_sets(root: ET.Element) -> dict[str, dict[str, Any]]:
                     entry["includes"].append(include)
                 continue
             if kind not in {"concept", "exception"}:
+                continue
+            if str(child.get("type") or "").upper() == "A":
                 continue
             code = child.get("code")
             code_system = child.get("codeSystem")
@@ -323,9 +336,22 @@ def _value_domain(domain: ET.Element, node: dict[str, Any]) -> None:
         elif kind == "conceptList":
             options: list[str] = []
             details: dict[str, dict[str, Any]] = {}
-            members = [
+            source_members = [
                 item for item in child
                 if local(item.tag) in {"concept", "exception"}
+            ]
+            members = [
+                item for item in source_members
+                if str(item.get("type") or "").upper() != "A"
+            ]
+            abstract_members = [
+                {
+                    "id": str(item.get("id") or ""),
+                    "label": child_text(item, "name"),
+                    "level": str(item.get("level") or ""),
+                }
+                for item in source_members
+                if str(item.get("type") or "").upper() == "A"
             ]
             references = [
                 {
@@ -352,7 +378,7 @@ def _value_domain(domain: ET.Element, node: dict[str, Any]) -> None:
             # identity even when it intentionally has no members: an empty
             # owned list is an explicit open coded domain, not a missing
             # standalone ValueSet artifact.
-            node["coded_domain"] = {
+            coded_domain = {
                 "kind": "inline_concept_list",
                 "id": child.get("id") or "",
                 "status": (
@@ -365,8 +391,19 @@ def _value_domain(domain: ET.Element, node: dict[str, Any]) -> None:
                 "references": references,
                 "unrecognized_children": unrecognized,
             }
+            if abstract_members:
+                coded_domain.update({
+                    "source_member_count": len(source_members),
+                    "abstract_member_count": len(abstract_members),
+                    "abstract_members": abstract_members,
+                })
+            node["coded_domain"] = coded_domain
             for item in child:
                 if local(item.tag) not in {"concept", "exception"}:
+                    continue
+                # ART-DECOR type A is a hierarchy heading, not an instance
+                # code that a user or mapping may select.
+                if str(item.get("type") or "").upper() == "A":
                     continue
                 label = child_text(item, "name")
                 if not label:
@@ -448,8 +485,14 @@ def _reference_metadata(node: ET.Element, *, contains: bool) -> dict[str, str]:
 
 def _relationship_metadata(node: ET.Element) -> dict[str, str]:
     """Retain an ART-DECOR relationship as provenance, never as inheritance."""
+    relationship_type = node.get("type") or "REL"
     result = {
-        "type": node.get("type") or "REL",
+        "type": relationship_type,
+        "owner_meaning": OBJECT_RELATIONSHIP_MEANINGS.get(
+            relationship_type, "relationship"
+        ),
+        # DECOR.xsd ObjectRelationships: implicit, unchecked reader hints.
+        "execution": "hint-only",
         "ref": node.get("ref") or "",
         "flexibility": node.get("flexibility") or "",
         "prefix": node.get("prefix") or "",
@@ -733,7 +776,7 @@ def _select_concept(
     return rows[0] if len(rows) == 1 else None
 
 
-def _terminal_original_spec(
+def _compiled_terminal_original_spec_locator(
     host: Mapping[str, Any],
 ) -> tuple[str, str] | None:
     """Recognize ART-DECOR's compiled terminal-original SPEC locator.
@@ -776,7 +819,7 @@ def _terminal_original_spec(
     return next(iter(matches)) if len(matches) == 1 else None
 
 
-def _graft_contains(
+def _dereference_contains_descendants(
     base: dict[str, dict[str, Any]],
     extra_sets: Iterable[dict[str, dict[str, Any]]],
 ) -> int:
@@ -798,7 +841,7 @@ def _graft_contains(
             str(contains.get("original_effective_date") or ""),
             "originalId",
         )
-        terminal = _terminal_original_spec(host)
+        terminal = _compiled_terminal_original_spec_locator(host)
         candidates = [literal]
         if original[0]:
             candidates.append(original)
@@ -840,7 +883,7 @@ def _graft_contains(
     return len(additions)
 
 
-def _apply_original_concept_properties(
+def _apply_terminal_original_semantics(
     base: dict[str, dict[str, Any]], extra_sets: Iterable[dict[str, dict[str, Any]]]
 ) -> int:
     """Apply semantic properties from the one formal terminal original.
@@ -939,6 +982,39 @@ def _apply_original_concept_properties(
         for _, _, node in rows:
             enrich(node)
     return changed
+
+
+def _apply_owner_dataset_composition_rules(
+    selected_nodes: dict[str, dict[str, Any]],
+    referenced_node_sets: Iterable[dict[str, dict[str, Any]]],
+) -> dict[str, int]:
+    """Apply the owner mechanisms in their explicit compilation order.
+
+    1. Resolve the terminal original through formal ``inherit``/``contains``
+       only and copy its semantic properties.
+    2. Dereference the current stored descendants named by ``contains`` until
+       the selected model is closed.
+    3. Leave every ObjectRelationships record (ADAPT, SPEC, EQUIV, COPY,
+       VERSION, and the other enum values) as an unchecked reader hint.
+
+    Referenced node sets are parsed before this function, so their own formal
+    origins are resolved in step 1 before any descendants are copied in step 2.
+    """
+    referenced = list(referenced_node_sets)
+    enriched = _apply_terminal_original_semantics(selected_nodes, referenced)
+    contained = 0
+    rounds = 0
+    while True:
+        added = _dereference_contains_descendants(selected_nodes, referenced)
+        if not added:
+            break
+        contained += added
+        rounds += 1
+    return {
+        "terminal_original_concepts": enriched,
+        "contains_descendants": contained,
+        "contains_rounds": rounds,
+    }
 
 def _repeat_chain_for(path: str, nodes: Mapping[str, Mapping[str, Any]]) -> list[str]:
     chain: list[str] = []
@@ -1168,13 +1244,9 @@ def compile_model(
     _expand_value_sets(value_sets, code_systems)
 
     extra_node_sets = [extra_nodes for extra_nodes, _ in extras]
-    _apply_original_concept_properties(nodes, extra_node_sets)
-
-    changed = True
-    while changed:
-        changed = False
-        if _graft_contains(nodes, extra_node_sets):
-            changed = True
+    dataset_composition = _apply_owner_dataset_composition_rules(
+        nodes, extra_node_sets
+    )
 
     groups: dict[str, dict[str, Any]] = {}
     fields: dict[str, dict[str, Any]] = {}
@@ -1192,6 +1264,19 @@ def compile_model(
             "required": bool(node.get("required")),
             "repeat": _repeat_for(model_path, nodes),
             "repeat_chain": _repeat_chain_for(model_path, nodes),
+            "formal_origin": {
+                key: dict(value) if isinstance(value, Mapping) else value
+                for key, value in {
+                    "inherit": node.get("inherit"),
+                    "contains": node.get("contains"),
+                    "terminal_original": node.get("original_concept"),
+                }.items()
+                if value
+            },
+            "relationships": [
+                dict(relationship)
+                for relationship in node.get("relationships", [])
+            ],
         }
         if node.get("kind") == "group":
             contains = node.get("contains")
@@ -1261,6 +1346,35 @@ def compile_model(
         "source_namespace_repairs": source_repairs,
         "selected_concepts": len(selected_concepts) if transaction_source else None,
         "contained_concepts": max(0, len(nodes) - len(selected_concepts)) if transaction_source else None,
+        "dataset_rule_pipeline": [
+            {
+                "rule": "transaction-concept-selection",
+                "effect": "usage-cardinality-and-direct-associations",
+                "selected_concepts": len(selected_concepts),
+            },
+            {
+                "rule": "inherit-or-contains-terminal-original",
+                "effect": "semantic-properties",
+                "resolved_concepts": dataset_composition[
+                    "terminal_original_concepts"
+                ],
+            },
+            {
+                "rule": "contains-current-stored-descendants",
+                "effect": "structure-dereference",
+                "added_concepts": dataset_composition["contains_descendants"],
+                "rounds": dataset_composition["contains_rounds"],
+            },
+            {
+                "rule": "object-relationships",
+                "effect": "hint-only-provenance",
+                "executable": False,
+            },
+            {
+                "rule": "formal-terminology-binding",
+                "effect": "accepted-values-and-domain-status",
+            },
+        ],
     }
     return {
         "version": 2,

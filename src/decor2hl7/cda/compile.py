@@ -32,6 +32,7 @@ from ..retrieval.xml import (
 )
 from ..assertions import schematron
 from ..workspace import write_json
+from .art_decor import inspect_template_constructs, require_supported_constructs
 from .datatypes import (
     POLYMORPHIC_COMPLEX_ROOTS,
     base_datatype,
@@ -266,16 +267,40 @@ def collect_templates(
     return templates
 
 
-def select_template(
+_NON_EXECUTABLE_TEMPLATE_STATUSES = {"cancelled", "rejected", "retired"}
+
+
+def _is_executable_template_revision(template: ET.Element) -> bool:
+    """Apply the ART-DECOR template lifecycle before resolving references.
+
+    The owner's lifecycle defines cancelled and rejected revisions as never
+    published/withdrawn and retired revisions as historical-only. Draft,
+    pending, review, and active revisions remain executable design material.
+    """
+    return str(template.get("statusCode") or "").casefold() not in (
+        _NON_EXECUTABLE_TEMPLATE_STATUSES
+    )
+
+
+def select_template_revision(
     templates: dict[str, list[ET.Element]], template_id: str, flexibility: str | None = None
 ) -> ET.Element | None:
-    rows = templates.get(template_id, [])
+    rows = [
+        row for row in templates.get(template_id, [])
+        if _is_executable_template_revision(row)
+    ]
     if not rows:
         return None
     if flexibility and flexibility != "dynamic":
         exact = [row for row in rows if (row.get("effectiveDate") or "") == flexibility]
         return exact[-1] if exact else None
     return rows[-1]
+
+
+# Compatibility name for callers outside the CDA compiler. The implementation
+# name mirrors the ART-DECOR operation and makes its place in the rule pipeline
+# explicit.
+select_template = select_template_revision
 
 
 def _template_relations(template: ET.Element, kinds: set[str] | None = None) -> Iterable[ET.Element]:
@@ -365,15 +390,21 @@ def _unresolved_template_prototypes(
     return result
 
 
-def _value_set_binding(node: ET.Element) -> dict[str, str] | None:
+def _value_set_binding(
+    node: ET.Element, strength: str | None = None,
+) -> dict[str, str] | None:
     value_set = node.get("valueSet") or ""
     if not value_set:
         return None
-    binding = {
+    binding: dict[str, str] = {
         "id": value_set,
         "effective_date": node.get("vseffectiveDate") or node.get("effectiveDate") or "",
         "flexibility": node.get("flexibility") or "",
     }
+    if strength is not None:
+        binding["strength"] = {
+            "cne": "required", "cwe": "extensible",
+        }.get(str(strength).casefold(), str(strength).casefold())
     display_name = clean(node.get("vsdisplayName") or "")
     name = clean(node.get("vsname") or "")
     if display_name:
@@ -407,7 +438,7 @@ def _constraints(
     for node in list(element):
         kind = local(node.tag)
         if kind == "vocabulary":
-            binding = _value_set_binding(node)
+            binding = _value_set_binding(node, element.get("strength"))
             if binding is not None:
                 value_sets.append(binding["id"])
                 if binding not in value_set_bindings:
@@ -431,6 +462,41 @@ def _constraints(
         list(dict.fromkeys(value_sets)), value_set_bindings,
         list(dict.fromkeys(codes)), fixed, unit,
     )
+
+
+def _property_constraints(element: ET.Element) -> list[dict[str, Any]]:
+    """Preserve ART-DECOR property alternatives with owner terminology."""
+    properties: list[dict[str, Any]] = []
+    for child in list(element):
+        if local(child.tag) != "property":
+            continue
+        rule: dict[str, Any] = {}
+        for source, target in (
+            ("unit", "unit"), ("currency", "currency"),
+            ("value", "value"), ("fractionDigits", "fraction_digits"),
+        ):
+            if child.get(source) is not None:
+                rule[target] = child.get(source)
+        for source, target in (
+            ("minInclude", "min_include"),
+            ("maxInclude", "max_include"),
+        ):
+            raw = child.get(source)
+            if raw is None:
+                continue
+            try:
+                numeric = float(raw)
+                rule[target] = int(numeric) if numeric.is_integer() else numeric
+            except ValueError:
+                rule[target] = raw
+        for source, target in (
+            ("minLength", "min_length"), ("maxLength", "max_length"),
+        ):
+            if child.get(source) is not None:
+                rule[target] = _int(child.get(source))
+        if rule:
+            properties.append(rule)
+    return properties
 
 
 def _fixed_text(element: ET.Element) -> str | None:
@@ -466,6 +532,51 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
         )
         display = clean(template.get("displayName") or child_text(template, "name") or template_name)
         template_description = _description(template)
+
+        # A template-level attribute constrains the element selected by the
+        # template context. Keep it in the evidence registry even though its
+        # XML owner is supplied by the including/containing template.
+        for direct in list(template):
+            if local(direct.tag) != "attribute" or not direct.get("name"):
+                continue
+            name = direct.get("name") or "attribute"
+            namespace_prefix, namespace_uri = _namespace_identity(
+                "@" + name, template
+            )
+            value = _attribute_fixed_value(direct)
+            rows.append({
+                "template_id": tkey[0],
+                "template_effective_date": tkey[1],
+                "template_name": template_name,
+                "template_display_name": display,
+                "template_description": template_description,
+                "kind": "attribute",
+                "element_id": direct.get("id"),
+                "element_name": "@" + name,
+                "namespace_prefix": namespace_prefix,
+                "namespace_uri": namespace_uri,
+                "path": "@" + name,
+                "datatype": direct.get("datatype"),
+                "value_sets": [
+                    node.get("valueSet") or "" for node in list(direct)
+                    if local(node.tag) == "vocabulary" and node.get("valueSet")
+                ],
+                "value_set_bindings": [
+                    binding for node in list(direct)
+                    if local(node.tag) == "vocabulary"
+                    for binding in [_value_set_binding(node)]
+                    if binding is not None
+                ],
+                "codes": [],
+                "fixed": {"value": value} if value is not None else {},
+                "fixed_text": None,
+                "description": None,
+                "conformance": None,
+                "prohibited": False,
+                "unit": None,
+                "renderable": False,
+                "context": _template_context(template),
+            })
 
         def walk(parent: ET.Element, path: tuple[str, ...] = ()) -> None:
             for child in list(parent):
@@ -507,6 +618,13 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                         "conformance": child.get("conformance"),
                         "prohibited": child.get("conformance") == "NP",
                         "unit": unit or fixed.get("unit"),
+                        "properties": _property_constraints(child),
+                        "binding_strength": {
+                            "cne": "required", "cwe": "extensible",
+                        }.get(
+                            str(child.get("strength") or "required").casefold(),
+                            str(child.get("strength") or "required").casefold(),
+                        ),
                         "renderable": False,
                     })
                     # Attributes are writable targets too, even where ART-DECOR
@@ -548,8 +666,9 @@ def _raw_targets(reachable: dict[TemplateKey, ET.Element]) -> list[dict[str, Any
                             "description": None,
                             "conformance": child.get("conformance"),
                             "prohibited": child.get("conformance") == "NP",
-                            "unit": None,
-                            "renderable": False,
+                        "unit": None,
+                        "properties": _property_constraints(direct),
+                        "renderable": False,
                         })
                 walk(child, current)
 
@@ -598,15 +717,140 @@ def _source(template: ET.Element, path: str, element_id: str | None) -> dict[str
     }
 
 
+def _define_variable_lets(variable: ET.Element) -> dict[str, str]:
+    """Expand ART-DECOR ``defineVariable`` as the owner Schematron does."""
+    name = str(variable.get("name") or "")
+    if not name:
+        return {}
+    path = str(variable.get("path") or "")
+    code = next(
+        (child for child in list(variable) if local(child.tag) == "code"),
+        None,
+    )
+    use = next(
+        (child for child in list(variable) if local(child.tag) == "use"),
+        None,
+    )
+    selector = ""
+    if code is not None and (code.get("code") or code.get("codeSystem")):
+        selector = "[hl7:code"
+        if code.get("code"):
+            selector += f"[@code='{code.get('code')}']"
+        if code.get("codeSystem"):
+            selector += f"[@codeSystem='{code.get('codeSystem')}']"
+        selector += "]"
+    use_path = str(use.get("path") or "") if use is not None else ""
+    raw_name = f"temp1_{name}"
+    lets = {raw_name: f"{path}{selector}/{use_path}"}
+    datatype = str(use.get("as") or "") if use is not None else ""
+    if datatype == "INT":
+        lets[name] = (
+            f"if (${raw_name} castable as xs:integer) then "
+            f"(${raw_name} cast as xs:integer) else false"
+        )
+    elif datatype == "CE":
+        lets[name] = f"${raw_name}"
+    elif datatype == "TS.JULIAN":
+        date_name = f"temp2_{name}"
+        typed_name = f"temp3_{name}"
+        lets[date_name] = (
+            f"concat(substring(${raw_name}, 1, 4), '-', "
+            f"substring(${raw_name}, 5, 2), '-', substring(${raw_name}, 7, 2))"
+        )
+        lets[typed_name] = (
+            f"if (${date_name} castable as xs:date) then "
+            f"(${date_name} cast as xs:date) else false"
+        )
+        lets[name] = (
+            f"days-from-duration(${typed_name} - xs:date('1858-11-17'))"
+        )
+    elif datatype == "TS":
+        lets[name] = f"${raw_name}"
+    else:
+        lets[name] = "false"
+    return lets
+
+
+def _local_rule_content(
+    parent: ET.Element,
+    template: ET.Element,
+    path: str,
+    element_id: str | None,
+) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Compile owner-defined validation and free-form rules in source order."""
+    lets: dict[str, str] = {}
+    rules: list[dict[str, Any]] = []
+    definitions: list[dict[str, Any]] = []
+    constraints: list[dict[str, Any]] = []
+    for child in list(parent):
+        kind = local(child.tag)
+        if kind == "let" and child.get("name") and child.get("value"):
+            lets[str(child.get("name"))] = str(child.get("value"))
+        elif kind == "defineVariable" and child.get("name"):
+            expanded = _define_variable_lets(child)
+            lets.update(expanded)
+            definitions.append({
+                "name": str(child.get("name") or ""),
+                "path": str(child.get("path") or ""),
+                "expanded_lets": expanded,
+                "code": next((
+                    dict(item.attrib) for item in list(child)
+                    if local(item.tag) == "code"
+                ), None),
+                "use": next((
+                    dict(item.attrib) for item in list(child)
+                    if local(item.tag) == "use"
+                ), None),
+            })
+        elif kind in {"assert", "report"} and child.get("test"):
+            rules.append({
+                "kind": kind,
+                "test": child.get("test") or "",
+                "role": child.get("role") or "error",
+                "message": clean("".join(child.itertext())),
+                **({"flag": child.get("flag")} if child.get("flag") else {}),
+                **({"see": child.get("see")} if child.get("see") else {}),
+                "template_id": template.get("id") or "",
+                "template_effective_date": template.get("effectiveDate") or "",
+                "element_id": element_id or "",
+                "path": path,
+                "namespaces": _template_namespaces(template),
+            })
+        elif kind == "constraint":
+            text = clean("".join(child.itertext()))
+            constraints.append({
+                "kind": "constraint",
+                "language": (
+                    child.get("{http://www.w3.org/XML/1998/namespace}lang")
+                    or child.get("language") or ""
+                ),
+                "text": text,
+                "normative_terms": sorted(set(
+                    term for term in ("SHALL NOT", "MUST NOT", "SHALL", "MUST", "SHOULD", "MAY")
+                    if term in text.upper()
+                )),
+                "machine_test": None,
+                "template_id": template.get("id") or "",
+                "template_effective_date": template.get("effectiveDate") or "",
+                "element_id": element_id or "",
+                "path": path,
+            })
+    return lets, rules, definitions, constraints
+
+
 def _parse_attribute(attribute: ET.Element, template: ET.Element, path: str) -> dict[str, Any]:
     name = attribute.get("name") or "attribute"
     namespace_prefix, namespace_uri = _namespace_identity(name, template)
     bindings = [
         binding for node in list(attribute)
         if local(node.tag) == "vocabulary"
-        for binding in [_value_set_binding(node)] if binding is not None
+        for binding in [_value_set_binding(node, attribute.get("strength"))]
+        if binding is not None
     ]
     valuesets = list(dict.fromkeys(binding["id"] for binding in bindings))
+    _, _, _, textual_constraints = _local_rule_content(
+        attribute, template, path, attribute.get("id")
+    )
     return {
         "kind": "attribute",
         "name": name,
@@ -621,6 +865,8 @@ def _parse_attribute(attribute: ET.Element, template: ET.Element, path: str) -> 
         ),
         "value_sets": valuesets,
         "value_set_bindings": bindings,
+        "properties": _property_constraints(attribute),
+        "textual_constraints": textual_constraints,
         "sources": [_source(template, path, attribute.get("id"))],
         "provenance": [{
             "source": "template",
@@ -645,8 +891,9 @@ def _parse_element(
     value_sets, value_set_bindings, codes, fixed, unit = _constraints(element)
     children: list[dict[str, Any]] = []
     attributes: list[dict[str, Any]] = []
-    assertions: list[dict[str, Any]] = []
-    lets: dict[str, str] = {}
+    lets, validation_rules, variable_definitions, textual_constraints = (
+        _local_rule_content(element, template, current_path, element.get("id"))
+    )
     for child in list(element):
         kind = local(child.tag)
         if kind == "attribute" and child.get("name"):
@@ -654,28 +901,13 @@ def _parse_element(
         elif kind == "element":
             children.append(_parse_element(child, template, current, is_closed))
         elif kind == "choice":
-            # ART-DECOR choices constrain alternative instances of the same
-            # CDA particle.  They are transparent in XML, so retain each
-            # branch as a normal child while preserving its predicate in the
-            # design name.
-            for branch in list(child):
-                if local(branch.tag) == "element":
-                    children.append(_parse_element(branch, template, current, is_closed))
+            children.append(_parse_choice(
+                child, template, current, is_closed
+            ))
         elif kind == "include" and child.get("ref"):
-            children.append(_parse_include(child, is_closed))
-        elif kind == "let" and child.get("name") and child.get("value"):
-            lets[child.get("name") or ""] = child.get("value") or ""
-        elif kind == "assert" and child.get("test"):
-            assertions.append({
-                "test": child.get("test") or "",
-                "role": child.get("role") or "error",
-                "message": "".join(child.itertext()).strip(),
-                "template_id": template.get("id") or "",
-                "template_effective_date": template.get("effectiveDate") or "",
-                "element_id": element.get("id") or "",
-                "path": current_path,
-                "namespaces": _template_namespaces(template),
-            })
+            children.append(_parse_include(
+                child, template, current, is_closed
+            ))
     return {
         "kind": "element",
         "name": name,
@@ -699,6 +931,7 @@ def _parse_element(
             if element.get("isMandatory") is not None else None
         ),
         "conformance": element.get("conformance"),
+        "conditional": str(element.get("conformance") or "").upper() == "C",
         "is_closed": is_closed,
         "reviewed_extension": source_kind == "reviewed-extension",
         "reviewed_spec_branch": source_kind == "reviewed-spec-branch",
@@ -716,6 +949,13 @@ def _parse_element(
             for code, code_system, display_name in codes
         ],
         "unit": unit or fixed.get("unit"),
+        "properties": _property_constraints(element),
+        "binding_strength": {
+            "cne": "required", "cwe": "extensible",
+        }.get(
+            str(element.get("strength") or "required").casefold(),
+            str(element.get("strength") or "required").casefold(),
+        ),
         "attributes": attributes,
         "children": children,
         "contains": element.get("contains"),
@@ -732,12 +972,26 @@ def _parse_element(
             ),
         }],
         "targets": [],
-        "asserts": assertions,
+        "validation_rules": validation_rules,
+        # Compatibility for existing cda.json consumers; canonical code uses
+        # validation_rules because both assert and report are executable.
+        "asserts": validation_rules,
         "lets": lets,
+        "variable_definitions": variable_definitions,
+        "textual_constraints": textual_constraints,
     }
 
 
-def _parse_include(include: ET.Element, inherited_closed: bool = False) -> dict[str, Any]:
+def _parse_include(
+    include: ET.Element,
+    template: ET.Element,
+    path: tuple[str, ...],
+    inherited_closed: bool = False,
+) -> dict[str, Any]:
+    current_path = "/".join(path)
+    lets, validation_rules, variable_definitions, textual_constraints = (
+        _local_rule_content(include, template, current_path, include.get("id"))
+    )
     return {
         "kind": "include",
         "ref": include.get("ref") or "",
@@ -749,16 +1003,98 @@ def _parse_include(include: ET.Element, inherited_closed: bool = False) -> dict[
             if include.get("isMandatory") is not None else None
         ),
         "conformance": include.get("conformance"),
+        "conditional": str(include.get("conformance") or "").upper() == "C",
         # An include without its own multiplicity is an inline constraint
         # group. Its contained XML particles retain their own cardinalities;
         # the transparent wrapper must not suppress them at runtime.
         "transparent_inline": include.get("minimumMultiplicity") is None,
         "is_closed": inherited_closed or _xml_true(include.get("isClosed")),
         "children": [],
+        "validation_rules": validation_rules,
+        "asserts": validation_rules,
+        "lets": lets,
+        "variable_definitions": variable_definitions,
+        "textual_constraints": textual_constraints,
     }
 
 
-def _direct_template(template: ET.Element) -> list[dict[str, Any]]:
+def _parse_choice(
+    choice: ET.Element,
+    template: ET.Element,
+    path: tuple[str, ...],
+    inherited_closed: bool = False,
+) -> dict[str, Any]:
+    """Retain an ART-DECOR choice as one bounded transparent particle."""
+    children: list[dict[str, Any]] = []
+    for branch in list(choice):
+        kind = local(branch.tag)
+        if kind == "element":
+            children.append(_parse_element(
+                branch, template, path, inherited_closed
+            ))
+        elif kind == "include" and branch.get("ref"):
+            children.append(_parse_include(
+                branch, template, path, inherited_closed
+            ))
+        elif kind == "choice":
+            children.append(_parse_choice(
+                branch, template, path, inherited_closed
+            ))
+    current_path = "/".join(path)
+    source = _source(template, current_path, None)
+    lets, validation_rules, variable_definitions, textual_constraints = (
+        _local_rule_content(choice, template, current_path, None)
+    )
+    return {
+        "kind": "choice",
+        "min": _int(choice.get("minimumMultiplicity")),
+        "max": _maximum(choice.get("maximumMultiplicity")),
+        "mandatory": (
+            _xml_true(choice.get("isMandatory"))
+            if choice.get("isMandatory") is not None else None
+        ),
+        "conformance": choice.get("conformance"),
+        "conditional": str(choice.get("conformance") or "").upper() == "C",
+        "transparent_inline": False,
+        "is_closed": inherited_closed or _xml_true(choice.get("isClosed")),
+        "children": children,
+        "origin": source,
+        "sources": [source],
+        "provenance": [{"source": "template-choice", **source}],
+        "targets": [],
+        "validation_rules": validation_rules,
+        "asserts": validation_rules,
+        "lets": lets,
+        "variable_definitions": variable_definitions,
+        "textual_constraints": textual_constraints,
+    }
+
+
+def _template_context(template: ET.Element) -> dict[str, str] | None:
+    context = next(
+        (node for node in list(template) if local(node.tag) == "context"),
+        None,
+    )
+    if context is None:
+        return None
+    return {
+        key: str(context.get(key) or "")
+        for key in ("id", "path") if context.get(key) is not None
+    }
+
+
+def _template_context_attributes(template: ET.Element) -> list[dict[str, Any]]:
+    """Compile attributes whose owner is selected by the template context."""
+    return [
+        _parse_attribute(
+            child, template, "@" + str(child.get("name") or "attribute")
+        )
+        for child in list(template)
+        if local(child.tag) == "attribute" and child.get("name")
+    ]
+
+
+def _direct_template_rules(template: ET.Element) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     template_closed = _xml_true(template.get("isClosed"))
     for child in list(template):
@@ -766,12 +1102,87 @@ def _direct_template(template: ET.Element) -> list[dict[str, Any]]:
         if kind == "element":
             result.append(_parse_element(child, template, (), template_closed))
         elif kind == "choice":
-            for branch in list(child):
-                if local(branch.tag) == "element":
-                    result.append(_parse_element(branch, template, (), template_closed))
+            result.append(_parse_choice(child, template, (), template_closed))
         elif kind == "include" and child.get("ref"):
-            result.append(_parse_include(child, template_closed))
+            result.append(_parse_include(child, template, (), template_closed))
     return result
+
+
+def _direct_template(template: ET.Element) -> list[dict[str, Any]]:
+    """Compatibility wrapper for tests and extension validation."""
+    return _direct_template_rules(template)
+
+
+def _merge_context_attribute(
+    owner: dict[str, Any], attribute: Mapping[str, Any],
+) -> None:
+    """Apply one template-context attribute to its concrete XML owner."""
+    key = _xml_key(str(attribute.get("name") or ""))
+    existing = next(
+        (
+            item for item in owner.get("attributes", [])
+            if _xml_key(str(item.get("name") or "")) == key
+        ),
+        None,
+    )
+    if existing is None:
+        owner.setdefault("attributes", []).append(deepcopy(dict(attribute)))
+        return
+    old_value = existing.get("value")
+    new_value = attribute.get("value")
+    if old_value is not None and new_value is not None and old_value != new_value:
+        raise ValueError(
+            "conflicting ART-DECOR context attributes @"
+            f"{attribute.get('name')}: {old_value!r} != {new_value!r}"
+        )
+    for name in ("datatype", "value", "optional"):
+        if existing.get(name) is None and attribute.get(name) is not None:
+            existing[name] = deepcopy(attribute.get(name))
+    existing["value_sets"] = list(dict.fromkeys(
+        list(existing.get("value_sets", []))
+        + list(attribute.get("value_sets", []))
+    ))
+    existing["value_set_bindings"] = list(existing.get(
+        "value_set_bindings", []
+    )) + [
+        deepcopy(item) for item in attribute.get("value_set_bindings", [])
+        if item not in existing.get("value_set_bindings", [])
+    ]
+    existing["sources"] = _unique_sources(
+        list(existing.get("sources", [])) + list(attribute.get("sources", []))
+    )
+    existing.setdefault("provenance", []).extend(
+        deepcopy(list(attribute.get("provenance", [])))
+    )
+
+
+def _apply_document_template_context(
+    document: list[dict[str, Any]], template: ET.Element,
+) -> None:
+    """Apply rules located at the representing template's own context."""
+    attributes = _template_context_attributes(template)
+    roots = list(_transparent_element_children(document))
+    root_path = str(
+        (roots[0].get("origin") or {}).get("path")
+        if roots else ""
+    )
+    lets, rules, definitions, constraints = _local_rule_content(
+        template, template, root_path, None
+    )
+    if not any((attributes, lets, rules, definitions, constraints)):
+        return
+    if len(roots) != 1:
+        raise ValueError(
+            "document template context rules require exactly one root "
+            f"element; found {len(roots)}"
+        )
+    for attribute in attributes:
+        _merge_context_attribute(roots[0], attribute)
+    roots[0].setdefault("lets", {}).update(lets)
+    roots[0].setdefault("validation_rules", []).extend(rules)
+    roots[0]["asserts"] = roots[0]["validation_rules"]
+    roots[0].setdefault("variable_definitions", []).extend(definitions)
+    roots[0].setdefault("textual_constraints", []).extend(constraints)
 
 
 def _unique_sources(sources: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -911,6 +1322,107 @@ def _extract_constraint_diagnostics(
     return _unique_constraint_diagnostics(diagnostics)
 
 
+def _owner_rule_diagnostics(
+    nodes: Iterable[Mapping[str, Any]],
+    inherited_rules: Iterable[Mapping[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    """Expose free-form and conditional rules that cannot be inferred safely.
+
+    ART-DECOR defines ``constraint`` as free-form markup, whereas executable
+    conditions are expressed with Schematron ``assert``/``report``.  The
+    compiler therefore preserves prose but never translates English into an
+    invented XPath expression.
+    """
+    diagnostics: list[dict[str, Any]] = []
+    parent_rules = list(inherited_rules)
+    for node in nodes:
+        rules = list(node.get("validation_rules", node.get("asserts", [])))
+        textual = list(node.get("textual_constraints", []))
+        for constraint in textual:
+            normative = list(constraint.get("normative_terms", []))
+            diagnostics.append({
+                "code": "textual-constraint-not-executable",
+                "severity": (
+                    "warning"
+                    if any(term.startswith(("SHALL", "MUST")) for term in normative)
+                    else "info"
+                ),
+                "policy": "preserve-owner-free-form-markup",
+                "message": (
+                    "ART-DECOR <constraint> is free-form markup and has no "
+                    "machine test; it is preserved without inferring XPath: "
+                    + str(constraint.get("text") or "")
+                ),
+                "path": str(constraint.get("path") or ""),
+                "source": dict(constraint),
+            })
+
+        if str(node.get("conformance") or "").upper() == "C":
+            name = str(node.get("name") or "")
+            local_name = name.split("[", 1)[0].split(":", 1)[-1]
+            related_rules = [
+                rule for rule in parent_rules + rules
+                if local_name and local_name in str(rule.get("test") or "")
+            ]
+            evidence: list[str] = []
+            if "[" in name:
+                evidence.append("element-name-predicate")
+            if textual:
+                evidence.append("textual-constraint")
+            if related_rules:
+                evidence.append("schematron-rule")
+            source = dict(node.get("origin") or {})
+            if not evidence:
+                diagnostics.append({
+                    "code": "conditional-conformance-condition-missing",
+                    "severity": "error",
+                    "policy": "owner-conformance-C-requires-stated-condition",
+                    "message": (
+                        "ART-DECOR conformance C requires a stated condition, "
+                        f"but none is attached to {name or node.get('kind')}"
+                    ),
+                    "path": str(source.get("path") or name),
+                    "source": source,
+                })
+            elif not related_rules:
+                diagnostics.append({
+                    "code": "conditional-conformance-not-machine-enforced",
+                    "severity": "warning",
+                    "policy": "do-not-infer-condition-from-prose-or-selector",
+                    "message": (
+                        "ART-DECOR conformance C has stated condition evidence "
+                        f"({', '.join(evidence)}) but no associated executable "
+                        "assert/report; presence remains input-activated"
+                    ),
+                    "path": str(source.get("path") or name),
+                    "source": source,
+                    "condition_evidence": evidence,
+                })
+
+        child_parent_rules = parent_rules + rules
+        diagnostics.extend(_owner_rule_diagnostics(
+            list(node.get("children", [])), child_parent_rules
+        ))
+        for attribute in node.get("attributes", []):
+            for constraint in attribute.get("textual_constraints", []):
+                diagnostics.append({
+                    "code": "textual-constraint-not-executable",
+                    "severity": "warning" if any(
+                        term.startswith(("SHALL", "MUST"))
+                        for term in constraint.get("normative_terms", [])
+                    ) else "info",
+                    "policy": "preserve-owner-free-form-markup",
+                    "message": (
+                        "ART-DECOR <constraint> is free-form markup and has no "
+                        "machine test; it is preserved without inferring XPath: "
+                        + str(constraint.get("text") or "")
+                    ),
+                    "path": str(constraint.get("path") or ""),
+                    "source": dict(constraint),
+                })
+    return _unique_constraint_diagnostics(diagnostics)
+
+
 def _prototype_constraint_diagnostics(
     prototype: list[dict[str, Any]], current: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -958,7 +1470,7 @@ def _effective_template(
     key = _key(template)
     if key in memo:
         return deepcopy(memo[key])
-    effective = _direct_template(template)
+    effective = _direct_template_rules(template)
     # The owner implementation uses the first SPEC relationship as the editor
     # prototype. It does not expand SPEC in getExpandedTemplate. Preserve the
     # same order and use the prototype only to diagnose explicit broadening.
@@ -973,7 +1485,7 @@ def _effective_template(
         )
         if prototype is not None and _key(prototype) not in stack + (key,):
             diagnostics = _prototype_constraint_diagnostics(
-                _direct_template(prototype), effective
+                _direct_template_rules(prototype), effective
             )
             if diagnostics and effective:
                 effective[0]["_constraint_diagnostics"] = (
@@ -1275,8 +1787,24 @@ def _expand_nodes(
             node["children"] = []
             if target is not None and _key(target) not in stack:
                 effective = _effective_template(target, templates, memo)
+                target_lets, target_rules, target_variables, target_constraints = (
+                    _local_rule_content(
+                        target,
+                        target,
+                        str((_template_context(target) or {}).get("path") or ""),
+                        None,
+                    )
+                )
                 node["template_id"] = target.get("id")
                 node["template_effective_date"] = target.get("effectiveDate")
+                node["template_status_code"] = target.get("statusCode")
+                node["context"] = _template_context(target)
+                node["attributes"] = _template_context_attributes(target)
+                node.setdefault("lets", {}).update(target_lets)
+                node.setdefault("validation_rules", []).extend(target_rules)
+                node["asserts"] = node["validation_rules"]
+                node.setdefault("variable_definitions", []).extend(target_variables)
+                node.setdefault("textual_constraints", []).extend(target_constraints)
                 node["children"] = _expand_nodes(
                     effective, templates, memo, stack + (_key(target),)
                 )
@@ -1302,6 +1830,14 @@ def _expand_nodes(
                     effective, templates, memo, stack + (_key(target),)
                 )
                 _require_contained_root(contained)
+                target_lets, target_rules, target_variables, target_constraints = (
+                    _local_rule_content(
+                        target,
+                        target,
+                        str((_template_context(target) or {}).get("path") or ""),
+                        None,
+                    )
+                )
                 node["children"].append({
                     "kind": "template",
                     "ref": target.get("id"),
@@ -1311,7 +1847,15 @@ def _expand_nodes(
                     "max": 1,
                     "mandatory": False,
                     "transparent_inline": True,
+                    "template_status_code": target.get("statusCode"),
+                    "context": _template_context(target),
+                    "attributes": _template_context_attributes(target),
                     "children": contained,
+                    "validation_rules": target_rules,
+                    "asserts": target_rules,
+                    "lets": target_lets,
+                    "variable_definitions": target_variables,
+                    "textual_constraints": target_constraints,
                 })
         out.append(node)
     return out
@@ -1324,7 +1868,7 @@ def _require_contained_root(nodes: list[dict[str, Any]]) -> bool:
             if str(node.get("conformance") or "").upper() != "NP":
                 node["min"] = max(1, int(node.get("min") or 0))
             return True
-        if node.get("kind") in {"include", "template"} and _require_contained_root(
+        if node.get("kind") in {"include", "template", "choice"} and _require_contained_root(
             list(node.get("children", []))
         ):
             node["transparent_inline"] = True
@@ -1685,7 +2229,7 @@ def _transparent_element_children(
     for node in nodes:
         if node.get("kind") == "element":
             yield node
-        elif node.get("kind") in {"include", "template"}:
+        elif node.get("kind") in {"include", "template", "choice"}:
             yield from _transparent_element_children(
                 list(node.get("children", []))
             )
@@ -1695,7 +2239,7 @@ def _first_xml_particle(node: Mapping[str, Any]) -> str | None:
     """Return the first concrete XML particle below one compiled child."""
     if node.get("kind") == "element":
         return _particle_key(str(node.get("name") or ""))
-    if node.get("kind") in {"include", "template", "datatype_choice"}:
+    if node.get("kind") in {"include", "template", "choice", "datatype_choice"}:
         for child in node.get("children", []):
             particle = _first_xml_particle(child)
             if particle:
@@ -1741,6 +2285,9 @@ def _annotate_null_flavor_exceptions(
         for binding in target.get("value_set_bindings", []):
             if not isinstance(binding, Mapping) or not binding.get("id"):
                 continue
+            strength = str(binding.get("strength") or "required").casefold()
+            if strength not in {"required", "cne"}:
+                continue
             oid = str(binding["id"])
             effective = str(binding.get("effective_date") or "")
             exact = value_sets.get(f"{oid}@{effective}") if effective else None
@@ -1769,6 +2316,57 @@ def _annotate_null_flavor_exceptions(
             target["null_flavor_exceptions"] = sorted(
                 set.intersection(*exception_sets)
             )
+
+
+def _required_binding_constraints(
+    targets: Mapping[str, dict[str, Any]], model: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Compile required bindings once and reference them from target leaves."""
+    value_sets = model.get("value_sets", {})
+    if not isinstance(value_sets, Mapping):
+        return {}
+    registry: dict[str, dict[str, Any]] = {}
+    for target in targets.values():
+        keys: list[str] = []
+        for binding in target.get("value_set_bindings", []):
+            if not isinstance(binding, Mapping) or not binding.get("id"):
+                continue
+            strength = str(binding.get("strength") or "required").casefold()
+            if strength not in {"required", "cne"}:
+                continue
+            oid = str(binding["id"])
+            effective = str(binding.get("effective_date") or "")
+            exact_key = f"{oid}@{effective}" if effective else ""
+            selected_key = exact_key if exact_key in value_sets else ""
+            if not selected_key and not effective:
+                candidates = sorted(
+                    str(key) for key in value_sets
+                    if str(key).startswith(oid + "@")
+                )
+                selected_key = candidates[-1] if candidates else ""
+            identity = selected_key or f"{oid}@{effective}"
+            entry = value_sets.get(selected_key, {}) if selected_key else {}
+            codes = entry.get("codes", {}) if isinstance(entry, Mapping) else {}
+            registry.setdefault(identity, {
+                "id": oid,
+                "effective_date": effective,
+                "resolved_effective_date": (
+                    str(entry.get("effective_date") or "")
+                    if isinstance(entry, Mapping) else ""
+                ),
+                "resolved": bool(isinstance(codes, Mapping) and codes),
+                "members": sorted(
+                    {
+                        (str(code), str(info.get("code_system") or ""))
+                        for code, info in codes.items()
+                        if isinstance(info, Mapping)
+                    }
+                ),
+            })
+            keys.append(identity)
+        if keys:
+            target["required_binding_constraints"] = list(dict.fromkeys(keys))
+    return registry
 
 
 def _expand_cda_model_structure(
@@ -2205,7 +2803,8 @@ def _annotate_targets(
                     target["renderable"] = not prohibited and node.get("fixed_text") is None
                     # The concrete node carries effective SPEC constraints.
                     for key in (
-                        "datatype", "value_sets", "value_set_bindings", "codes", "fixed", "fixed_text", "unit",
+                        "datatype", "value_sets", "value_set_bindings", "binding_strength",
+                        "codes", "fixed", "fixed_text", "unit", "properties",
                         "min", "max", "mandatory", "system_value", "content_role",
                     ):
                         target[key] = deepcopy(node.get(key))
@@ -2637,7 +3236,13 @@ def _compiled_content_roles(
                 and not node.get("fixed")
             ):
                 node["system_value"] = "generated_identifier"
-            if path == ("ClinicalDocument", "effectiveTime"):
+            if path == ("ClinicalDocument", "id"):
+                node["system_value"] = "document_identifier"
+            elif path == ("ClinicalDocument", "setId"):
+                node["system_value"] = "document_set_identifier"
+            elif path == ("ClinicalDocument", "versionNumber"):
+                node["system_value"] = "document_version_number"
+            elif path == ("ClinicalDocument", "effectiveTime"):
                 node["system_value"] = "document_generation_time"
             elif path == ("ClinicalDocument", "author", "time"):
                 node["system_value"] = "document_generation_time"
@@ -2870,6 +3475,8 @@ def compile_cda(
         explicit_reachable, extensions,
     )
     reachable, missing = reachable_templates(templates, template_id, template_effective)
+    source_construct_coverage = inspect_template_constructs(reachable.values())
+    require_supported_constructs(source_construct_coverage)
     unresolved_prototypes = _unresolved_template_prototypes(
         reachable, templates
     )
@@ -2885,13 +3492,17 @@ def compile_cda(
     memo: dict[TemplateKey, list[dict[str, Any]]] = {}
     effective = _effective_template(selected, templates, memo)
     document = _expand_nodes(effective, templates, memo, (_key(selected),))
-    constraint_diagnostics = _extract_constraint_diagnostics(document)
-    if strict_specializations and constraint_diagnostics:
+    _apply_document_template_context(document, selected)
+    specialization_diagnostics = _extract_constraint_diagnostics(document)
+    if strict_specializations and specialization_diagnostics:
         messages = "; ".join(
             str(item.get("message") or item.get("code") or "SPEC weakening")
-            for item in constraint_diagnostics[:10]
+            for item in specialization_diagnostics[:10]
         )
         raise ValueError(f"CDA SPEC constraint weakening: {messages}")
+    constraint_diagnostics = _unique_constraint_diagnostics(
+        specialization_diagnostics + _owner_rule_diagnostics(document)
+    )
     definitions = index_definitions(core_definition_paths)
     if applied_extensions and not definitions:
         raise ValueError(
@@ -2923,20 +3534,37 @@ def compile_cda(
             break
     source_index = _annotate_targets(document, targets)
     _annotate_null_flavor_exceptions(targets, model)
+    terminology_constraints = _required_binding_constraints(targets, model)
     _annotate_non_null_requirements(document, targets)
     _materialize_polymorphic_targets(document, targets, source_index)
     _annotate_quantity_range_targets(document, targets)
     _annotate_linked_narrative_targets(document, targets)
-    assertions: list[dict[str, Any]] = []
-    def collect_assertions(
+    validation_rules: list[dict[str, Any]] = []
+    textual_constraints: list[dict[str, Any]] = []
+    variable_definitions: list[dict[str, Any]] = []
+    def collect_validation_rules(
         nodes: Sequence[Mapping[str, Any]], prefix: tuple[int, ...] = (),
     ) -> None:
         for index, node in enumerate(nodes):
             here = prefix + (index,)
-            for assertion in node.get("asserts", []):
-                assertions.append({**dict(assertion), "location": ".".join(map(str, here)), "lets": deepcopy(dict(node.get("lets", {})))})
-            collect_assertions(list(node.get("children", [])), here)
-    collect_assertions(document)
+            for rule in node.get("validation_rules", node.get("asserts", [])):
+                validation_rules.append({
+                    **dict(rule),
+                    "location": ".".join(map(str, here)),
+                    "lets": deepcopy(dict(node.get("lets", {}))),
+                })
+            textual_constraints.extend(
+                deepcopy(list(node.get("textual_constraints", [])))
+            )
+            variable_definitions.extend(
+                deepcopy(list(node.get("variable_definitions", [])))
+            )
+            for attribute in node.get("attributes", []):
+                textual_constraints.extend(
+                    deepcopy(list(attribute.get("textual_constraints", [])))
+                )
+            collect_validation_rules(list(node.get("children", [])), here)
+    collect_validation_rules(document)
     # A generated target is directly writable only when it resolves to exactly
     # one physical node in the effective document.  Keep ambiguous targets in
     # the registry for evidence/provenance, but make them non-renderable so no
@@ -2972,13 +3600,20 @@ def compile_cda(
         },
         "reviewed_extensions": applied_extensions,
         "constraint_diagnostics": constraint_diagnostics,
+        "source_construct_coverage": source_construct_coverage,
         "targets": targets,
         # Filled after dataset-to-CDA mapping has established logical target
         # occurrences.  ``targets`` remains the physical template constraint
         # registry; ``datapoints`` is the writable model-facing interface.
         "datapoints": {},
         "source_index": source_index,
-        "assertions": assertions,
+        "validation_rules": validation_rules,
+        # Backwards-compatible field name retained for older readers. Entries
+        # carry an explicit kind and may therefore be assert or report.
+        "assertions": validation_rules,
+        "textual_constraints": textual_constraints,
+        "variable_definitions": variable_definitions,
+        "terminology_constraints": terminology_constraints,
         "document": document,
         "unresolved_templates": missing,
         "unresolved_template_prototypes": unresolved_prototypes,
@@ -2994,8 +3629,21 @@ def compile_cda(
             "targets": len(targets),
             "renderable_targets": sum(bool(target.get("renderable")) for target in targets.values()),
             "writable_value_targets": sum(bool(target.get("writable")) for target in targets.values()),
-            "assertions": len(assertions),
+            "validation_rules": len(validation_rules),
+            "assertions": sum(
+                str(rule.get("kind") or "assert") == "assert"
+                for rule in validation_rules
+            ),
+            "reports": sum(
+                str(rule.get("kind") or "assert") == "report"
+                for rule in validation_rules
+            ),
+            "textual_constraints": len(textual_constraints),
+            "variable_definitions": len(variable_definitions),
             "constraint_diagnostics": len(constraint_diagnostics),
+            "source_constructs": sum(
+                source_construct_coverage.get("constructs", {}).values()
+            ),
             "unresolved_template_prototypes": len(unresolved_prototypes),
             "elements": element_count,
             "attributes": attribute_count,

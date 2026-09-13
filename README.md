@@ -515,6 +515,31 @@ mapping guides to the shareable transaction-specific `mapping/` bundle.
 transaction identity, and compiled model hashes; test results record the exact
 hash of the mapping that was exercised.
 
+Use `decor2hl7 init-cda-mapping --reset` only when the current generated
+proposal should replace every reviewed field, structure, and default choice.
+The command also refreshes the guides and mapping lock. A reset proposal may
+still require explicit mandatory CDA values; `check-cda-mapping` lists those
+gaps instead of manufacturing defaults.
+
+Generated workspaces may be excluded from Git without discarding non-generated
+review decisions. DEC-038 stores the pinned reference transaction's
+proposal-null field selections, reviewed target defaults, and target-alias
+migrations in the compact source-controlled recovery overlay
+[`docs/recovery/2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json`](docs/recovery/2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json).
+Recovery starts from a fresh proposal, verifies the recorded model/CDA hashes,
+shallow-merges the two override objects, and must finish with
+`decor2hl7 check-cda-mapping`. The overlay preserves human decisions; it is not
+additional evidence for automatic proposal generation.
+
+For a reproducible but small reference-workspace repository, keep
+`aktin.json`, `Makefile`, `.gitignore`, and reviewed acquisition configuration,
+and ignore the reconstructible `spec/`, `model/`, `mapping/`, `site/`, `test/`,
+`out/`, and `state/` trees. Adding ignore rules does not remove files already in
+the Git index; that one-time migration can use
+`git rm -r --cached --ignore-unmatch spec model mapping site test out state`,
+which leaves the working files in place. Preserve reviewed overrides in the
+durable recovery record before performing that migration.
+
 `decor2hl7 init-site-config` copies CSV/code proposals and their generated
 guides to the local `site/` bundle. This keeps code-mapping review with the
 local administrator rather than in the shareable CDA-mapping bundle. Existing
@@ -798,7 +823,7 @@ target binds an exact ValueSet with an `OTH` exception plus a compiled
 `originalText` companion. Exact admitted code/code-system pairs are preserved;
 other values render as `nullFlavor="OTH"` with their wording in `originalText`.
 
-`cda-mapping.json` version 7 may also contain declarative scalar, structural,
+`cda-mapping.json` version 8 may also contain declarative scalar, structural,
 and completion rules. The generated proposal currently derives only semantics
 supported by the specification itself:
 Tetanusschutz drives `negationInd` plus `nullFlavor=NI` for unknown status,

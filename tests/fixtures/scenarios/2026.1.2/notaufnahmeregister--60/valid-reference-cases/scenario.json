@@ -88,10 +88,10 @@
         "CDAlanguageCode.languageCode": "de-DE"
       },
       "fallback_if_active": {
-        "UVSubordinateadministration.substanceAdministration.moodCode@20230130": "EVN",
-        "UVSubordinateadministration.substanceAdministration.statusCode@20230130": "completed",
-        "UVSubordinateadministration.substanceAdministration.effectiveTime_value_or_nullFlavor@20230130": "2026-05-02T10:12:00+02:00",
-        "CDAauthor.author.assignedAuthor.assignedPerson@20140917::PersonElements.name": "Dr. Eva Beispiel"
+        "UVSubordinateadministration.moodCode": "EVN",
+        "UVSubordinateadministration.statusCode": "completed",
+        "UVSubordinateadministration.effectiveTime_value_or_nullFlavor": "2026-05-02T10:12:00+02:00",
+        "CDAauthor.assignedPerson::PersonElements.name": "Dr. Eva Beispiel"
       }
     }
   },

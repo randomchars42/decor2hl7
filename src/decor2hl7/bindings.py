@@ -167,6 +167,277 @@ def structure_rules(mapping: Mapping[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def construction_supplied_targets(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any],
+    site: Mapping[str, Any] | None = None,
+) -> set[str]:
+    """Return physical CDA targets that configuration can supply.
+
+    This is deliberately a capability calculation, not a claim that every
+    input record contains a value.  It covers scalar field rules, reviewed
+    target defaults, site values, and constants owned by structural rules.
+    """
+    datapoints = cda.get("datapoints", {})
+
+    def physical(name: Any) -> str:
+        configured = str(name or "")
+        logical = (
+            datapoints.get(configured, {})
+            if isinstance(datapoints, Mapping) else {}
+        )
+        if isinstance(logical, Mapping) and logical.get("cda_target"):
+            return str(logical["cda_target"])
+        return configured
+
+    supplied: set[str] = set()
+    for selection in mapping.get("fields", {}).values():
+        for rule in mapping_rules(selection):
+            supplied.add(physical(rule.get("cda_target") or rule.get("target")))
+    for name in mapping.get("target_defaults", {}):
+        supplied.add(physical(name))
+    for rule in structure_rules(mapping):
+        for key in ("target", "cda_target", "discriminator"):
+            if rule.get(key):
+                supplied.add(physical(rule[key]))
+        for branch in rule.get("branches", []):
+            if not isinstance(branch, Mapping):
+                continue
+            for key in ("target", "cda_target", "discriminator"):
+                if branch.get(key):
+                    supplied.add(physical(branch[key]))
+            constants = branch.get("constants", {})
+            if isinstance(constants, Mapping):
+                supplied.update(physical(name) for name in constants)
+        constants = rule.get("constants", {})
+        if isinstance(constants, Mapping):
+            supplied.update(physical(name) for name in constants)
+    site_cda = site.get("cda", {}) if isinstance(site, Mapping) else {}
+    if isinstance(site_cda, Mapping):
+        for key in ("values", "fallback_if_active"):
+            values = site_cda.get(key, {})
+            if isinstance(values, Mapping):
+                supplied.update(physical(name) for name in values)
+    return {name for name in supplied if name}
+
+
+def _construction_activating_targets(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any],
+    site: Mapping[str, Any] | None = None,
+) -> set[str]:
+    """Return capabilities that may select an otherwise optional branch."""
+    datapoints = cda.get("datapoints", {})
+
+    def physical(name: Any) -> str:
+        configured = str(name or "")
+        logical = (
+            datapoints.get(configured, {})
+            if isinstance(datapoints, Mapping) else {}
+        )
+        if isinstance(logical, Mapping) and logical.get("cda_target"):
+            return str(logical["cda_target"])
+        return configured
+
+    activating: set[str] = set()
+    for selection in mapping.get("fields", {}).values():
+        for rule in mapping_rules(selection):
+            if rule.get("mode") != "fallback_if_active":
+                activating.add(physical(
+                    rule.get("cda_target") or rule.get("target")
+                ))
+    site_cda = site.get("cda", {}) if isinstance(site, Mapping) else {}
+    if isinstance(site_cda, Mapping):
+        values = site_cda.get("values", {})
+        if isinstance(values, Mapping):
+            activating.update(physical(name) for name in values)
+    for name, target in cda.get("targets", {}).items():
+        if (
+            isinstance(target, Mapping) and target.get("system_value")
+            and target.get("system_value") != "generated_identifier"
+        ):
+            activating.add(str(name))
+    return {name for name in activating if name}
+
+
+def required_construction_gaps(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any],
+    site: Mapping[str, Any] | None = None,
+) -> list[str]:
+    """Find mandatory active CDA slots with no configured value source.
+
+    The traversal mirrors the owner-defined cardinality and choice rules used
+    by the renderer.  It does not manufacture clinical defaults: a mandatory
+    leaf is constructible only when the compiled template, document-production
+    infrastructure, or explicit mapping/site configuration supplies it.
+    """
+    targets = cda.get("targets", {})
+    supplied = construction_supplied_targets(cda, mapping, site)
+    activating = _construction_activating_targets(cda, mapping, site)
+    supplied_locations: set[tuple[int, ...]] = set()
+    for name in activating:
+        target = targets.get(name, {})
+        if not isinstance(target, Mapping):
+            continue
+        for raw in target.get("locations", []):
+            try:
+                location = tuple(int(part) for part in str(raw).split("."))
+            except ValueError:
+                continue
+            supplied_locations.update(
+                location[:depth] for depth in range(1, len(location) + 1)
+            )
+
+    gaps: list[str] = []
+
+    def required(node: Mapping[str, Any]) -> bool:
+        return bool(node.get("mandatory")) or int(node.get("min") or 0) >= 1
+
+    def active(location: tuple[int, ...]) -> bool:
+        return location in supplied_locations
+
+    def identity(node: Mapping[str, Any], location: tuple[int, ...]) -> str:
+        origin = node.get("origin", {})
+        label = str(
+            origin.get("path") if isinstance(origin, Mapping) else ""
+        ) or str(node.get("name") or ".".join(map(str, location)))
+        template_id = (
+            str(origin.get("template_id") or "")
+            if isinstance(origin, Mapping) else ""
+        )
+        effective = (
+            str(origin.get("template_effective_date") or "dynamic")
+            if isinstance(origin, Mapping) else "dynamic"
+        )
+        return f"{label} [{template_id}@{effective}]" if template_id else label
+
+    def has_target_value(node: Mapping[str, Any]) -> bool:
+        return any(str(name) in supplied for name in node.get("targets", []))
+
+    def has_compiled_scalar(node: Mapping[str, Any]) -> bool:
+        return bool(
+            node.get("fixed")
+            or node.get("fixed_text") is not None
+            or len(node.get("codes") or []) == 1
+            or node.get("system_value")
+            or node.get("content_role")
+            or has_target_value(node)
+        )
+
+    def attribute_is_supplied(
+        node: Mapping[str, Any], attribute: Mapping[str, Any], node_value: bool,
+    ) -> bool:
+        name = str(attribute.get("name") or "")
+        if (
+            attribute.get("value") is not None
+            or name in node.get("fixed", {})
+            or attribute.get("system_value")
+            or any(str(name) in supplied for name in attribute.get("targets", []))
+        ):
+            return True
+        if not node_value:
+            return False
+        represented = next((
+            targets.get(str(name), {}).get("value_representation")
+            for name in node.get("targets", [])
+            if targets.get(str(name), {}).get("value_representation")
+        ), {})
+        if not isinstance(represented, Mapping):
+            return False
+        represented_names = {
+            str(name) for name in (
+                list(represented.get("attributes") or [])
+                + [represented.get("attribute")]
+                + [represented.get("scalar_attribute")]
+            ) if name
+        }
+        return name in represented_names
+
+    def visit(
+        node: Mapping[str, Any], location: tuple[int, ...], selected: bool = False,
+    ) -> bool:
+        if str(node.get("conformance") or "").upper() == "NP":
+            return False
+        kind = str(node.get("kind") or "")
+        transparent = kind in {"include", "template", "datatype_choice"}
+        occurs = (
+            required(node) or selected or active(location)
+            or has_target_value(node)
+        )
+        if transparent:
+            occurs = occurs or bool(node.get("transparent_inline"))
+        if not occurs:
+            return False
+
+        children = list(node.get("children", []))
+        rendered_children: list[bool] = []
+        if kind == "choice":
+            selected_indices = [
+                index for index, _child in enumerate(children)
+                if active(location + (index,))
+            ]
+            minimum = int(node.get("min") or 0)
+            for index in range(len(children)):
+                if len(selected_indices) >= minimum:
+                    break
+                if index not in selected_indices:
+                    selected_indices.append(index)
+            for index in selected_indices:
+                rendered_children.append(visit(
+                    children[index], location + (index,), selected=True,
+                ))
+            return any(rendered_children)
+
+        node_value = has_compiled_scalar(node)
+        attribute_content = False
+        for attribute in node.get("attributes", []):
+            attribute_supplied = attribute_is_supplied(
+                node, attribute, node_value,
+            )
+            attribute_content = attribute_content or attribute_supplied
+            if attribute.get("optional") is False and not attribute_supplied:
+                gaps.append(
+                    f"required CDA attribute @{attribute.get('name')} on "
+                    f"{identity(node, location)} has no fixed, mapped, site, "
+                    "system, or default value"
+                )
+        for index, child in enumerate(children):
+            rendered_children.append(visit(child, location + (index,)))
+
+        if kind != "element":
+            return node_value or any(rendered_children)
+        if (
+            required(node) and not node_value and not attribute_content
+            and not any(rendered_children)
+        ):
+            if node.get("mandatory") or str(
+                node.get("conformance") or ""
+            ).upper() == "M":
+                gaps.append(
+                    f"mandatory CDA element {identity(node, location)} has no "
+                    "fixed, mapped, site, system, child, or default value"
+                )
+            elif children and not _permits_element_null_flavor_at_node(node):
+                gaps.append(
+                    f"required complex CDA element {identity(node, location)} "
+                    "has no fixed, mapped, site, system, child, or default value"
+                )
+        return (
+            node_value or attribute_content or any(rendered_children)
+            or required(node)
+        )
+
+    for index, root in enumerate(cda.get("document", [])):
+        visit(root, (index,))
+    return list(dict.fromkeys(gaps))
+
+
+def _permits_element_null_flavor_at_node(node: Mapping[str, Any]) -> bool:
+    return any(
+        str(attribute.get("name") or "").split(":", 1)[-1] == "nullFlavor"
+        and attribute.get("optional") is not False
+        for attribute in node.get("attributes", [])
+    )
+
+
 def required_unmapped_null_flavor(mapping: Mapping[str, Any]) -> str:
     """Return the mapping-owned completion policy for empty required leaves."""
     defaults = mapping.get("defaults", {})

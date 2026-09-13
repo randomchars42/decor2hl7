@@ -52,6 +52,8 @@ is not necessarily an accepted clinical policy.
 | DEC-035 | Versioned authored mapping scenarios | accepted | verified |
 | DEC-036 | Selected AKTIN medication branch is baseline authority | accepted | verified |
 | DEC-037 | ART-DECOR formal origins, relationships, and template prototypes | accepted | verified |
+| DEC-038 | Source-controlled recovery of reviewed CDA overrides | accepted | verified |
+| DEC-039 | Owner-defined ART-DECOR rule pipeline | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -1421,12 +1423,15 @@ separately reviewed and clearly identified extended profile, but such mappings
 are not baseline AKTIN mappings and must not be published as specification-
 derived evidence.
 
-Without the overlay, the automatic rules retain product name, product code,
-dosage narrative, route and sequence number. Pharmaceutical form and direct
-ingredient name, code and role lose their active CDA targets. Although the
-simple branch physically declares `lotNumberText`, no current ART-DECOR
-association selects it for source Chargennummer, so it remains unmapped under
-DEC-011 rather than being promoted from physical compatibility alone.
+Without the overlay, the simple branch physically retains product name,
+product code, dosage narrative, route and sequence number. Under DEC-037 only
+sequence number is generated automatically; the first four remain explicit
+reviewed mappings because their association paths cross ordinary ART-DECOR
+relationships. Pharmaceutical form and direct ingredient name, code and role
+have no active simple-branch targets. Although that branch physically declares
+`lotNumberText`, no current ART-DECOR association selects it for source
+Chargennummer, so it remains unmapped under DEC-011 rather than being promoted
+from physical compatibility alone.
 
 Evidence: `test-workplace/config/cda-extensions.json`,
 `tests/test_cda_datatypes.py`,
@@ -1476,6 +1481,144 @@ prototype assembly); `src/decor2hl7/compile/transaction.py`,
 `src/decor2hl7/cda/compile.py`, `src/decor2hl7/retrieval/references.py`,
 `src/decor2hl7/retrieval/fetch.py`, `src/decor2hl7/compile/mapping.py`, and
 `tests/test_core.py`.
+
+## DEC-038 — Source-controlled recovery of reviewed CDA overrides
+
+**Decision:** accepted
+**Implementation:** verified
+
+The generated reference-workspace trees remain disposable and may be excluded
+from Git. The manually reviewed decisions that cannot be reconstructed from a
+fresh proposal are instead preserved as a compact, release- and transaction-
+pinned recovery overlay in
+`docs/recovery/2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json`.
+This file is project policy, not generated mapping evidence.
+
+For release `2026.1.2`, transaction `notaufnahmeregister--60`, the corrected
+proposal selects 85 of 120 fields while applying the recovery overlay would
+select 98. The
+overlay records exactly the 13 non-null reviewed field selections for which the
+proposal is `null`, including the reviewed allergy fallback and medication
+code-system transform. It also records the seven reviewed target defaults that
+are absent from the proposal. Reasons remain embedded beside every non-obvious
+fallback or default.
+
+The overlay additionally records the 16 old-to-current target aliases migrated
+after stored-child template compilation stopped serializing prototype-derived
+long names. Each migration was accepted only after the current CDA target was
+matched to the same template identifier, element identifier, and XML path. An
+alias entry is migration evidence only; it does not authorize a new source-to-
+target mapping.
+
+Recovery is deterministic and deliberately separate from proposal generation:
+
+1. fetch and build the pinned release and transaction;
+2. verify the generated `model.json` and `cda.json` hashes recorded by the
+   overlay;
+3. initialize a fresh `cda-mapping.json` from the generated proposal;
+4. shallow-merge `field_overrides` into `fields` and
+   `target_default_overrides` into `target_defaults`;
+5. run `check-cda-mapping`, expecting 98 mapped fields and eight target
+   defaults; and
+6. keep the resulting mapping lock beside the recovered mapping.
+
+This restoration does not make relationship-derived candidates executable and
+does not change DEC-037. It restores explicit human review after the compiler
+has correctly declined to infer the association.
+
+Six other fields have non-null mappings on both sides but differ in target or
+transform serialization: direct physician contact, Manchester Triage System
+presentation, substance influence, pregnancy status, ECG requested, and
+discharge time. DEC-038 does not freeze those differences. A recovery starts
+from the fresh proposal for them; retaining an older reviewed serialization
+requires a separate evidence review rather than accidental promotion into
+policy.
+
+Evidence: `docs/recovery/2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json`,
+`docs/analyses/2026-09-11-art-decor-origin-relationship-prototype-semantics.md`,
+the authoritative local reference workspace, and successful
+`decor2hl7 check-cda-mapping` against the recovered overlay.
+
+The authoritative reference workspace is intentionally reset to the generated
+85-field proposal while owner-rule compilation is being verified. It does not
+implicitly apply this recovery decision.
+
+## DEC-039 — Owner-defined ART-DECOR rule pipeline
+
+**Decision:** accepted
+**Implementation:** verified
+
+The compiler implements the selected ART-DECOR owner's schema and publication
+logic as an explicit ordered pipeline. Project decisions may configure a value
+or a separately identified extension, but cannot reinterpret an owner construct
+or make an implicit relationship executable.
+
+Dataset composition executes in this order:
+
+1. apply selected transaction usage/cardinality;
+2. resolve one terminal original through formal `<inherit>`/`<contains>` and
+   take its semantic properties;
+3. materialise the current stored concept's descendants, dereferencing a
+   formal `contains` alias through exact `originalId` or the uniquely
+   corroborated analysis-form terminal-original locator when necessary;
+4. retain `relationship` types as unchecked, hint-only evidence; and
+5. apply the exact formal terminology binding.
+
+`REPL`, `SPEC`, `GEN`, `COPY`, `ADAPT`, `EQUIV`, `VERSION`, `BACKWD`, and
+`DRIV` therefore retain the owner's declared relationship meanings but never
+copy fields, locate a subtree, establish concept identity, or raise mapping
+confidence. In particular, `ADAPT` does not mean “copy all referenced leaves
+and override local ones”; no owner source examined defines that behavior.
+
+CDA constraint compilation executes current stored template constraints and
+then their formal `include`/`contains` closure. It preserves bounded choices and
+their include alternatives, template-context attributes, lifecycle/revision
+identity, cardinality/conformance, closedness, fixed values, vocabulary binding
+strength, datatype flavour, numeric/string ranges, variable definitions,
+`assert`, `report`, and free-form `constraint` content. CDA/RIM and datatype
+expansion runs only after those owner constraints have established the effective
+tree. Examples, descriptions, comments, copyright/purpose text, classification,
+FHIR annotations, and relationship metadata remain non-executable evidence.
+
+The executable distinctions are exact:
+
+- choice `min`/`max` governs how many alternatives may occur;
+- only `required` vocabulary bindings constrain values and strengthen mapping;
+  `extensible`, `preferred`, and `example` remain advisory;
+- `minInclude`, `maxInclude`, `fractionDigits`, `minLength`, and `maxLength`
+  remain compiled value constraints;
+- `timeStampPrecision` without `!` is a minimum, while `YMD!` is exact;
+- datatype flavours are validated at rendering;
+- abstract (`type="A"`) dataset/value-set options are evidence but cannot be
+  selected;
+- an `assert` fails when its test is false, a `report` fires when its test is
+  true, and severity controls error versus warning;
+- conditional (`C`) conformance without a machine-readable condition is an
+  owner-rule diagnostic, not guessed logic; and
+- free-form `<constraint>` prose is preserved and reported but is not converted
+  into invented XPath. The owner transform does not execute it.
+
+Before compilation, every admitted template-design child is classified as
+structure, validation, prose, example, metadata, or analysis expansion. An
+unknown executable child is fatal instead of being silently dropped. After
+mapping, static construction validation applies the same cardinality/choice
+model as rendering and reports mandatory active slots without a fixed, mapped,
+site, structural, system, or legal default value.
+
+Human-readable CDA target labels are not stable owner identity. Mapping version
+8 therefore stores an exact `source_key` and a revision-independent key formed
+from template OID, element ID, and XML path. A target reference may migrate only
+when that owner key has one unique current match; ambiguity remains review work.
+`init-cda-mapping --reset` explicitly replaces all reviewed selections with the
+current proposal and refreshes its guides and lock.
+
+Evidence: pinned DECOR-core `DECOR.xsd`, `DECOR2schematron.xsl` and API owner
+modules cited in
+`docs/analyses/2026-09-11-art-decor-origin-relationship-prototype-semantics.md`;
+`src/decor2hl7/cda/art_decor.py`, `src/decor2hl7/cda/compile.py`,
+`src/decor2hl7/compile/transaction.py`, `src/decor2hl7/semantics.py`,
+`src/decor2hl7/data.py`, `src/decor2hl7/assertions.py`,
+`src/decor2hl7/bindings.py`, `src/decor2hl7/validate.py`, and regression tests.
 
 ## Maintenance rule
 

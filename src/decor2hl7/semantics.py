@@ -14,6 +14,26 @@ from .cda.datatypes import value_representation
 from .cda.model import ValueRepresentationKind
 
 
+def binding_strength(binding: Mapping[str, Any]) -> str:
+    """Return the canonical ART-DECOR coding-strength name."""
+    raw = str(binding.get("strength") or "required").casefold()
+    return {"cne": "required", "cwe": "extensible"}.get(raw, raw)
+
+
+def required_value_set_ids(target: Mapping[str, Any]) -> set[str]:
+    """Return only bindings that constrain instance conformance."""
+    bindings = target.get("value_set_bindings", [])
+    if isinstance(bindings, list) and bindings:
+        return {
+            str(item.get("id") or "")
+            for item in bindings if isinstance(item, Mapping)
+            and binding_strength(item) == "required" and item.get("id")
+        }
+    # Compatibility with models compiled before strength was retained. The
+    # ART-DECOR schema default is required.
+    return {str(value) for value in target.get("value_sets", []) if value}
+
+
 def accepted_values(field: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return the executable domain, with model-v1 compatibility."""
     values = field.get("accepted_values")
@@ -89,7 +109,7 @@ def _shared_coded_element_payload(
     formal = field.get("formal_terminology")
     if isinstance(formal, Mapping):
         field_sets.update(_value_set_ids(formal.get("value_sets")))
-    target_sets = _value_set_ids(target.get("value_sets"))
+    target_sets = required_value_set_ids(target)
     return bool(field_sets & target_sets)
 
 

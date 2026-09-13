@@ -14,8 +14,9 @@ from typing import Any, Iterable, Mapping
 from ..retrieval.xml import child_text, local, parse_file
 from ..workspace import write_json
 from ..semantics import (
-    accepted_values, base_datatype, direct_compatibility, payload_match,
-    target_type_match, transformed_compatibility, type_match,
+    accepted_values, base_datatype, direct_compatibility,
+    payload_match, required_value_set_ids, target_type_match,
+    transformed_compatibility, type_match,
 )
 from ..transforms import cda_target_name, mapping_rules
 from ..cda.datatypes import classify_datatype
@@ -342,7 +343,7 @@ def _target_indexes(
     by_template: dict[str, list[tuple[str, Mapping[str, Any]]]] = defaultdict(list)
     for name, target in _renderable_targets(cda).items():
         by_template[str(target.get("template_id") or "")].append((name, target))
-        for oid in target.get("value_sets", []):
+        for oid in required_value_set_ids(target):
             by_vs[str(oid)].append((name, target))
         for code in target.get("codes", []):
             if code.get("code") and code.get("code_system"):
@@ -2670,7 +2671,7 @@ def _certainty_mapping(
     for name, target in cda.get("targets", {}).items():
         if not target.get("renderable") or len(target.get("locations", [])) != 1:
             continue
-        for oid in target.get("value_sets", []):
+        for oid in required_value_set_ids(target):
             members = value_sets.get(str(oid), [])
             by_code = {
                 str(member.get("code") or "").upper(): dict(member)
@@ -2766,10 +2767,10 @@ def _bound_enum_mapping(
         if (
             not target.get("writable")
             or len(target.get("locations", [])) != 1
-            or len(target.get("value_sets", [])) != 1
+            or len(required_value_set_ids(target)) != 1
         ):
             continue
-        oid = str(target["value_sets"][0])
+        oid = next(iter(required_value_set_ids(target)))
         members = value_sets.get(oid, [])
         if not members:
             continue
@@ -3174,7 +3175,7 @@ def _cda_mapping_analysis(
             detail.pop("gap", None)
 
     proposal: dict[str, Any] = {
-        "version": 7,
+        "version": 8,
         "model": {
             "dataset_id": model.get("meta", {}).get("dataset_id"),
             "transaction_id": model.get("meta", {}).get("transaction_id"),
@@ -4188,6 +4189,8 @@ def cda_datapoints(
                 continue
             datapoint = result.setdefault(name, {
                 "cda_target": physical_name,
+                "source_key": target.get("source_key"),
+                "revisionless_source_key": _revisionless_target_key(target),
                 "template_id": target.get("template_id"),
                 "template_effective_date": target.get("template_effective_date"),
                 "template_name": target.get("template_name"),
@@ -4227,6 +4230,8 @@ def cda_datapoints(
             continue
         datapoint = result.setdefault(physical_name, {
             "cda_target": physical_name,
+            "source_key": target.get("source_key"),
+            "revisionless_source_key": _revisionless_target_key(target),
             "template_id": target.get("template_id"),
             "template_effective_date": target.get("template_effective_date"),
             "template_name": target.get("template_name"),
@@ -4246,6 +4251,219 @@ def cda_datapoints(
     return result
 
 
+def _revisionless_target_key(target: Mapping[str, Any]) -> str:
+    """Return the stable owner identity of one compiled ART-DECOR slot."""
+    template_id = str(target.get("template_id") or "")
+    element_id = str(target.get("element_id") or "")
+    path = str(target.get("path") or "")
+    if not template_id or not (element_id or path):
+        return ""
+    return "|".join((
+        template_id,
+        f"ID:{element_id}" if element_id else "ID:",
+        f"PATH:{path}" if path else "PATH:",
+    ))
+
+
+def mapping_target_identities(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Record owner identities for every target reference in a mapping.
+
+    Human-readable CDA target names are useful review labels but can change
+    when a template revision is recompiled.  The exact and revisionless owner
+    keys make later migration explicit and uniquely checkable.
+    """
+    targets = cda.get("targets", {})
+    datapoints = cda.get("datapoints", {})
+    result: dict[str, dict[str, Any]] = {}
+
+    def remember(configured: Any, physical_hint: Any = None) -> None:
+        name = str(configured or "")
+        physical = str(physical_hint or name)
+        logical = (
+            datapoints.get(name, {}) if isinstance(datapoints, Mapping) else {}
+        )
+        if (
+            not physical_hint and isinstance(logical, Mapping)
+            and logical.get("cda_target")
+        ):
+            physical = str(logical["cda_target"])
+        target = targets.get(physical, {})
+        if not name or not isinstance(target, Mapping) or not target:
+            return
+        identity = {
+            "cda_target": physical,
+            "source_key": str(target.get("source_key") or ""),
+            "revisionless_source_key": _revisionless_target_key(target),
+            "template_id": str(target.get("template_id") or ""),
+            "template_effective_date": str(
+                target.get("template_effective_date") or ""
+            ),
+            "element_id": str(target.get("element_id") or ""),
+            "path": str(target.get("path") or ""),
+        }
+        previous = result.get(name)
+        if previous is not None and previous != identity:
+            raise ValueError(
+                f"mapping target {name!r} resolves to multiple owner identities"
+            )
+        result[name] = identity
+
+    for selection in mapping.get("fields", {}).values():
+        for rule in mapping_rules(selection):
+            remember(rule.get("target"), rule.get("cda_target"))
+    structures = mapping.get("structures", {})
+    structure_items = (
+        structures.values() if isinstance(structures, Mapping) else structures
+        if isinstance(structures, list) else []
+    )
+    for rule in structure_items:
+        if not isinstance(rule, Mapping):
+            continue
+        for key in ("target", "discriminator"):
+            if rule.get(key):
+                remember(rule[key], rule.get("cda_target"))
+        for branch in rule.get("branches", []):
+            if not isinstance(branch, Mapping):
+                continue
+            for key in ("target", "discriminator"):
+                if branch.get(key):
+                    remember(branch[key], branch.get("cda_target"))
+            constants = branch.get("constants", {})
+            if isinstance(constants, Mapping):
+                for name in constants:
+                    remember(name)
+        constants = rule.get("constants", {})
+        if isinstance(constants, Mapping):
+            for name in constants:
+                remember(name)
+    for name in mapping.get("target_defaults", {}):
+        remember(name)
+    return dict(sorted(result.items()))
+
+
+def migrate_mapping_target_identities(
+    current: dict[str, Any], proposed: Mapping[str, Any], cda: Mapping[str, Any],
+) -> int:
+    """Migrate stale target labels only through unique stored owner identity."""
+    old = current.get("target_identities", {})
+    new = proposed.get("target_identities", {})
+    if not isinstance(old, Mapping) or not isinstance(new, Mapping):
+        return 0
+    new_by_owner: dict[str, list[tuple[str, Mapping[str, Any]]]] = defaultdict(list)
+    proposal_owners: set[str] = set()
+    for name, identity in new.items():
+        if isinstance(identity, Mapping) and identity.get("revisionless_source_key"):
+            owner = str(identity["revisionless_source_key"])
+            proposal_owners.add(owner)
+            new_by_owner[owner].append(
+                (str(name), identity)
+            )
+    for name, target in cda.get("targets", {}).items():
+        if not isinstance(target, Mapping):
+            continue
+        owner = _revisionless_target_key(target)
+        if owner and owner not in proposal_owners:
+            new_by_owner[owner].append((str(name), {
+                "cda_target": str(name),
+            }))
+
+    migrations: dict[str, tuple[str, str]] = {}
+    for name, identity in old.items():
+        if not isinstance(identity, Mapping):
+            continue
+        owner = str(identity.get("revisionless_source_key") or "")
+        candidates = new_by_owner.get(owner, [])
+        if owner and len(candidates) == 1:
+            new_name, new_identity = candidates[0]
+            migrations[str(name)] = (
+                new_name, str(new_identity.get("cda_target") or new_name),
+            )
+
+    changed = 0
+
+    def migrate_reference(name: Any) -> tuple[str, str]:
+        configured = str(name or "")
+        return migrations.get(configured, (configured, configured))
+
+    def migrate_selection(selection: Any) -> Any:
+        nonlocal changed
+        if isinstance(selection, str):
+            target, _physical = migrate_reference(selection)
+            if target != selection:
+                changed += 1
+            return target
+        if isinstance(selection, list):
+            return [migrate_selection(item) for item in selection]
+        if not isinstance(selection, Mapping):
+            return selection
+        rule = dict(selection)
+        if rule.get("target"):
+            target, physical = migrate_reference(rule["target"])
+            current_physical = str(rule.get("cda_target") or rule["target"])
+            if target != str(rule["target"]) or physical != current_physical:
+                changed += 1
+            rule["target"] = target
+            if "cda_target" in rule or physical != target:
+                rule["cda_target"] = physical
+        return rule
+
+    fields = current.get("fields", {})
+    if isinstance(fields, dict):
+        for path, selection in list(fields.items()):
+            fields[path] = migrate_selection(selection)
+
+    structures = current.get("structures", {})
+    structure_items = (
+        structures.values() if isinstance(structures, Mapping) else structures
+        if isinstance(structures, list) else []
+    )
+    for rule in structure_items:
+        if not isinstance(rule, dict):
+            continue
+        for owner in [rule] + [
+            branch for branch in rule.get("branches", [])
+            if isinstance(branch, dict)
+        ]:
+            if owner.get("target"):
+                target, physical = migrate_reference(owner["target"])
+                old_target = str(owner["target"])
+                old_physical = str(owner.get("cda_target") or old_target)
+                if target != old_target or physical != old_physical:
+                    changed += 1
+                owner["target"] = target
+                if "cda_target" in owner or physical != target:
+                    owner["cda_target"] = physical
+            constants = owner.get("constants", {})
+            if isinstance(constants, dict):
+                for old_name in list(constants):
+                    new_name, _physical = migrate_reference(old_name)
+                    if new_name != old_name:
+                        constants[new_name] = constants.pop(old_name)
+                        changed += 1
+
+    defaults = current.get("target_defaults", {})
+    if isinstance(defaults, dict):
+        for old_name in list(defaults):
+            new_name, _physical = migrate_reference(old_name)
+            if new_name != old_name:
+                defaults[new_name] = defaults.pop(old_name)
+                changed += 1
+    refreshed = mapping_target_identities(cda, current)
+    for name, identity in old.items():
+        if (
+            str(name) not in refreshed and str(name) not in migrations
+            and isinstance(identity, Mapping)
+        ):
+            # Keep an unresolved/ambiguous old identity available for review;
+            # losing the evidence would make a later unique migration harder.
+            refreshed[str(name)] = dict(identity)
+    current["target_identities"] = dict(sorted(refreshed.items()))
+    current["version"] = max(int(current.get("version") or 0), 8)
+    return changed
+
+
 def write_cda_mapping(
     xml_paths: Iterable[Path],
     model_dir: Path,
@@ -4255,6 +4473,9 @@ def write_cda_mapping(
     """Write the ART-DECOR/model-to-CDA proposal without inspecting CSV input."""
     cda_proposal, audit, _, cda_details = cda_mapping_audit(
         model, cda, xml_paths
+    )
+    cda_proposal["target_identities"] = mapping_target_identities(
+        cda, cda_proposal
     )
     cda_proposal["configuration_notes"] = _mapping_configuration_notes(
         cda_proposal, audit, model, cda

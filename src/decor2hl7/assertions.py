@@ -1,4 +1,4 @@
-"""Evaluate the XPath subset used by ART-DECOR template assertions.
+"""Evaluate the XPath subset used by ART-DECOR Schematron rules.
 
 The runtime intentionally stays standard-library only.  The evaluator supports
 boolean ``and/or/not``, ``count(...)`` comparisons, attribute comparisons and
@@ -215,10 +215,10 @@ def validate_contexts(
     contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]],
 ) -> tuple[list[str], list[str]]:
     errors: list[str] = []; warnings: list[str] = []
-    for element, assertions, lets in contexts:
-        for assertion in assertions:
-            test = str(assertion.get("test") or "")
-            raw_namespaces = assertion.get("namespaces", {})
+    for element, rules, lets in contexts:
+        for rule in rules:
+            test = str(rule.get("test") or "")
+            raw_namespaces = rule.get("namespaces", {})
             namespaces = (
                 {
                     str(prefix): str(uri)
@@ -227,15 +227,19 @@ def validate_contexts(
                 if isinstance(raw_namespaces, Mapping) else {}
             )
             result = evaluate(test, element, root, lets, namespaces)
-            label = str(assertion.get("message") or test)
-            source = f"{assertion.get('template_id') or '?'}:{assertion.get('element_id') or assertion.get('path') or '?'}"
-            if result is False:
-                message = f"ART-DECOR assert failed [{source}]: {label} ({test})"
-                if str(assertion.get("role") or "error").casefold() == "error": errors.append(message)
+            label = str(rule.get("message") or test)
+            source = f"{rule.get('template_id') or '?'}:{rule.get('element_id') or rule.get('path') or '?'}"
+            kind = str(rule.get("kind") or "assert").casefold()
+            fired = result is True if kind == "report" else result is False
+            role = str(rule.get("role") or "error").casefold()
+            if fired:
+                verb = "reported" if kind == "report" else "failed"
+                message = f"ART-DECOR {kind} {verb} [{source}]: {label} ({test})"
+                if role in {"fatal", "error"}: errors.append(message)
                 else: warnings.append(message)
             elif result is None:
-                message = f"ART-DECOR assert could not be evaluated [{source}]: {test}"
-                if str(assertion.get("role") or "error").casefold() == "error":
+                message = f"ART-DECOR {kind} could not be evaluated [{source}]: {test}"
+                if role in {"fatal", "error"}:
                     errors.append(message)
                 else:
                     warnings.append(message)
@@ -243,13 +247,13 @@ def validate_contexts(
 
 
 def schematron(cda: Mapping[str, Any]) -> str:
-    assertions = list(cda.get("assertions", []))
+    rules = list(cda.get("validation_rules", cda.get("assertions", [])))
     namespace_uris = {"hl7": HL7}
     prefix_pattern = re.compile(
         r"(?<![:\w.-])([A-Za-z_][\w.-]*):(?=[A-Za-z_*])"
     )
-    for assertion in assertions:
-        raw_namespaces = assertion.get("namespaces", {})
+    for rule in rules:
+        raw_namespaces = rule.get("namespaces", {})
         available = (
             {
                 str(prefix): str(uri)
@@ -258,9 +262,9 @@ def schematron(cda: Mapping[str, Any]) -> str:
             if isinstance(raw_namespaces, Mapping) else {}
         )
         expressions = [
-            str(assertion.get("path") or ""),
-            str(assertion.get("test") or ""),
-            *(str(value) for value in dict(assertion.get("lets", {})).values()),
+            str(rule.get("path") or ""),
+            str(rule.get("test") or ""),
+            *(str(value) for value in dict(rule.get("lets", {})).values()),
         ]
         for prefix in {
             match.group(1)
@@ -289,24 +293,25 @@ def schematron(cda: Mapping[str, Any]) -> str:
         ),
         '  <sch:pattern id="art-decor-assertions">',
     ]
-    for index, assertion in enumerate(assertions, 1):
-        path = str(assertion.get("path") or "hl7:ClinicalDocument")
-        tid = str(assertion.get("template_id") or "")
+    for index, rule in enumerate(rules, 1):
+        path = str(rule.get("path") or "hl7:ClinicalDocument")
+        tid = str(rule.get("template_id") or "")
         parts = [part for part in path.split("/") if part]
         context = "/".join(parts)
         # Most assertions are on a template root or descendant. Constrain the
         # root when possible without rewriting the authoritative test itself.
         if tid and parts:
             context = f"{context}[ancestor-or-self::*[hl7:templateId/@root='{tid}']]"
-        role = escape(str(assertion.get("role") or "error"), quote=True)
-        test = escape(str(assertion.get("test") or ""), quote=True)
-        message = escape(str(assertion.get("message") or assertion.get("test") or ""))
-        lines.append(f'    <sch:rule id="decor-assert-{index}" context="{escape(context, quote=True)}">')
-        for name, value in dict(assertion.get("lets", {})).items():
+        kind = "report" if str(rule.get("kind") or "assert").casefold() == "report" else "assert"
+        role = escape(str(rule.get("role") or "error"), quote=True)
+        test = escape(str(rule.get("test") or ""), quote=True)
+        message = escape(str(rule.get("message") or rule.get("test") or ""))
+        lines.append(f'    <sch:rule id="decor-{kind}-{index}" context="{escape(context, quote=True)}">')
+        for name, value in dict(rule.get("lets", {})).items():
             lines.append(
                 f'      <sch:let name="{escape(str(name), quote=True)}" value="{escape(str(value), quote=True)}"/>'
             )
-        lines += [f'      <sch:assert role="{role}" test="{test}">{message}</sch:assert>',
+        lines += [f'      <sch:{kind} role="{role}" test="{test}">{message}</sch:{kind}>',
                   '    </sch:rule>']
     lines += ['  </sch:pattern>', '</sch:schema>', '']
     return "\n".join(lines)

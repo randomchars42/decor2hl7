@@ -429,6 +429,53 @@ class CliTests(unittest.TestCase):
             self.assertEqual((site_dir / "codes-mapping.md").read_text(), "# Code guide")
             self.assertFalse((mapping_dir / "codes-mapping.md").exists())
 
+    def test_init_cda_mapping_reset_replaces_review_and_refreshes_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            set_release(root, RELEASES[0])
+            set_transaction(root, TRANSACTIONS[0])
+            model_dir = transaction_model_dir(root)
+            model_dir.mkdir(parents=True)
+            write_json(model_dir / "model.json", {
+                "meta": {"transaction_id": TRANSACTIONS[0]["id"]},
+                "fields": {"a": {"type": "text"}}, "groups": {},
+            })
+            write_json(model_dir / "cda.json", {
+                "document": [], "targets": {}, "assertions": [],
+                "unresolved_templates": [],
+            })
+            write_json(model_dir / "mapping-audit.json", {"fields": {}})
+            proposal = {"version": 7, "fields": {"a": None}}
+            write_json(model_dir / "cda-mapping.proposed.json", proposal)
+            for guide in (
+                "cda-mapping.md", "cda-mapping-details.md",
+                "cda-mapping-trees.md",
+            ):
+                (model_dir / guide).write_text("# guide", encoding="utf-8")
+
+            self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
+            mapping_dir = transaction_mapping_dir(root)
+            mapping_path = mapping_dir / "cda-mapping.json"
+            lock_path = mapping_dir / "mapping-lock.json"
+            old_lock = load_json(lock_path)
+            write_json(mapping_path, {"version": 7, "fields": {"a": "reviewed"}})
+            write_json(model_dir / "model.json", {
+                "meta": {"transaction_id": TRANSACTIONS[0]["id"]},
+                "fields": {"a": {"type": "text", "description": "changed"}},
+                "groups": {},
+            })
+
+            self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
+            self.assertEqual(load_json(mapping_path)["fields"]["a"], "reviewed")
+            self.assertEqual(load_json(lock_path), old_lock)
+
+            self.assertEqual(main([
+                "--root", str(root), "init-cda-mapping", "--reset",
+            ]), 0)
+            self.assertEqual(load_json(mapping_path), proposal)
+            self.assertNotEqual(load_json(lock_path)["model_sha256"], old_lock["model_sha256"])
+
     def test_setup_and_run_cda_mapping_test_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
