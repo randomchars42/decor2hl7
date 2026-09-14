@@ -534,6 +534,13 @@ the executable proposal, it must pass applicable gates for:
 - required compound-datatype companions;
 - generated datatype co-occurrence constraints.
 
+For coded fields, a shared ValueSet identity is executable only when its exact
+revision has a complete usable member set. An unresolved include is retained as
+review evidence and a terminology gap; it cannot create a direct mapping or an
+empty enum transform. Each non-abstract source option keeps every exact formal
+code association. If several exist, only exact membership in the required
+target ValueSet may choose among them.
+
 An unselected field may still receive a `possible_targets` inventory. Those
 rows are type-compatible physical leaves for review, not proof of meaning.
 
@@ -542,10 +549,25 @@ rows are type-compatible physical leaves for review, not proof of meaning.
 Where specification evidence proves the conversion, the proposal may contain
 a small declarative transform rather than a direct target string. Current
 transform forms include `identity`, `enum`, `ordinal`, `not`, `code_system`,
-and `coded_fallback`.
+`coded_fallback`, and `reviewed_coded_map`.
 
 These transformations remain data in the mapping. They are not implemented as
 template-specific renderer branches.
+
+Dataset code normalization never emits CDA `OTH`, `UNC`, or another null flavor.
+`coded_fallback` is generated only for an explicitly open source domain and a
+resolved exact target ValueSet that declares the exception and exposes a
+compiled `originalText` companion. Required target binding membership is then
+checked centrally for mapped values, site values, target defaults, and final
+rendered values. The pinned XSD restriction/extension graph controls which
+attributes may actually be serialized.
+
+`reviewed_coded_map` is never generated from unresolved terminology. A
+maintainer may add it only to the portable mapping with complete exact source
+concept coverage, one exact target ValueSet revision, and per-case reasons.
+Its enumerated outputs are authorized only for that unresolved target binding;
+the unresolved closure stays visible. If the target binding later resolves,
+the formal expansion wins and incompatible reviewed outputs fail.
 
 ### 8.5 Resolve shared targets and occurrence semantics
 
@@ -599,6 +621,9 @@ The proposal uses mapping version 8 and separates:
   target leaves;
 - `target_defaults`: reviewed exact target-specific completion values and
   reasons;
+- `site_requirements`: reviewed required targets that deployment configuration
+  must supply, each with an exact `values` or `fallback_if_active` channel and
+  a rationale but no concrete value;
 - `target_identities`: exact and revision-independent ART-DECOR owner identity
   for every referenced readable target name;
 - `configuration_notes`: short provenance for relevant acquisition/profile
@@ -656,7 +681,11 @@ A generated proposal is not necessarily a complete document configuration.
 `check-cda-mapping` traverses the same active cardinality and choice structure
 as rendering and reports mandatory slots for which neither the template,
 mapping, structural rules, site configuration nor document-production roles
-can supply a value. It does not invent defaults to make the check pass.
+can supply a value. A valid `site_requirements` declaration records that a
+specific required slot is intentionally site-owned, so the portable check emits
+a configuration note instead of a missing-value error. It does not invent or
+verify a concrete deployment value. Actual site validation requires that value
+in the declared channel and checks required terminology binding.
 
 The three generated mapping guides are refreshed beside the reviewed mapping.
 `mapping-lock.json` records release, transaction, model, CDA, and mapping

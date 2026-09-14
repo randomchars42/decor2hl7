@@ -12,6 +12,10 @@ from typing import Any, Mapping
 from .cda.datatypes import base_datatype as _catalogue_base_datatype
 from .cda.datatypes import value_representation
 from .cda.model import ValueRepresentationKind
+from .cda.terminology import (
+    NULL_FLAVORS_WITH_ORIGINAL_TEXT,
+    required_binding_allows_null_flavor,
+)
 
 
 def binding_strength(binding: Mapping[str, Any]) -> str:
@@ -124,6 +128,11 @@ def _unit_key(value: Any) -> str:
     return aliases.get(text, text)
 
 
+def units_equivalent(left: Any, right: Any) -> bool:
+    """Compare source and CDA units using the reviewed spelling aliases."""
+    return _unit_key(left) == _unit_key(right)
+
+
 def unit_match(field: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
     if str(field.get("type") or "") not in {"quantity", "duration"}:
         return True
@@ -131,7 +140,7 @@ def unit_match(field: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
     target_unit = target.get("unit")
     if not model_unit or not target_unit:
         return True
-    return _unit_key(model_unit) == _unit_key(target_unit)
+    return units_equivalent(model_unit, target_unit)
 
 
 def direct_compatibility(
@@ -260,6 +269,39 @@ def transformed_compatibility(
         ):
             reasons.append(
                 "coded_fallback transform requires a coded dataset field, a coded CDA target, allowed target members, and a null flavor"
+            )
+        null_flavor = str(transform.get("null_flavor") or "")
+        if null_flavor not in NULL_FLAVORS_WITH_ORIGINAL_TEXT:
+            reasons.append(
+                "coded_fallback null flavor cannot retain an alternate value in originalText"
+            )
+        elif not required_binding_allows_null_flavor(target, null_flavor):
+            reasons.append(
+                "coded_fallback null flavor is not admitted by the target's required binding"
+            )
+    elif kind == "reviewed_coded_map":
+        cases = transform.get("map", {})
+        outputs = [
+            case.get("value")
+            for case in cases.values()
+            if isinstance(case, Mapping)
+        ] if isinstance(cases, Mapping) else []
+        if (
+            str(field.get("type") or "") != "code"
+            or kind_value != ValueRepresentationKind.CODED.value
+            or not outputs
+            or not all(isinstance(output, Mapping) for output in outputs)
+        ):
+            reasons.append(
+                "reviewed_coded_map requires a finite coded dataset field, "
+                "a coded CDA target, and reviewed coded outputs"
+            )
+        elif any(
+            output.get("nullFlavor") and not target.get("permits_null_flavor")
+            for output in outputs
+        ):
+            reasons.append(
+                "reviewed_coded_map target does not permit its configured null flavor"
             )
     else:
         reasons.append(f"unknown transform type {kind!r}")

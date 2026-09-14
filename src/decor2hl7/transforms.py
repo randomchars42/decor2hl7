@@ -15,6 +15,14 @@ from typing import Any, Mapping
 OMIT = object()
 
 
+class _ReviewedCodedMapAuthorization:
+    """In-memory capability created only by the reviewed coded-map transform."""
+
+
+_REVIEWED_CODED_MAP_AUTHORIZATION = _ReviewedCodedMapAuthorization()
+_REVIEWED_CODED_MAP_MARKER = "__decor2hl7_reviewed_coded_map__"
+
+
 def mapping_rules(value: Any) -> list[dict[str, Any]]:
     """Normalize a mapping value to rule dictionaries.
 
@@ -56,10 +64,10 @@ def _selected_value(value: Any, transform: Mapping[str, Any]) -> Any:
     """Select the part of a normalized value used as a transform key.
 
     The old implicit order is retained when ``select`` is absent.  If a known
-    logical choice has no formal terminology code, normalization represents it
-    as ``nullFlavor=OTH`` but preserves its raw label; use that label as the
-    final implicit key so reviewed legacy enum/ordinal transforms remain
-    executable.  An explicit selector is important for terminology transforms:
+    logical choice has no formal terminology code, normalization preserves its
+    canonical/raw label; use that label as the final implicit key so reviewed
+    legacy enum/ordinal transforms remain executable. An explicit selector is
+    important for terminology transforms:
     a user-facing canonical label may change while the formal code (for example
     ``A`` or ``Z``) does not.
     """
@@ -99,6 +107,87 @@ def _table_value(table: Mapping[Any, Any], key: Any) -> tuple[bool, Any]:
         except TypeError:
             continue
     return False, None
+
+
+def _reviewed_coded_map(value: Any, transform: Mapping[str, Any]) -> Any:
+    """Apply one finite, concept-identity-pinned reviewed code mapping.
+
+    Human labels are used only to locate the exact source concept identity
+    recorded in ``source_options``. The actual conversion table is keyed by
+    those owner concept identities. Configuration validation proves complete
+    source-option coverage and the exact target binding before runtime.
+    """
+    source_options = transform.get("source_options", {})
+    cases = transform.get("map", {})
+    if not isinstance(source_options, Mapping) or not isinstance(cases, Mapping):
+        raise ValueError(
+            "reviewed_coded_map requires source_options and an object map"
+        )
+    source_label = _selected_value(value, {"select": "canonical"})
+    found, concept_id = _table_value(source_options, source_label)
+    if not found or concept_id in (None, ""):
+        raise ValueError(
+            f"reviewed_coded_map has no source concept for {source_label!r}"
+        )
+    case = cases.get(str(concept_id))
+    if not isinstance(case, Mapping) or not isinstance(case.get("value"), Mapping):
+        raise ValueError(
+            f"reviewed_coded_map has no target value for source concept {concept_id!r}"
+        )
+    result = dict(case["value"])
+    raw = value
+    if isinstance(value, Mapping):
+        raw = next((
+            value.get(key) for key in (
+                "raw", "canonical", "displayName", "display_name", "code",
+            )
+            if value.get(key) not in (None, "")
+        ), None)
+    if raw not in (None, ""):
+        result["raw"] = raw
+
+    binding = transform.get("value_set", {})
+    binding = binding if isinstance(binding, Mapping) else {}
+    binding_key = "@".join((
+        str(binding.get("id") or ""),
+        str(binding.get("effective_date") or ""),
+    ))
+    payload = (
+        str(result.get("nullFlavor") or ""),
+        str(result.get("code") or ""),
+        str(result.get("codeSystem") or ""),
+    )
+    result[_REVIEWED_CODED_MAP_MARKER] = {
+        "authorization": _REVIEWED_CODED_MAP_AUTHORIZATION,
+        "binding": binding_key,
+        "payload": payload,
+    }
+    return result
+
+
+def reviewed_coded_map_binding(value: Any) -> str:
+    """Return the exact binding authorized by a genuine transformed value.
+
+    The identity-only sentinel cannot be supplied through JSON site/default
+    configuration. The payload comparison also prevents an authorized value
+    from being changed after the transform.
+    """
+    if not isinstance(value, Mapping):
+        return ""
+    marker = value.get(_REVIEWED_CODED_MAP_MARKER)
+    if (
+        not isinstance(marker, Mapping)
+        or marker.get("authorization") is not _REVIEWED_CODED_MAP_AUTHORIZATION
+    ):
+        return ""
+    actual = (
+        str(value.get("nullFlavor") or ""),
+        str(value.get("code") or ""),
+        str(value.get("codeSystem") or ""),
+    )
+    if tuple(marker.get("payload") or ()) != actual:
+        return ""
+    return str(marker.get("binding") or "")
 
 
 def _scalar(value: Any, transform: Mapping[str, Any]) -> Any:
@@ -192,6 +281,8 @@ def _scalar(value: Any, transform: Mapping[str, Any]) -> Any:
         if raw not in (None, ""):
             result["raw"] = raw
         return result
+    if kind == "reviewed_coded_map":
+        return _reviewed_coded_map(value, transform)
     raise ValueError(f"unknown mapping transform {kind!r}")
 
 
@@ -218,7 +309,7 @@ def validate_transform(transform: Any) -> list[str]:
     kind = str(transform.get("type") or "")
     if kind not in {
         "identity", "enum", "ordinal", "not", "code_system",
-        "coded_fallback",
+        "coded_fallback", "reviewed_coded_map",
     }:
         return [f"unknown transform type {kind!r}"]
     if kind in {"enum", "ordinal"} and not isinstance(transform.get("map"), Mapping):
@@ -236,6 +327,64 @@ def validate_transform(transform: Any) -> list[str]:
             return ["coded_fallback transform requires coded allowed members"]
         if not str(transform.get("null_flavor") or ""):
             return ["coded_fallback transform requires null_flavor"]
+    if kind == "reviewed_coded_map":
+        binding = transform.get("value_set")
+        if (
+            not isinstance(binding, Mapping)
+            or not str(binding.get("id") or "")
+            or not str(binding.get("effective_date") or "")
+        ):
+            return [
+                "reviewed_coded_map requires one exact value_set id and effective_date"
+            ]
+        reason = transform.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return ["reviewed_coded_map requires a non-empty review reason"]
+        source_options = transform.get("source_options")
+        if (
+            not isinstance(source_options, Mapping)
+            or not source_options
+            or not all(
+                str(label) and str(concept_id)
+                for label, concept_id in source_options.items()
+            )
+            or len({str(value) for value in source_options.values()})
+            != len(source_options)
+        ):
+            return [
+                "reviewed_coded_map requires unique source label-to-concept identities"
+            ]
+        cases = transform.get("map")
+        if not isinstance(cases, Mapping):
+            return ["reviewed_coded_map requires an object map"]
+        expected = {str(value) for value in source_options.values()}
+        if {str(key) for key in cases} != expected:
+            return [
+                "reviewed_coded_map map must cover exactly every configured source concept"
+            ]
+        for concept_id, case in cases.items():
+            if not isinstance(case, Mapping):
+                return [
+                    f"reviewed_coded_map case {concept_id!r} must be an object"
+                ]
+            case_reason = case.get("reason")
+            if not isinstance(case_reason, str) or not case_reason.strip():
+                return [
+                    f"reviewed_coded_map case {concept_id!r} requires a review reason"
+                ]
+            output = case.get("value")
+            if not isinstance(output, Mapping):
+                return [
+                    f"reviewed_coded_map case {concept_id!r} requires an object value"
+                ]
+            flavor = str(output.get("nullFlavor") or "")
+            code = str(output.get("code") or "")
+            system = str(output.get("codeSystem") or "")
+            if bool(flavor) == bool(code or system) or bool(code) != bool(system):
+                return [
+                    f"reviewed_coded_map case {concept_id!r} must contain either "
+                    "nullFlavor or both code and codeSystem"
+                ]
     selector = transform.get("select")
     if selector is not None and selector not in {
         "value", "canonical", "code", "displayName", "display_name",

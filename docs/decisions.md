@@ -54,6 +54,9 @@ is not necessarily an accepted clinical policy.
 | DEC-037 | ART-DECOR formal origins, relationships, and template prototypes | accepted | verified |
 | DEC-038 | Source-controlled recovery of reviewed CDA overrides | accepted | verified |
 | DEC-039 | Owner-defined ART-DECOR rule pipeline | accepted | verified |
+| DEC-040 | Target-governed coded values, required bindings, and XSD restrictions | accepted | verified |
+| DEC-041 | Explicit site-owned CDA construction requirements | accepted | verified |
+| DEC-042 | Reviewed finite coded maps across an unresolved exact binding | accepted | verified |
 
 ## DEC-001 — Canonical source and knowledge
 
@@ -252,14 +255,14 @@ under a non-code value domain or beside complete inline members is display
 evidence unless another standalone ValueSet genuinely requires it.
 
 A generated validator ValueSet counts only when the rule that needs it can
-apply to the selected document. The publication transform emits rules for every
-template the assembled specification reaches, including branches of referenced
-projects the selected document never instantiates. A template belongs to the
-selected closure when at least one of its compiled targets holds a document
-location; a generation message whose rule context names only templates outside
-that set reports an upstream gap this build does not consume. A message with no
-recognisable template context stays inside the closure, so an unparsed message
-can never silently narrow the reported degradation.
+apply to the selected document. A template belongs to the selected closure when
+at least one of its compiled targets holds a document location. Exact validator
+assembly admits only those effective-dated revisions and fails if one of their
+formal `include` or `contains` references cannot be resolved inside the same
+selected set. Other fetched project branches remain source and mapping evidence
+but cannot degrade the selected validator. A message with no recognisable
+template context stays inside the closure, so an unparsed message can never
+silently narrow the reported degradation.
 
 Evidence: `src/decor2hl7/compile/artifacts.py`, `docs/architecture.md`,
 `docs/known-issues.md`.
@@ -278,6 +281,12 @@ its abridged JSON and contextual read-only XML plus full evidence; the tree repo
 contains the two exhaustive coverage views. Configuration is edited in JSON,
 never in generated Markdown or XML.
 
+`build` renders those views for the generated proposal. When
+`init-cda-mapping` preserves reviewer choices that differ from the proposal, it
+rerenders the unresolved guide, accepted section, and coverage trees from the
+actual portable mapping while retaining the generated proposal audit below a
+separate evidence heading.
+
 When an executable proposal depends on a reviewed attachment, identity alias,
 source hint or OID-owner override, `cda-mapping.json` carries a short generated
 `configuration_notes` entry. Reinitialization refreshes generated notes while
@@ -290,7 +299,11 @@ CDA leaf, and reportable template-level CDA leaves with no dataset source.
 leaves. `cda-mapping-trees.md` presents the exhaustive evidence in opposite
 directions: every dataset datapoint through its source hierarchy, and every
 reportable CDA leaf through the document/template hierarchy. Tree leaves stay
-on one physical line with status in a dedicated left gutter.
+on one physical line with status in a dedicated left gutter. The inverse tree
+adds `▲` to the coverage status when the owner-cardinality/activation traversal
+finds that an active required CDA value has no portable configured source;
+inactive descendants of optional branches are not marked, and a site value may
+complete a marked slot at deployment or test setup.
 The inverse view excludes generic datatype-expansion plumbing and fixed,
 conditional-fixed or system-supplied values rather than reporting the raw
 writable-target inventory as meaningful mapping surface.
@@ -411,10 +424,10 @@ The IHE Medicine Entry
 builtin: its exact analysis form is already resolved through the `ch-pharm-`
 source hint and satisfies dependency availability under `DEC-004`. The missing
 source form is optional evidence. Its constraints remain unlocated in the
-selected AKTIN document. DEC-028 subsequently selects the sibling Universal
-Medication Information detail branch by exact inherited `SPEC` evidence;
-external-artifact handling still must not be used to alter that template
-relationship.
+selected AKTIN document. DEC-028 can select the sibling Universal Medication
+Information detail branch through an explicit reviewed overlay, but DEC-036
+keeps the AKTIN baseline on its directly selected simple branch. External-
+artifact handling must not be used to alter either template relationship.
 
 Evidence: `docs/analyses/2026-08-30-external-artifact-phase-1.md`,
 `docs/analyses/2026-08-30-medication-mapping-plan.md`,
@@ -664,7 +677,8 @@ without changing that terminology boundary.
 
 Evidence: `src/decor2hl7/compile/transaction.py`,
 `src/decor2hl7/compile/mapping.py`, `src/decor2hl7/compile/structural.py`,
-`src/decor2hl7/transforms.py`, `tests/test_core.py`,
+`src/decor2hl7/transforms.py`, `src/decor2hl7/cda/terminology.py`,
+`tests/test_core.py`,
 `docs/analyses/2026-09-01-open-coded-allergy.md`.
 
 ## DEC-017 — Specification-derived choice, occurrence and fixed-statement rules
@@ -802,22 +816,19 @@ tests.
 
 `validator-manifest.json` reports `complete` as a claim about the *selected
 transaction document*: every rule that can apply to it was generated. The
-publication transform runs over the whole assembled closure, so it also reports
-skipped rules for referenced templates the selected document never instantiates.
-Each generation message is therefore classified in `generation_message_scopes`
-by the value sets it names, the template OIDs in its rule context, and whether
-any of those templates holds a document location in the compiled CDA model. Only
-an in-closure error denies `complete`. The raw `generation_messages` list stays
-intact and `generation_messages_outside_selected_closure` counts the remainder,
-so the omission is visible rather than dropped; a message whose context cannot
-be parsed is treated as in-closure.
+publication transform receives exactly the effective-dated template revisions
+selected at physical document locations. Assembly first proves that every
+selected definition exists and that each formal `include` and `contains`
+reference resolves to an unambiguous selected revision; otherwise it fails.
+This prevents superseded revisions and non-selected project branches from
+creating executable rules or unrelated generation failures.
 
-For a template OID instantiated by the compiled document, validator assembly
-retains only the exact effective-dated revision or revisions selected at a
-physical document location. This prevents superseded rules with the same
-template OID from being activated against one instance. Templates used only as
-publication-transform dependencies remain available at all fetched revisions,
-so dynamic and generic CDA/RIM resolution is not broken by document filtering.
+The raw generation message list and conservative scope records remain in the
+manifest for messages produced by those selected templates; a message whose
+context cannot be parsed is treated as in-closure. Other fetched templates are
+not discarded: source-project validation and the separate `mapping_evidence`
+compiler inputs continue to inspect them. They are excluded only from the exact
+validator's `<rules>` input and therefore cannot make that validator incomplete.
 
 `validate-cda` is a separate enforced gate: it validates documents against the
 complete SDTC schema entry point and the generated transaction/datatype
@@ -969,6 +980,8 @@ and vocabulary support files are excluded.
 This evidence is supporting-only. It never creates a mapping candidate or a
 clinical association. It may strengthen an existing weak or medium candidate
 only after the ordinary datatype, payload, location, and occurrence checks pass.
+It cannot turn a candidate blocked by unresolved formal source terminology into
+an executable mapping; structural requiredness does not prove coded membership.
 Discriminator construction may also use corroborating ValueSet, fixed-code, and
 unpredicated upper-bound evidence. Predicate-specific cardinalities are not
 misread as aggregate repeat bounds.
@@ -1407,7 +1420,7 @@ Evidence: `src/decor2hl7/testing.py`, `src/decor2hl7/cli.py`, `Makefile`,
 ## DEC-036 — Selected AKTIN medication branch is baseline authority
 
 **Decision:** accepted
-**Implementation:** implemented
+**Implementation:** verified
 
 The reference mapping follows the exact consumable branch explicitly selected
 by AKTIN Medikation
@@ -1494,14 +1507,17 @@ pinned recovery overlay in
 `docs/recovery/2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json`.
 This file is project policy, not generated mapping evidence.
 
-For release `2026.1.2`, transaction `notaufnahmeregister--60`, the corrected
-proposal selects 85 of 120 fields while applying the recovery overlay would
-select 98. The
-overlay records exactly the 13 non-null reviewed field selections for which the
-proposal is `null`, including the reviewed allergy fallback and medication
-code-system transform. It also records the seven reviewed target defaults that
-are absent from the proposal. Reasons remain embedded beside every non-obvious
-fallback or default.
+For release `2026.1.2`, transaction `notaufnahmeregister--60`, the owner-rule
+proposal selects 84 of 120 fields while applying the recovery overlay selects
+95. The overlay records eleven non-null reviewed field selections for which the
+proposal is `null`: the ten relationship-era selections, including the allergy
+fallback and medication code-system transform, plus DEC-042's finite reviewed
+`Typ Verlegung` map. It also records the six reviewed target
+defaults that are absent from the proposal; the seventh default is generated by
+the proposal itself. Reasons remain embedded beside every non-obvious fallback
+or default. The overlay also retains the six site-requirement associations
+accepted in DEC-041; those declarations contain channels and rationales, not
+deployment values.
 
 The overlay additionally records the 16 old-to-current target aliases migrated
 after stored-child template compilation stopped serializing prototype-derived
@@ -1517,31 +1533,32 @@ Recovery is deterministic and deliberately separate from proposal generation:
    overlay;
 3. initialize a fresh `cda-mapping.json` from the generated proposal;
 4. shallow-merge `field_overrides` into `fields` and
-   `target_default_overrides` into `target_defaults`;
-5. run `check-cda-mapping`, expecting 98 mapped fields and eight target
-   defaults; and
+   `target_default_overrides` into `target_defaults`, and
+   `site_requirement_overrides` into `site_requirements`;
+5. run `check-cda-mapping`, expecting 95 mapped fields and seven target
+   defaults plus six site-configuration notes; and
 6. keep the resulting mapping lock beside the recovered mapping.
 
 This restoration does not make relationship-derived candidates executable and
 does not change DEC-037. It restores explicit human review after the compiler
 has correctly declined to infer the association.
 
-Six other fields have non-null mappings on both sides but differ in target or
-transform serialization: direct physician contact, Manchester Triage System
-presentation, substance influence, pregnancy status, ECG requested, and
-discharge time. DEC-038 does not freeze those differences. A recovery starts
-from the fresh proposal for them; retaining an older reviewed serialization
-requires a separate evidence review rather than accidental promotion into
-policy.
+Fields with non-null mappings on both sides may still differ in target or
+transform serialization. DEC-038 does not freeze those differences. A recovery
+starts from the fresh proposal for them; retaining an older reviewed
+serialization requires a separate evidence review rather than accidental
+promotion into policy.
 
 Evidence: `docs/recovery/2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json`,
 `docs/analyses/2026-09-11-art-decor-origin-relationship-prototype-semantics.md`,
 the authoritative local reference workspace, and successful
 `decor2hl7 check-cda-mapping` against the recovered overlay.
 
-The authoritative reference workspace is intentionally reset to the generated
-85-field proposal while owner-rule compilation is being verified. It does not
-implicitly apply this recovery decision.
+The authoritative reference workspace currently contains the ten reviewed
+relationship-era field migrations plus DEC-042's finite coded mapping, six
+reviewed default overrides, and six reviewed site-requirement associations on
+top of the generated proposal. The recovery file is the durable copy of those
+decisions; generated workspace content remains disposable.
 
 ## DEC-039 — Owner-defined ART-DECOR rule pipeline
 
@@ -1619,6 +1636,143 @@ modules cited in
 `src/decor2hl7/compile/transaction.py`, `src/decor2hl7/semantics.py`,
 `src/decor2hl7/data.py`, `src/decor2hl7/assertions.py`,
 `src/decor2hl7/bindings.py`, `src/decor2hl7/validate.py`, and regression tests.
+
+## DEC-040 — Target-governed coded values, required bindings, and XSD restrictions
+
+**Decision:** accepted
+**Implementation:** verified
+
+Dataset code normalization is target-neutral. A finite or unresolved formal
+domain rejects unadmitted values; an explicitly open domain retains raw
+wording. Neither path creates CDA `OTH`, `UNC`, or another null flavor.
+
+Exact concept-list member identities may carry several exact owner terminology
+associations. A required target ValueSet may select one only through exact
+code/system membership. A generated `coded_fallback` is executable only when a
+reviewed target contract names one exact resolved ValueSet revision, an
+explicit OTH/UNC exception, the complete admitted member list, and the compiled
+`originalText` role. Required binding membership is then checked centrally for
+mapped values, site values, target defaults, and rendering.
+
+The owner's generated vocabulary assertion treats a datatype-legal
+`@nullFlavor` as the alternative to a member code. No-information flavors such
+as `NI` therefore do not extend the bound ValueSet. Payload-bearing `OTH` and
+`UNC` remain stricter because they represent an alternate value through
+`originalText`; they require the explicit binding exception above or DEC-042's
+exact finite reviewed authorization.
+
+The pinned CDA XSD is authoritative for serialization. Extension inheritance
+adds base particles; restriction replaces restricted content and removes
+prohibited attributes. Binding validation may use a uniquely inferred formal
+code-system identity even when the concrete datatype, notably `CS`, prohibits
+serializing `@codeSystem`.
+
+A shared but unresolved ValueSet identity is review evidence, not executable
+value conversion. It cannot yield an empty enum. `Typ Verlegung` therefore has
+no generated mapping to `Referralto.act.code`: the exact DIVI code-system
+revision needed to resolve the target binding is absent, and not all source
+alternatives are proven members of that target binding. DEC-042 separately
+permits one finite, exact-target reviewed mapping without changing that
+terminology conclusion. The ten explicitly reviewed relationship-era
+migrations remain separate decisions and are retained.
+
+Evidence: `docs/analyses/2026-09-13-target-governed-coded-values-and-null-flavor.md`,
+`src/decor2hl7/cda/terminology.py`, `src/decor2hl7/cda/core.py`,
+`src/decor2hl7/cda/compile.py`, `src/decor2hl7/cda/render.py`,
+`src/decor2hl7/compile/transaction.py`, `src/decor2hl7/compile/mapping.py`,
+`src/decor2hl7/data.py`, `src/decor2hl7/validate.py`, and regression tests.
+
+## DEC-041 — Explicit site-owned CDA construction requirements
+
+**Decision:** accepted
+**Implementation:** verified
+
+A portable CDA mapping may delegate a required target to deployment
+configuration without embedding the deployment value. The reviewed
+`site_requirements` object maps an exact CDA target to one supported site
+channel, `values` or `fallback_if_active`, plus a non-empty rationale. It is a
+construction contract, not a default value.
+
+`check-cda-mapping` validates the declaration, counts it as an intentional
+completion source, and reports the required site path as a note. It does not
+require a concrete site configuration because that command verifies the
+portable mapping product. Commands that validate or render an actual site
+require the target to be configured in the declared channel and apply the same
+required-binding checks as other construction sources. A malformed, unknown,
+optional, non-writable, duplicate, or already portable-supplied declaration is
+an error and never suppresses a genuine mandatory-construction gap.
+
+The reference transaction delegates document confidentiality and language to
+unconditional site values, and author name plus medication/subordinate
+administration lifecycle attributes to activation-scoped fallbacks. Their
+concrete test values remain in the authored site scenario rather than in the
+portable mapping or compiler.
+
+Evidence: `src/decor2hl7/bindings.py`, `src/decor2hl7/validate.py`,
+`src/decor2hl7/cli.py`, `src/decor2hl7/compile/mapping.py`,
+`docs/recovery/2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json`,
+and regression tests.
+
+## DEC-042 — Reviewed finite coded maps across an unresolved exact binding
+
+**Decision:** accepted
+**Implementation:** verified
+
+An unavailable exact terminology artifact does not become complete merely
+because a maintainer can recover useful owner evidence elsewhere. A portable
+mapping may nevertheless record a finite, target-scoped reviewed conversion
+when all of the following are explicit:
+
+1. one exact source field and every executable logical source option, each
+   pinned to its owner concept identity;
+2. one exact writable CDA target and required ValueSet revision;
+3. one code/code-system pair or payload-preserving `OTH`/`UNC` result for every
+   source option; and
+4. a review reason for the whole conversion and for every individual case.
+
+The declarative transform is named `reviewed_coded_map`. It neither aliases nor
+supplements the missing terminology and therefore does not clear the closure
+diagnostic. It authorizes only its exact enumerated outputs while that exact
+target binding remains unresolved. JSON site values, defaults, ordinary enum
+transforms, other targets, other ValueSet revisions, and unlisted source values
+remain subject to normal required-binding rejection. A null-flavor result is
+permitted only when the target datatype admits it and has one writable
+`coded_original_text` companion. If the exact target binding later resolves,
+its formal membership replaces the temporary authorization; a reviewed output
+that contradicts it fails configuration validation.
+
+For the selected reference transaction this rule maps `Typ Verlegung`
+(`2.16.840.1.113883.2.6.60.3.2.9.20021`) to
+`Referralto.act.code` in template `1.2.276.0.76.10.4067@2025-12-01`, whose
+required binding is `1.2.276.0.76.11.53@2015-11-17`. The output uses the
+CodeSystem named by that ValueSet include,
+`1.2.276.0.76.3.1.195.5.53`, not the ValueSet OID as a CodeSystem:
+
+- source options `.1`, `.2`, and `.3` use their exact owner associations to
+  codes `1`, `3`, and `5`;
+- option `.11` uses code `7`. This is an explicit reviewed cross-revision
+  assumption supported by the selected transaction's exact 2024 option-level
+  association and the newer owner referral-actions ValueSet that enumerates
+  code `7`; it is not claimed as proven membership of the unavailable 2019
+  CodeSystem revision;
+- external transfer option `.10` uses `nullFlavor="OTH"` plus the source text,
+  because its SNOMED association is not proven inside the older target binding
+  and no one legacy destination code can be selected; and
+- `Sonstiges` option `.7` uses its exact owner `OTH` association and preserves
+  the source text.
+
+The published target Schematron admits `@nullFlavor` and checks the named
+CodeSystem include, but that weak generated check is not treated as proof of
+code membership. This decision is the stronger local contract and remains
+visibly dependent on the upstream closure gap.
+
+Evidence: the selected transaction and compiled model, template
+`1.2.276.0.76.10.4067@2025-12-01`, ValueSet
+`1.2.276.0.76.11.53@2015-11-17`, the newer owner referral-actions ValueSet
+`1.2.276.0.76.3.1.195.11.26@2024-02-19`,
+`docs/analyses/2026-09-13-target-governed-coded-values-and-null-flavor.md`,
+`src/decor2hl7/transforms.py`, `src/decor2hl7/cda/terminology.py`,
+`src/decor2hl7/validate.py`, and regression tests.
 
 ## Maintenance rule
 

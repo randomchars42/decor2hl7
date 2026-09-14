@@ -79,6 +79,10 @@ The categories mean:
   dataset datapoint;
 - **No source** — a reportable writable CDA leaf has neither a selected nor a
   suggested dataset datapoint.
+- **Required gap** (`▲`) — the owner rules make the CDA value active and
+  required, but the portable mapping proposal has no configured source for it.
+  The marker combines with the coverage symbol, for example `○▲`; a site value
+  may satisfy that slot during deployment or test setup.
 
 The first three categories partition the dataset model. Counts distinguish
 dataset datapoints (`dp`) from logical CDA leaf assignments because one rule may
@@ -124,6 +128,7 @@ logical CDA leaf. A leaf with no dataset counterpart is marked explicitly.
 ```text
    Notaufnahmeregister Transitionsversion (ClinicalDocument)
    ├── Document header
+○▲ │   ├── languageCode {CDAlanguageCode.languageCode@20120311} ← no dataset counterpart
    │   └── CDA encompassingEncounter Patientenkontakt (Basis)
 ✓  │       ├── effectiveTime.high {CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.high@20160601} ← Zeitpunkt Patient verlegt / entlassen nach
 ✓  │       └── dischargeDispositionCode {CDAEncompassingEncounter.componentOf.encompassingEncounter.dischargeDispositionCode@20160601} ← Typ Entlassung
@@ -137,6 +142,21 @@ If one CDA leaf is already selected from one dataset datapoint and is also an
 actionable suggestion for another, use the combined gutter status `✓!` and name
 both sources on the same leaf. The CDA tree does not use `×`; that is a
 dataset-side absence and belongs in the first tree.
+
+Determine `▲` from the same construction traversal that enforces owner-defined
+cardinality, choices and optional-branch activation. Do not mark every required
+descendant of an inactive optional branch. `build` generates the tree for the
+portable proposal; `init-cda-mapping` rerenders it for preserved reviewed
+choices. Either view deliberately identifies required slots that must instead
+be completed by site configuration.
+
+For a reviewed mapping, `check-cda-mapping` lists every valid
+`site_requirements` declaration with its exact
+`cda.values`/`cda.fallback_if_active` channel. Such a declaration removes `▲`
+only when a tree is rendered from that reviewed mapping, because it establishes
+explicit construction ownership; it does not claim that a concrete site value
+was checked. Invalid declarations remain errors and retain the
+missing-required marker.
 
 The trees are coverage overviews. They omit candidate scores, rejected
 alternatives and long evidence chains.
@@ -383,6 +403,15 @@ itself. The distinct documentation-start dataset concept remains unmapped.
 ```
 
 Every offered rule must be accompanied by its exact abridged JSON configuration.
+
+A selected `reviewed_coded_map` must be labelled as a reviewed finite coded
+map. State that every source option is pinned to an exact owner concept ID,
+that its target ValueSet revision is exact, and that the rule does not complete
+the unresolved terminology. The abridged excerpt shows the binding identity,
+overall reason, number of source identities, and number of reviewed cases; the
+full JSON remains the authority for per-case values and reasons. If a case uses
+`OTH` or `UNC`, state that its wording is written to the compiled
+`coded_original_text` companion.
 
 ## Review required
 

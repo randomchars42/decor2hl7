@@ -1,5 +1,10 @@
 # Core-package validation implementation
 
+> Historical snapshot. The refreshed 2026-09-13 workspace now isolates the
+> exact 119-revision validator rule set, generates it with zero messages, and
+> passes six authored documents with zero XSD/Schematron diagnostics. The
+> counts below describe the earlier package-integration state.
+
 ## Scope and source snapshot
 
 This evidence snapshot implements the restart checklist in

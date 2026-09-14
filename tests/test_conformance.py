@@ -462,15 +462,92 @@ class ConformanceTests(unittest.TestCase):
             )
             self.assertEqual(
                 [(item.get("id"), item.get("effectiveDate")) for item in filtered_templates],
-                [
-                    ("9.8.7", "2026-01-03T00:00:00"),
-                    ("9.8.6", "2026-01-03T00:00:00"),
-                ],
+                [("9.8.7", "2026-01-03T00:00:00")],
             )
             values = assembled.find("terminology").findall("valueSet")  # type: ignore[union-attr]
             self.assertEqual([(item.get("id"), item.get("effectiveDate")) for item in values], [
                 ("7.8.9", "2026-01-04T00:00:00")
             ])
+
+    def test_assembled_closure_requires_selected_formal_references(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_dir = root / "spec"
+            release_dir.mkdir()
+            (release_dir / "project.xml").write_text(
+                '<project prefix="demo-"/>', encoding="utf-8"
+            )
+            dataset = root / "dataset.xml"
+            dataset.write_text(
+                '<dataset id="1.2.3" effectiveDate="2026-01-01"/>',
+                encoding="utf-8",
+            )
+            transaction = root / "transaction.xml"
+            transaction.write_text(
+                '<transaction id="1.2.3.4.5" effectiveDate="2026-01-02"/>',
+                encoding="utf-8",
+            )
+            parent = root / "parent.xml"
+            parent.write_text(
+                '<template id="9.8.7" effectiveDate="2026-01-03">'
+                '<element contains="9.8.6" '
+                'tmeffectiveDate="2026-01-04"/></template>',
+                encoding="utf-8",
+            )
+            child = root / "child.xml"
+            child.write_text(
+                '<template id="9.8.6" effectiveDate="2026-01-04"/>',
+                encoding="utf-8",
+            )
+            inputs = {
+                "transaction_analysis": dataset,
+                "transaction_source": transaction,
+                "model_resources": [],
+                "terminology_resources": [],
+                "templates": [parent, child],
+            }
+            release = {"key": "2026.1", "date": "2026-01-05"}
+            selected_transaction = {
+                "id": "1.2.3.4.5",
+                "effective_date": "2026-01-02",
+            }
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"9\.8\.7@2026-01-03 contains 9\.8\.6@2026-01-04",
+            ):
+                assemble_decor_closure(
+                    release_dir,
+                    inputs,
+                    release,
+                    selected_transaction,
+                    root / "incomplete.xml",
+                    {("9.8.7", "2026-01-03")},
+                )
+
+            complete = root / "complete.xml"
+            assemble_decor_closure(
+                release_dir,
+                inputs,
+                release,
+                selected_transaction,
+                complete,
+                {
+                    ("9.8.7", "2026-01-03"),
+                    ("9.8.6", "2026-01-04"),
+                },
+            )
+            templates = ET.parse(complete).getroot().find("rules")
+            self.assertEqual(
+                {
+                    (item.get("id"), item.get("effectiveDate"))
+                    for item in (templates if templates is not None else ())
+                },
+                {
+                    ("9.8.7", "2026-01-03"),
+                    ("9.8.6", "2026-01-04"),
+                },
+            )
 
     def test_assembled_closure_merges_valueset_definition_and_expansion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

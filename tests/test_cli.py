@@ -558,7 +558,7 @@ class CliTests(unittest.TestCase):
                 "expected": {
                     "cases": ["CASE-A", "CASE-B"],
                     "documents": 2,
-                    "coverage": "all-mapped",
+                    "coverage": {"all_mapped_except": []},
                     "case_fields": {
                         "CASE-A": {"present": ["case.note"]},
                         "CASE-B": {"present": ["case.note"]},
@@ -587,6 +587,81 @@ class CliTests(unittest.TestCase):
                 authored["documents"], ["case-a.xml", "case-b.xml"]
             )
             self.assertEqual(authored["scenario"]["name"], "two-authored-cases")
+
+    def test_check_cda_mapping_reports_site_requirement_as_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            set_release(root, RELEASES[0])
+            set_transaction(root, TRANSACTIONS[0])
+            model_dir = transaction_model_dir(root)
+            model_dir.mkdir(parents=True)
+            model = {
+                "meta": {"transaction_id": TRANSACTIONS[0]["id"]},
+                "groups": {}, "fields": {},
+            }
+            leaf = {
+                "kind": "element", "name": "hl7:confidentialityCode",
+                "datatype": "CE", "min": 1, "max": 1,
+                "mandatory": True, "conformance": "M",
+                "attributes": [], "children": [], "fixed": {},
+                "targets": ["Header.confidentialityCode"],
+            }
+            cda = {
+                "document": [{
+                    "kind": "element", "name": "hl7:ClinicalDocument",
+                    "min": 1, "max": 1, "mandatory": True,
+                    "attributes": [], "children": [leaf], "fixed": {},
+                    "targets": [],
+                }],
+                "targets": {"Header.confidentialityCode": {
+                    **leaf,
+                    "name": "Header.confidentialityCode",
+                    "locations": ["0.0"], "renderable": True,
+                    "writable": True, "prohibited": False,
+                    "logical_types": ["code"],
+                    "value_representation": {
+                        "kind": "coded", "attributes": ["code"],
+                        "scalar_attribute": "code",
+                    },
+                }},
+                "assertions": [], "unresolved_templates": [],
+            }
+            mapping = {
+                "version": 8, "fields": {}, "structures": [],
+                "site_requirements": {"Header.confidentialityCode": {
+                    "channel": "values",
+                    "reason": "Confidentiality is deployment policy.",
+                }},
+            }
+            write_json(model_dir / "model.json", model)
+            write_json(model_dir / "cda.json", cda)
+            write_json(model_dir / "mapping-audit.json", {"fields": {}})
+            write_json(model_dir / "cda-mapping.proposed.json", mapping)
+            for guide in (
+                "cda-mapping.md", "cda-mapping-details.md",
+                "cda-mapping-trees.md",
+            ):
+                (model_dir / guide).write_text("# guide", encoding="utf-8")
+            self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
+
+            output = StringIO()
+            with redirect_stdout(output), patch(
+                "decor2hl7.cli._compiler_inputs", return_value={"templates": []}
+            ), patch(
+                "decor2hl7.validate.verify_compiled_against_artdecor",
+                return_value=[],
+            ):
+                result = main(["--root", str(root), "check-cda-mapping"])
+
+            self.assertEqual(result, 0)
+            self.assertIn("CDA site requirements: 1", output.getvalue())
+            self.assertIn(
+                "site config required: "
+                "cda.values['Header.confidentialityCode']",
+                output.getvalue(),
+            )
+            self.assertIn("CDA mapping: OK", output.getvalue())
 
     def test_authored_scenario_identity_is_pinned_to_the_selected_spec(self) -> None:
         from decor2hl7.testing import setup_fixture

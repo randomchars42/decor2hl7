@@ -413,7 +413,20 @@ def _value_domain(domain: ET.Element, node: dict[str, Any]) -> None:
                     "".join(part.itertext()).strip()
                     for part in list(item) if local(part.tag) == "synonym"
                 ]
-                info: dict[str, Any] = {"synonyms": [value for value in synonyms if value]}
+                info: dict[str, Any] = {
+                    "synonyms": [value for value in synonyms if value],
+                }
+                if item.get("id"):
+                    # ``terminologyAssociation/@conceptId`` identifies the
+                    # concrete concept-list member, not its mutable label.
+                    # Retain that owner identity so formal codification can be
+                    # joined without a label or suffix heuristic.
+                    info["concept_id"] = str(item.get("id"))
+                if (
+                    local(item.tag) == "exception"
+                    or str(item.get("exception") or "").casefold() == "true"
+                ):
+                    info["exception"] = True
                 # A bare number is ordinal evidence only at the start of the
                 # option's label. Unqualified synonyms are commonly codes or
                 # taxonomy numbers. An explicit rank/score phrase remains
@@ -1158,12 +1171,133 @@ def _logical_values(field: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     for label in field.get("options", []):
         info = {"display_name": label}
         detail = option_details.get(str(label), {}) if isinstance(option_details, Mapping) else {}
-        if isinstance(detail, Mapping) and detail.get("synonyms"):
-            info["synonyms"] = list(detail.get("synonyms", []))
-        if isinstance(detail, Mapping) and detail.get("ordinal") is not None:
-            info["ordinal"] = detail.get("ordinal")
+        if isinstance(detail, Mapping):
+            for key in ("concept_id", "exception"):
+                if detail.get(key) is not None:
+                    info[key] = detail.get(key)
+            if detail.get("synonyms"):
+                info["synonyms"] = list(detail.get("synonyms", []))
+            if detail.get("ordinal") is not None:
+                info["ordinal"] = detail.get("ordinal")
         values.setdefault(str(label), info)
     return values
+
+
+def _associate_logical_options_with_formal_members(
+    field: Mapping[str, Any],
+    logical_values: dict[str, dict[str, Any]],
+    formal_values: Mapping[str, Mapping[str, Any]],
+    formal_status: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Join owner-defined concept-list members to their formal codifications.
+
+    The ART-DECOR join key is the exact concept identity carried by
+    ``conceptList/concept/@id`` and ``terminologyAssociation/@conceptId``.
+    Labels, identifier suffixes, relationship neighbours, and code-only
+    matches are deliberately insufficient.  The associated code/system pair
+    must also be one exact member of the selected complete formal binding.
+    """
+    if not formal_status.get("bound") or not formal_status.get("complete"):
+        return []
+
+    formal_by_pair: dict[tuple[str, str], set[str]] = {}
+    for canonical, raw_info in formal_values.items():
+        info = raw_info if isinstance(raw_info, Mapping) else {}
+        code = str(info.get("code") or "")
+        system = str(info.get("code_system") or "")
+        if code and system:
+            formal_by_pair.setdefault((code, system), set()).add(str(canonical))
+
+    associations_by_concept: dict[str, list[Mapping[str, Any]]] = {}
+    for association in field.get("terminology_associations", []):
+        if not isinstance(association, Mapping):
+            continue
+        concept_id = str(association.get("source_concept_id") or "")
+        if concept_id:
+            associations_by_concept.setdefault(concept_id, []).append(association)
+
+    diagnostics: list[dict[str, Any]] = []
+    for label, option in logical_values.items():
+        concept_id = str(option.get("concept_id") or "")
+        if not concept_id:
+            continue
+        rows = associations_by_concept.get(concept_id, [])
+        declared_pairs = {
+            (
+                str(row.get("code") or ""),
+                str(row.get("code_system") or ""),
+            )
+            for row in rows
+            if row.get("code") or row.get("code_system")
+        }
+        admitted = {
+            canonical
+            for pair in declared_pairs
+            if pair[0] and pair[1]
+            for canonical in formal_by_pair.get(pair, set())
+        }
+        associated_members = [
+            {
+                "canonical": canonical,
+                "concept_id": concept_id,
+                "code": str(formal_values[canonical].get("code") or ""),
+                "code_system": str(
+                    formal_values[canonical].get("code_system") or ""
+                ),
+                **(
+                    {
+                        "display_name": str(
+                            formal_values[canonical].get("display_name")
+                        )
+                    }
+                    if formal_values[canonical].get("display_name") else {}
+                ),
+                **(
+                    {
+                        "value_set": str(
+                            formal_values[canonical].get("value_set")
+                        )
+                    }
+                    if formal_values[canonical].get("value_set") else {}
+                ),
+                **(
+                    {
+                        "value_set_effective_date": str(
+                            formal_values[canonical].get(
+                                "value_set_effective_date"
+                            )
+                        )
+                    }
+                    if formal_values[canonical].get(
+                        "value_set_effective_date"
+                    ) else {}
+                ),
+            }
+            for canonical in sorted(admitted)
+        ]
+        if associated_members:
+            # Preserve every exact admitted association. A source-side alias
+            # requires one member, while a later CDA target binding may
+            # legitimately disambiguate several members by ValueSet.
+            option["terminology_associations"] = associated_members
+        if len(admitted) == 1:
+            option["terminology_association"] = dict(associated_members[0])
+            continue
+        if declared_pairs:
+            diagnostics.append({
+                "kind": (
+                    "ambiguous-formal-member"
+                    if len(admitted) > 1 else "outside-formal-domain"
+                ),
+                "label": label,
+                "concept_id": concept_id,
+                "declared": [
+                    {"code": code, "code_system": system}
+                    for code, system in sorted(declared_pairs)
+                ],
+                "admitted_canonical_values": sorted(admitted),
+            })
+    return diagnostics
 
 
 def compile_model(
@@ -1312,9 +1446,18 @@ def compile_model(
         formal_values = _formal_values(node, value_sets)
         formal_status = _formal_domain_status(node, value_sets)
         logical_values = _logical_values(node)
+        option_association_diagnostics = (
+            _associate_logical_options_with_formal_members(
+                node, logical_values, formal_values, formal_status,
+            )
+        )
         field["logical_domain"] = {
             "options": logical_values,
             "source": "dataset-analysis",
+            **(
+                {"terminology_association_diagnostics": option_association_diagnostics}
+                if option_association_diagnostics else {}
+            ),
         }
         field["formal_terminology"] = {
             "value_sets": _formal_value_set_refs(node, value_sets),

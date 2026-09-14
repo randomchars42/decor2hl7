@@ -11,6 +11,11 @@ from typing import Any, Mapping
 from .data import field_value
 from .semantics import identifier_root_for_target
 from .cda.model import ValueRepresentationKind
+from .cda.terminology import (
+    NULL_FLAVORS,
+    required_binding_allows_null_flavor,
+    required_binding_value_error,
+)
 from .transforms import (
     OMIT,
     apply_transform,
@@ -19,11 +24,8 @@ from .transforms import (
     validate_transform,
 )
 
-NULL_FLAVORS = frozenset({
-    "NI", "INV", "DER", "OTH", "NINF", "PINF", "UNC", "MSK", "NA",
-    "UNK", "ASKU", "NAV", "NASK", "TRC",
-})
 FALLBACK_IF_ACTIVE_MARKER = "__fallback_if_active__"
+SITE_REQUIREMENT_CHANNELS = frozenset({"values", "fallback_if_active"})
 
 
 def fallback_if_active_value(value: Any) -> dict[str, Any]:
@@ -175,7 +177,8 @@ def construction_supplied_targets(
 
     This is deliberately a capability calculation, not a claim that every
     input record contains a value.  It covers scalar field rules, reviewed
-    target defaults, site values, and constants owned by structural rules.
+    target defaults, declared site requirements, actual site values, and
+    constants owned by structural rules.
     """
     datapoints = cda.get("datapoints", {})
 
@@ -195,6 +198,7 @@ def construction_supplied_targets(
             supplied.add(physical(rule.get("cda_target") or rule.get("target")))
     for name in mapping.get("target_defaults", {}):
         supplied.add(physical(name))
+    supplied.update(site_requirement_targets(cda, mapping))
     for rule in structure_rules(mapping):
         for key in ("target", "cda_target", "discriminator"):
             if rule.get(key):
@@ -249,6 +253,9 @@ def _construction_activating_targets(
         values = site_cda.get("values", {})
         if isinstance(values, Mapping):
             activating.update(physical(name) for name in values)
+    activating.update(site_requirement_targets(
+        cda, mapping, channels={"values"},
+    ))
     for name, target in cda.get("targets", {}).items():
         if (
             isinstance(target, Mapping) and target.get("system_value")
@@ -258,10 +265,10 @@ def _construction_activating_targets(
     return {name for name in activating if name}
 
 
-def required_construction_gaps(
+def _required_construction_gap_details(
     cda: Mapping[str, Any], mapping: Mapping[str, Any],
     site: Mapping[str, Any] | None = None,
-) -> list[str]:
+) -> tuple[list[str], set[str]]:
     """Find mandatory active CDA slots with no configured value source.
 
     The traversal mirrors the owner-defined cardinality and choice rules used
@@ -287,6 +294,14 @@ def required_construction_gaps(
             )
 
     gaps: list[str] = []
+    gap_targets: set[str] = set()
+
+    def record_gap(message: str, names: Any) -> None:
+        gaps.append(message)
+        gap_targets.update(
+            str(name) for name in names
+            if str(name) in targets
+        )
 
     def required(node: Mapping[str, Any]) -> bool:
         return bool(node.get("mandatory")) or int(node.get("min") or 0) >= 1
@@ -394,10 +409,12 @@ def required_construction_gaps(
             )
             attribute_content = attribute_content or attribute_supplied
             if attribute.get("optional") is False and not attribute_supplied:
-                gaps.append(
+                record_gap(
                     f"required CDA attribute @{attribute.get('name')} on "
                     f"{identity(node, location)} has no fixed, mapped, site, "
-                    "system, or default value"
+                    "system, or default value",
+                    list(attribute.get("targets", []))
+                    + list(node.get("targets", [])),
                 )
         for index, child in enumerate(children):
             rendered_children.append(visit(child, location + (index,)))
@@ -411,14 +428,16 @@ def required_construction_gaps(
             if node.get("mandatory") or str(
                 node.get("conformance") or ""
             ).upper() == "M":
-                gaps.append(
+                record_gap(
                     f"mandatory CDA element {identity(node, location)} has no "
-                    "fixed, mapped, site, system, child, or default value"
+                    "fixed, mapped, site, system, child, or default value",
+                    node.get("targets", []),
                 )
             elif children and not _permits_element_null_flavor_at_node(node):
-                gaps.append(
+                record_gap(
                     f"required complex CDA element {identity(node, location)} "
-                    "has no fixed, mapped, site, system, child, or default value"
+                    "has no fixed, mapped, site, system, child, or default value",
+                    node.get("targets", []),
                 )
         return (
             node_value or attribute_content or any(rendered_children)
@@ -427,7 +446,25 @@ def required_construction_gaps(
 
     for index, root in enumerate(cda.get("document", [])):
         visit(root, (index,))
-    return list(dict.fromkeys(gaps))
+    return list(dict.fromkeys(gaps)), gap_targets
+
+
+def required_construction_gaps(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any],
+    site: Mapping[str, Any] | None = None,
+) -> list[str]:
+    """Describe mandatory active CDA slots with no configured value source."""
+    gaps, _targets = _required_construction_gap_details(cda, mapping, site)
+    return gaps
+
+
+def required_construction_gap_targets(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any],
+    site: Mapping[str, Any] | None = None,
+) -> set[str]:
+    """Return logical targets for mandatory active CDA slots lacking a source."""
+    _gaps, targets = _required_construction_gap_details(cda, mapping, site)
+    return targets
 
 
 def _permits_element_null_flavor_at_node(node: Mapping[str, Any]) -> bool:
@@ -467,6 +504,156 @@ def _physical_default_target(cda: Mapping[str, Any], configured: str) -> str:
     if isinstance(datapoint, Mapping) and datapoint.get("cda_target"):
         return str(datapoint["cda_target"])
     return configured
+
+
+def site_requirement_targets(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any],
+    *, channels: set[str] | None = None,
+) -> set[str]:
+    """Return valid physical targets explicitly delegated to site config.
+
+    A declaration is a portable ownership contract, not a value. Invalid or
+    incomplete declarations never suppress a construction gap; their detailed
+    diagnostics are produced by :func:`validate_site_requirements`.
+    """
+    raw = mapping.get("site_requirements", {})
+    if not isinstance(raw, Mapping):
+        return set()
+    targets = cda.get("targets", {})
+    result: set[str] = set()
+    for configured, rule in raw.items():
+        if not isinstance(rule, Mapping):
+            continue
+        channel = str(rule.get("channel") or "")
+        reason = rule.get("reason")
+        if (
+            channel not in SITE_REQUIREMENT_CHANNELS
+            or channels is not None and channel not in channels
+            or not isinstance(reason, str) or not reason.strip()
+        ):
+            continue
+        physical = _physical_default_target(cda, str(configured))
+        target = targets.get(physical)
+        if (
+            not isinstance(target, Mapping)
+            or target.get("prohibited") or not target.get("writable")
+            or len(target.get("locations", [])) != 1
+            or not (
+                target.get("mandatory") or int(target.get("min") or 0) >= 1
+            )
+        ):
+            continue
+        result.add(physical)
+    return result
+
+
+def validate_site_requirements(
+    cda: Mapping[str, Any], mapping: Mapping[str, Any],
+    site: Mapping[str, Any] | None = None,
+    *, require_configured: bool = True,
+) -> list[str]:
+    """Validate portable site ownership and, when requested, its realization."""
+    errors: list[str] = []
+    raw = mapping.get("site_requirements", {})
+    if raw is None:
+        return errors
+    if not isinstance(raw, Mapping):
+        return ["cda-mapping: site_requirements must be an object"]
+
+    targets = cda.get("targets", {})
+    mapping_without_requirements = dict(mapping)
+    mapping_without_requirements.pop("site_requirements", None)
+    portable_supplied = construction_supplied_targets(
+        cda, mapping_without_requirements,
+    )
+    resolved: dict[str, str] = {}
+    site_cda = site.get("cda", {}) if isinstance(site, Mapping) else {}
+    if not isinstance(site_cda, Mapping):
+        site_cda = {}
+
+    for configured, rule in raw.items():
+        name = str(configured)
+        prefix = f"cda-mapping: site_requirements[{name!r}]"
+        if not isinstance(rule, Mapping):
+            errors.append(f"{prefix} must be an object")
+            continue
+        channel = str(rule.get("channel") or "")
+        if channel not in SITE_REQUIREMENT_CHANNELS:
+            errors.append(
+                f"{prefix}.channel must be one of "
+                + ", ".join(sorted(SITE_REQUIREMENT_CHANNELS))
+            )
+        reason = rule.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append(f"{prefix}.reason must be non-empty text")
+
+        physical = _physical_default_target(cda, name)
+        target = targets.get(physical)
+        if not isinstance(target, Mapping):
+            errors.append(f"{prefix} references unknown CDA target {physical!r}")
+            continue
+        previous = resolved.get(physical)
+        if previous is not None and previous != name:
+            errors.append(
+                f"{prefix} conflicts with site_requirements[{previous!r}]; "
+                f"both resolve to {physical!r}"
+            )
+        resolved[physical] = name
+        if target.get("prohibited") or not target.get("writable"):
+            errors.append(f"{prefix} references a prohibited/non-renderable target")
+        if len(target.get("locations", [])) != 1:
+            errors.append(
+                f"{prefix} target {physical!r} has "
+                f"{len(target.get('locations', []))} physical locations"
+            )
+        if not (target.get("mandatory") or int(target.get("min") or 0) >= 1):
+            errors.append(
+                f"{prefix} is optional; site_requirements may delegate only a "
+                "required target"
+            )
+        if physical in portable_supplied:
+            errors.append(
+                f"{prefix} is already supplied by portable mapping configuration"
+            )
+
+        if not require_configured or channel not in SITE_REQUIREMENT_CHANNELS:
+            continue
+        configured_values = site_cda.get(channel, {})
+        configured_values = (
+            configured_values if isinstance(configured_values, Mapping) else {}
+        )
+        configured_key = next(
+            (key for key in (name, physical) if key in configured_values), None
+        )
+        if configured_key is None or configured_values.get(configured_key) in (None, ""):
+            other_channel = next(
+                (
+                    candidate for candidate in SITE_REQUIREMENT_CHANNELS
+                    if candidate != channel
+                    and isinstance(site_cda.get(candidate), Mapping)
+                    and any(
+                        key in site_cda[candidate] for key in (name, physical)
+                    )
+                ),
+                None,
+            )
+            if other_channel:
+                errors.append(
+                    f"site: cda.{channel}[{name!r}] is required; the value is "
+                    f"configured under cda.{other_channel}"
+                )
+            else:
+                errors.append(f"site: cda.{channel}[{name!r}] is required")
+            continue
+        value = configured_values[configured_key]
+        binding_error = required_binding_value_error(
+            value, target, cda.get("terminology_constraints", {}),
+        )
+        if binding_error:
+            errors.append(
+                f"site: cda.{channel}[{name!r}]: {binding_error}"
+            )
+    return errors
 
 
 def _compiled_coded_members(
@@ -682,6 +869,14 @@ def validate_target_defaults(
                 errors.append(
                     f"{prefix} targets a complex element that does not expose "
                     "an optional nullFlavor"
+                )
+            if (
+                target.get("required_binding_constraints")
+                and not required_binding_allows_null_flavor(target, flavor)
+            ):
+                errors.append(
+                    f"{prefix} nullFlavor {flavor!r} is not an explicit "
+                    "exception of the target's required binding"
                 )
         elif has_value:
             errors.extend(_validate_scalar_default(prefix, target, rule.get("value")))

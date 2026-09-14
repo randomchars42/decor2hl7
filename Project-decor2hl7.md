@@ -423,7 +423,10 @@ The built-in transform language stays deliberately small and declarative. Curren
 - `not`;
 - `code_system`;
 - `coded_fallback` — preserve only exact target-member code/system pairs and
-  otherwise carry source wording through a target-defined `OTH` fallback.
+  otherwise carry source wording through a target-defined `OTH` fallback;
+- `reviewed_coded_map` — record one finite, exact-source and exact-target
+  reviewed bridge without presenting an unresolved terminology artifact as
+  complete.
 
 Clinical semantics should not accumulate as target-specific Python conditionals when a small declarative rule can express them.
 

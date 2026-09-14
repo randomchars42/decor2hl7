@@ -16,7 +16,10 @@ from decor2hl7.cda.datatypes import (
 from decor2hl7.cda.compile import compile_cda
 from decor2hl7.cda.core import index_definitions
 from decor2hl7.build.mapping import cda_mapping_audit, cda_mapping_proposal
-from decor2hl7.bindings import non_null_requirement_problems
+from decor2hl7.bindings import (
+    non_null_requirement_problems,
+    validate_target_defaults,
+)
 from decor2hl7.compile.structural import value_set_members
 from decor2hl7.compile.reports import render_cda_mapping_markdown
 
@@ -97,7 +100,9 @@ class CdaDatatypeTests(unittest.TestCase):
       <element name="hl7:effectiveTime" datatype="IVL_TS"
                minimumMultiplicity="0" maximumMultiplicity="1">
         <element name="hl7:width" datatype="PQ" conformance="R"
-                 minimumMultiplicity="1" maximumMultiplicity="1"/>
+                 minimumMultiplicity="1" maximumMultiplicity="1">
+          <attribute name="nullFlavor" datatype="CS" isOptional="true"/>
+        </element>
       </element>
     </element>
   </element>
@@ -596,6 +601,22 @@ class CdaDatatypeTests(unittest.TestCase):
                         "codes": [],
                     },
                 },
+                "value_sets": {
+                    "act-status@2024-01-01": {
+                        "id": "act-status",
+                        "effective_date": "2024-01-01",
+                        "codes": {
+                            "active": {
+                                "code_system": "1.2.3",
+                                "display_name": "Active",
+                            },
+                            "completed": {
+                                "code_system": "1.2.3",
+                                "display_name": "Completed",
+                            },
+                        },
+                    },
+                },
             }
             compiled = compile_cda([source], model)
             target_name, target = target_at(compiled, "/hl7:statusCode")
@@ -773,7 +794,9 @@ class CdaDatatypeTests(unittest.TestCase):
             source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
   <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
     <element name="hl7:value" datatype="CE" minimumMultiplicity="1"
-             maximumMultiplicity="1" conformance="R"/>
+             maximumMultiplicity="1" conformance="R">
+      <attribute name="nullFlavor" datatype="CS" isOptional="true"/>
+    </element>
   </element>
 </template>''', encoding="utf-8")
             model = {
@@ -1526,6 +1549,99 @@ class CdaDatatypeTests(unittest.TestCase):
                 value = find_required(ET.fromstring(payload), f".//{{{HL7}}}value")
                 self.assertEqual((value.get("value"), value.get("unit")), (str(scalar), unit))
 
+    def test_vocabulary_supplies_coded_representation_without_datatype(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:code" minimumMultiplicity="1" maximumMultiplicity="1"
+             isMandatory="true">
+      <vocabulary code="fixed-code" codeSystem="1.2.3" displayName="Fixed code"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc",
+                    "template_effective_date": "2026",
+                },
+                "groups": {},
+                "fields": {},
+            }
+            compiled = compile_cda([source], model)
+            code_target = next(
+                target for target in compiled["targets"].values()
+                if str(target.get("path") or "").endswith("/hl7:code")
+            )
+            self.assertEqual(
+                code_target["value_representation"]["kind"], "coded",
+            )
+            self.assertFalse(code_target["writable"])
+            payload, problems = cda.emit(
+                {"key": "P1", "values": {}, "instances": {}},
+                model, compiled, {"fields": {}}, {},
+            )
+            self.assertEqual(problems, [])
+            code = find_required(ET.fromstring(payload), f".//{{{HL7}}}code")
+            self.assertEqual(
+                (code.get("code"), code.get("codeSystem"), code.get("displayName")),
+                ("fixed-code", "1.2.3", "Fixed code"),
+            )
+
+    def test_property_unit_completes_scalar_quantity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:value" datatype="PQ" minimumMultiplicity="1" maximumMultiplicity="1">
+      <property unit="/min"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc",
+                    "template_effective_date": "2026",
+                },
+                "groups": {},
+                "fields": {
+                    "rate": {"type": "quantity", "repeat_chain": []},
+                },
+            }
+            compiled = compile_cda([source], model)
+            target_name, _ = target_at(compiled, "/hl7:value")
+            payload, problems = cda.emit(
+                {"key": "P1", "values": {"rate": 12}, "instances": {}},
+                model, compiled, {"fields": {"rate": target_name}}, {},
+            )
+            self.assertEqual(problems, [])
+            value = find_required(ET.fromstring(payload), f".//{{{HL7}}}value")
+            self.assertEqual(
+                (value.get("value"), value.get("unit")), ("12", "/min"),
+            )
+
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:value" datatype="PQ" minimumMultiplicity="1" maximumMultiplicity="1">
+      <property unit="mm[Hg]"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            compiled = compile_cda([source], model)
+            target_name, _ = target_at(compiled, "/hl7:value")
+            payload, _ = cda.emit(
+                {
+                    "key": "P2",
+                    "values": {"rate": {"value": 90, "unit": "mmHg"}},
+                    "instances": {},
+                },
+                model, compiled, {"fields": {"rate": target_name}}, {},
+            )
+            value = find_required(ET.fromstring(payload), f".//{{{HL7}}}value")
+            self.assertEqual(
+                (value.get("value"), value.get("unit")), ("90", "mm[Hg]"),
+            )
+
     def test_cda_structural_classes_expand_through_datatypes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1739,6 +1855,130 @@ class CdaDatatypeTests(unittest.TestCase):
             datatype_definition("TS.DATE.MIN").profile,
             "DATE.MIN",
         )
+
+    def test_datatype_flavour_inherits_null_flavor_from_pinned_xsd_base(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "datatypes.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="ANY" abstract="true">
+    <xs:attribute name="nullFlavor" type="xs:string" use="optional"/>
+  </xs:complexType>
+  <xs:complexType name="QTY" abstract="true">
+    <xs:complexContent><xs:extension base="ANY"/></xs:complexContent>
+  </xs:complexType>
+  <xs:complexType name="TS">
+    <xs:complexContent><xs:extension base="QTY">
+      <xs:attribute name="value" type="xs:string" use="optional"/>
+    </xs:extension></xs:complexContent>
+  </xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            template = root / "template.xml"
+            template.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:effectiveTime" datatype="TS.DATETIME.MIN"
+             minimumMultiplicity="1" maximumMultiplicity="1" conformance="R"/>
+  </element>
+</template>''', encoding="utf-8")
+            compiled = compile_cda(
+                [template],
+                {
+                    "meta": {
+                        "template_id": "doc",
+                        "template_effective_date": "2026",
+                    },
+                    "groups": {},
+                    "fields": {},
+                },
+                core_definition_paths=[schema],
+            )
+
+            _, target = target_at(compiled, "/hl7:effectiveTime")
+            self.assertEqual(target["datatype"], "TS.DATETIME.MIN")
+            self.assertTrue(target["permits_null_flavor"])
+            effective_time = compiled["document"][0]["children"][0]
+            self.assertEqual(
+                effective_time["representation_datatype"], "TS.DATETIME.MIN",
+            )
+            null_flavor = next(
+                item for item in effective_time["attributes"]
+                if item["name"] == "nullFlavor"
+            )
+            self.assertTrue(null_flavor["optional"])
+            self.assertTrue(any(
+                item.get("source") == "datatype"
+                for item in null_flavor["provenance"]
+            ))
+
+    def test_cs_validates_binding_identity_without_serializing_code_system(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "datatypes.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="ANY" abstract="true">
+    <xs:attribute name="nullFlavor" type="xs:string" use="optional"/>
+  </xs:complexType>
+  <xs:complexType name="CD"><xs:complexContent><xs:extension base="ANY">
+    <xs:attribute name="code" type="xs:string" use="optional"/>
+    <xs:attribute name="codeSystem" type="xs:string" use="optional"/>
+  </xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="CV"><xs:complexContent><xs:restriction base="CD">
+    <xs:attribute name="code" type="xs:string" use="optional"/>
+    <xs:attribute name="codeSystem" type="xs:string" use="optional"/>
+  </xs:restriction></xs:complexContent></xs:complexType>
+  <xs:complexType name="CS"><xs:complexContent><xs:restriction base="CV">
+    <xs:attribute name="code" type="xs:string" use="optional"/>
+    <xs:attribute name="codeSystem" type="xs:string" use="prohibited"/>
+  </xs:restriction></xs:complexContent></xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            template = root / "template.xml"
+            template.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:statusCode" datatype="CS"
+             minimumMultiplicity="1" maximumMultiplicity="1" conformance="R">
+      <vocabulary valueSet="act-status" flexibility="2026"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc", "template_effective_date": "2026",
+                },
+                "groups": {},
+                "fields": {
+                    "status": {"type": "code", "repeat_chain": []},
+                },
+                "value_sets": {
+                    "act-status@2026": {
+                        "id": "act-status", "effective_date": "2026",
+                        "codes": {
+                            "active": {"code_system": "1.2.3"},
+                        },
+                    },
+                },
+            }
+            compiled = compile_cda(
+                [template], model, core_definition_paths=[schema],
+            )
+            target_name, target = target_at(compiled, "/hl7:statusCode")
+            self.assertEqual(
+                target["value_representation"]["attributes"], ["code"],
+            )
+            self.assertTrue(target["permits_null_flavor"])
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P1", "values": {"status": "active"},
+                    "instances": {},
+                },
+                model, compiled, {"fields": {"status": target_name}}, {},
+            )
+            self.assertEqual(problems, [])
+            status = find_required(
+                ET.fromstring(payload), f"{{{HL7}}}statusCode",
+            )
+            self.assertEqual(status.get("code"), "active")
+            self.assertIsNone(status.get("codeSystem"))
 
     def test_url_uses_the_cda_value_attribute(self) -> None:
         representation = expand_datatype("URL").value_representation
@@ -2170,6 +2410,152 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertIsNotNone(value)
             assert value is not None
             self.assertEqual(value.get("nullFlavor"), "UNK")
+
+    def test_ordinary_other_code_is_not_a_null_flavor_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            schema = root / "datatypes.xsd"
+            schema.write_text('''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="ST" mixed="true"/>
+  <xs:complexType name="CD"><xs:sequence>
+    <xs:element name="originalText" type="ST" minOccurs="0"/>
+  </xs:sequence>
+    <xs:attribute name="nullFlavor" type="xs:string"/>
+    <xs:attribute name="code" type="xs:string"/>
+    <xs:attribute name="codeSystem" type="xs:string"/>
+    <xs:attribute name="displayName" type="xs:string"/>
+  </xs:complexType>
+  <xs:complexType name="CE"><xs:complexContent><xs:extension base="CD"/></xs:complexContent></xs:complexType>
+  <xs:complexType name="CV"><xs:complexContent><xs:extension base="CE"/></xs:complexContent></xs:complexType>
+</xs:schema>''', encoding="utf-8")
+            source = root / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:value" datatype="CV" minimumMultiplicity="1" maximumMultiplicity="1" conformance="R">
+      <attribute name="nullFlavor" datatype="CS" isOptional="true"/>
+      <vocabulary valueSet="test-vs" flexibility="2026"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc", "template_effective_date": "2026",
+                },
+                "groups": {},
+                "fields": {"status": {"type": "code", "repeat_chain": []}},
+                "value_sets": {
+                    "test-vs@2026": {
+                        "id": "test-vs",
+                        "effective_date": "2026",
+                        "codes": {
+                            "A": {
+                                "code_system": "1.2.3",
+                                "display_name": "Accepted",
+                            },
+                            "74964007": {
+                                "code_system": "2.16.840.1.113883.6.96",
+                                "display_name": "Other",
+                            },
+                        },
+                        # ART-DECOR can call an ordinary coded member an
+                        # exception. Its code system still makes it a code,
+                        # not an HL7 null flavor.
+                        "exceptions": ["74964007"],
+                    },
+                },
+            }
+            compiled = compile_cda(
+                [source], model, core_definition_paths=[schema]
+            )
+            target_name, target = target_at(compiled, "/hl7:value")
+            self.assertEqual(target.get("null_flavor_exceptions", []), [])
+            self.assertTrue(target["permits_null_flavor"])
+
+            mapping = {"fields": {"status": target_name}}
+            payload, problems = cda.emit(
+                {
+                    "key": "P0",
+                    "values": {"status": "A"},
+                    "instances": {},
+                },
+                model, compiled, mapping, {},
+            )
+            self.assertEqual(problems, [])
+            value = find_required(ET.fromstring(payload), f"{{{HL7}}}value")
+            self.assertEqual(value.get("code"), "A")
+            self.assertEqual(value.get("codeSystem"), "1.2.3")
+
+            with self.assertRaisesRegex(ValueError, "not an explicit exception"):
+                cda.emit(
+                    {
+                        "key": "P1",
+                        "values": {
+                            "status": {"nullFlavor": "OTH", "raw": "Andere"},
+                        },
+                        "instances": {},
+                    },
+                    model, compiled, mapping, {},
+                )
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P-NI",
+                    "values": {"status": {"nullFlavor": "NI"}},
+                    "instances": {},
+                },
+                model, compiled, mapping, {},
+            )
+            self.assertEqual(problems, [])
+            value = find_required(ET.fromstring(payload), f"{{{HL7}}}value")
+            self.assertEqual(value.get("nullFlavor"), "NI")
+
+            with self.assertRaisesRegex(ValueError, "outside required"):
+                cda.emit(
+                    {
+                        "key": "P2",
+                        "values": {"status": {
+                            "code": "74964007", "codeSystem": "9.9",
+                        }},
+                        "instances": {},
+                    },
+                    model, compiled, mapping, {},
+                )
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P3",
+                    "values": {"status": {
+                        "code": "74964007",
+                        "codeSystem": "2.16.840.1.113883.6.96",
+                    }},
+                    "instances": {},
+                },
+                model, compiled, mapping, {},
+            )
+            self.assertEqual(problems, [])
+            value = find_required(ET.fromstring(payload), f"{{{HL7}}}value")
+            self.assertEqual(value.get("code"), "74964007")
+            self.assertEqual(
+                value.get("codeSystem"), "2.16.840.1.113883.6.96"
+            )
+            self.assertIsNone(value.get("nullFlavor"))
+
+            default_errors = validate_target_defaults(compiled, {
+                "fields": {},
+                "target_defaults": {
+                    target_name: {"nullFlavor": "OTH"},
+                },
+            })
+            self.assertTrue(any(
+                "not an explicit exception" in error
+                for error in default_errors
+            ))
+            self.assertEqual(validate_target_defaults(compiled, {
+                "fields": {},
+                "target_defaults": {
+                    target_name: {"nullFlavor": "NI"},
+                },
+            }), [])
 
     def test_site_fallback_completes_only_an_active_optional_branch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

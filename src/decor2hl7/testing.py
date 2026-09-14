@@ -90,8 +90,8 @@ def synthetic_value(path: str, field: Mapping[str, Any], occurrence: int = 0) ->
             else decimal_number
         )
     if kind == "code":
-        # An unbound code remains visible as OTH during normalization.  This is
-        # preferable to inventing terminology that is absent from the model.
+        # An unbound code remains target-neutral during normalization. A
+        # reviewed CDA transform may later choose a target representation.
         return "SYNTHETIC"
     prefix = "TEST-ID" if kind == "identifier" else "Synthetic"
     return _bounded_text(field, f"{prefix}-{hashlib.sha1(path.encode()).hexdigest()[:10]}")
@@ -635,7 +635,7 @@ def synthetic_site(
             "encounter_root": "1.2.276.0.76.999.1.3",
             "roots": _mapping_roots(cda, cda_mapping),
         },
-        "null_flavor": {"missing_required": "NI", "unmapped_code": "OTH"},
+        "null_flavor": {"missing_required": "NI"},
         "input": {
             "join_column": "case_id",
             "case_source": "cases",
@@ -774,14 +774,26 @@ def setup_fixture(
     )
     if coverage == "all-mapped":
         mapped = all_mapped
+    elif (
+        isinstance(coverage, Mapping)
+        and isinstance(coverage.get("all_mapped_except"), list)
+    ):
+        excluded = [str(path) for path in coverage["all_mapped_except"]]
+        unknown = sorted(set(excluded) - set(all_mapped))
+        if unknown:
+            raise ValueError(
+                "scenario expected.coverage.all_mapped_except contains "
+                "unselected model path(s): " + ", ".join(unknown)
+            )
+        mapped = sorted(set(all_mapped) - set(excluded))
     elif isinstance(coverage, list) and all(
         isinstance(path, str) and path in all_mapped for path in coverage
     ):
         mapped = sorted(coverage)
     else:
         raise ValueError(
-            "scenario expected.coverage must be 'all-mapped' or a list of "
-            "selected model paths"
+            "scenario expected.coverage must be 'all-mapped', an "
+            "all_mapped_except object, or a list of selected model paths"
         )
     generated_fields = sorted(
         path for path, locator in csv_fields.items() if locator is not None
@@ -807,7 +819,7 @@ def setup_fixture(
             list(scenario_meta["expected"].get("limitations", []))
             if scenario_meta is not None else [
                 "One generated document cannot cover mutually exclusive template branches.",
-                "Unbound coded fields use SYNTHETIC and normalize to nullFlavor OTH.",
+                "Unbound coded fields use target-neutral SYNTHETIC wording.",
             ]
         ),
     }

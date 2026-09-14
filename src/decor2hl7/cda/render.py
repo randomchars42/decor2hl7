@@ -15,7 +15,6 @@ from typing import Any, Mapping
 
 from ..assertions import validate_contexts
 from ..bindings import (
-    NULL_FLAVORS,
     build_assignments,
     fallback_if_active_value,
     is_fallback_if_active,
@@ -27,11 +26,20 @@ from ..bindings import (
 from ..cooccurrence import (
     cooccurrence_problem_message, datatype_cooccurrence_problems,
 )
+from ..semantics import units_equivalent
 from .model import ValueRepresentationKind
+from .terminology import (
+    NULL_FLAVOR_CODE_SYSTEM,
+    NULL_FLAVORS,
+    NULL_FLAVORS_WITH_ORIGINAL_TEXT,
+    ORIGINAL_TEXT_NULL_FLAVOR_PREFERENCE,
+    complete_required_binding_code,
+    null_flavor as coded_null_flavor,
+    required_binding_value_error,
+)
 
 HL7 = "urn:hl7-org:v3"
 XSI = "http://www.w3.org/2001/XMLSchema-instance"
-NULLFLAVOR_CODE_SYSTEM = "2.16.840.1.113883.5.1008"
 ET.register_namespace("", HL7)
 ET.register_namespace("xsi", XSI)
 
@@ -261,13 +269,62 @@ def _property_advisory_match(rule: Mapping[str, Any], value: Any) -> bool:
     return True
 
 
+def _formal_property_companions(
+    target: Mapping[str, Any], node: Mapping[str, Any],
+) -> dict[str, str]:
+    """Return unambiguous output attributes fixed by ART-DECOR properties."""
+    raw_properties = node.get("properties")
+    if raw_properties is None:
+        raw_properties = target.get("properties") or []
+    properties = [
+        rule for rule in raw_properties if isinstance(rule, Mapping)
+    ]
+    companions: dict[str, str] = {}
+    for name in ("unit", "currency"):
+        values = {
+            str(rule[name]) for rule in properties
+            if rule.get(name) is not None
+        }
+        if len(values) == 1:
+            companions[name] = next(iter(values))
+    if node.get("unit") is not None:
+        companions.setdefault("unit", str(node["unit"]))
+    return companions
+
+
+def _with_formal_property_companions(
+    value: Any, target: Mapping[str, Any], node: Mapping[str, Any],
+) -> Any:
+    companions = _formal_property_companions(target, node)
+    if not companions or isinstance(value, Mapping) and value.get("nullFlavor"):
+        return value
+    if isinstance(value, Mapping):
+        completed = dict(value)
+        for name, companion in companions.items():
+            supplied = completed.get(name)
+            if supplied is None:
+                completed[name] = companion
+            elif name == "unit" and units_equivalent(supplied, companion):
+                # The mapping compatibility rule has already established the
+                # semantic equivalence.  Serialize the exact target spelling.
+                completed[name] = companion
+        return completed
+    return {"value": value, **companions}
+
+
 def _validate_compiled_value(
     value: Any, target: Mapping[str, Any], node: Mapping[str, Any],
     problems: list[str] | None,
     terminology_constraints: Mapping[str, Any] | None = None,
 ) -> None:
     """Enforce executable ART-DECOR datatype and property constraints."""
-    if isinstance(value, Mapping) and value.get("nullFlavor"):
+    binding_error = required_binding_value_error(
+        value, target, terminology_constraints,
+    )
+    if binding_error:
+        identity = str(target.get("path") or node.get("name") or "CDA value")
+        raise ValueError(f"CDA target {identity}: {binding_error}")
+    if coded_null_flavor(value):
         return
     datatype = str(node.get("datatype") or target.get("datatype") or "").upper()
     scalar = _constraint_scalar(value)
@@ -293,33 +350,6 @@ def _validate_compiled_value(
         ):
             raise ValueError(f"CS.LANG code {code!r} is not an RFC 3066 tag")
 
-    required_bindings = [
-        terminology_constraints.get(str(key), {})
-        for key in target.get("required_binding_constraints", [])
-        if isinstance(terminology_constraints, Mapping)
-    ]
-    resolved_bindings = [
-        binding for binding in required_bindings
-        if isinstance(binding, Mapping) and binding.get("resolved")
-    ]
-    if resolved_bindings and isinstance(value, Mapping) and value.get("code"):
-        code = str(value.get("code") or "")
-        system = str(value.get("codeSystem") or value.get("code_system") or "")
-        if not any(
-            any(
-                code == str(member[0])
-                and (not str(member[1]) or not system or system == str(member[1]))
-                for member in binding.get("members", [])
-            )
-            for binding in resolved_bindings
-        ):
-            identities = ", ".join(
-                str(binding.get("id") or "") for binding in resolved_bindings
-            )
-            raise ValueError(
-                f"code {code!r} is outside required ART-DECOR binding(s) {identities}"
-            )
-
     raw_properties = node.get("properties")
     if raw_properties is None:
         raw_properties = target.get("properties") or []
@@ -334,7 +364,11 @@ def _validate_compiled_value(
         ))
     ]
     if hard and not any(_property_hard_match(rule, value) for rule in hard):
-        raise ValueError("CDA value violates ART-DECOR property constraints")
+        identity = str(target.get("path") or node.get("name") or "CDA value")
+        raise ValueError(
+            f"CDA target {identity} value {value!r} violates ART-DECOR "
+            f"property constraints {hard!r}"
+        )
     advisory = [
         rule for rule in properties
         if any(rule.get(key) is not None for key in (
@@ -362,6 +396,10 @@ def _write_value(
         raise ValueError(
             f"CDA value target {target.get('path') or node.get('name')} has no compiled value representation"
         )
+    value = complete_required_binding_code(
+        value, target, terminology_constraints,
+    )
+    value = _with_formal_property_companions(value, target, node)
     _validate_compiled_value(
         value, target, node, problems, terminology_constraints
     )
@@ -369,7 +407,7 @@ def _write_value(
     if (
         isinstance(value, Mapping)
         and str(value.get("codeSystem") or value.get("code_system") or "")
-        == NULLFLAVOR_CODE_SYSTEM
+        == NULL_FLAVOR_CODE_SYSTEM
         and str(value.get("code") or "") in NULL_FLAVORS
         and target.get("permits_null_flavor")
     ):
@@ -431,8 +469,8 @@ def _write_value(
         raise ValueError(
             f"compiled representation {kind.value!r} cannot write a scalar value"
         )
-    if kind == ValueRepresentationKind.QUANTITY and node.get("unit"):
-        element.set("unit", str(node["unit"]))
+    for key, item in _formal_property_companions(target, node).items():
+        element.set(key, item)
 
 
 def _generated_identifier(
@@ -786,16 +824,10 @@ def _coded_original_text(value: Any) -> Any:
         return [_coded_original_text(item) for item in value]
     if not isinstance(value, Mapping):
         return None
-    null_flavor = str(value.get("nullFlavor") or "")
-    if not null_flavor and (
-        str(value.get("codeSystem") or value.get("code_system") or "")
-        == NULLFLAVOR_CODE_SYSTEM
-    ):
-        null_flavor = str(value.get("code") or "")
-    # OTH is the one null flavor whose supplied wording is meaningful: it
-    # identifies the out-of-domain concept.  Other null flavors describe why
-    # no concept is known and therefore must not gain an originalText child.
-    if null_flavor and null_flavor != "OTH":
+    flavor = coded_null_flavor(value)
+    # Only null flavors whose datatype meaning carries an alternate value may
+    # gain originalText. Other flavors describe why no concept is known.
+    if flavor and flavor not in NULL_FLAVORS_WITH_ORIGINAL_TEXT:
         return None
     for key in ("raw", "canonical", "displayName", "display"):
         if value.get(key) not in (None, ""):
@@ -1049,9 +1081,19 @@ def _render_choice(
     minimum = int(node.get("min") or 0)
     maximum = node.get("max")
     if isinstance(maximum, int) and len(selected) > maximum:
+        alternatives = [
+            str(
+                children[index].get("origin", {}).get("path")
+                or children[index].get("path")
+                or children[index].get("name")
+                or f"alternative {index + 1}"
+            )
+            for index in selected
+        ]
         raise ValueError(
-            "generated CDA selects too many ART-DECOR choice alternatives: "
-            f"{len(selected)} > {maximum}"
+            "generated CDA selects too many ART-DECOR choice alternatives "
+            f"at {'.'.join(map(str, location))}: {len(selected)} > {maximum}; "
+            f"selected {alternatives!r}"
         )
     if len(selected) < minimum:
         for index in range(len(children)):
@@ -1407,7 +1449,11 @@ def _render_node_once(
         # described content; never invent a payload-bearing fallback unless
         # the bound profile explicitly admits it.
         compatible = next(
-            (value for value in ("OTH", "UNC") if value in legal), None
+            (
+                value for value in ORIGINAL_TEXT_NULL_FLAVOR_PREFERENCE
+                if value in legal
+            ),
+            None,
         )
         if compatible is not None:
             _write_value(

@@ -110,6 +110,10 @@ def complete_fixture_value_targets(cda_model: Mapping[str, Any]) -> None:
         target["value_representation"] = representation.to_dict()
         target["logical_types"] = list(representation.logical_types)
         target["writable"] = bool(target.get("renderable"))
+        # Hand-authored fixture models stand in for datatype-expanded CDA
+        # nodes. Concrete CDA scalar datatypes inherit the optional
+        # nullFlavor property even when these compact fixtures omit it.
+        target["permits_null_flavor"] = physical.get("kind") == "element"
 
 
 def api_path(url: str) -> str:
@@ -611,6 +615,228 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("Logical only", defaults)
             self.assertNotIn("values", field)
 
+    def test_concept_list_member_identity_compiles_formal_code_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            source = directory / "transaction.source.xml"
+            analysis = directory / "transaction.xml"
+            terminology = directory / "valueset.xml"
+            source.write_text('''<transaction id="tx" effectiveDate="2026-01-01">
+              <representingTemplate>
+                <concept ref="c">
+                  <terminologyAssociation conceptId="c.option.local"
+                    code="A" codeSystem="1.2.3" displayName="Formal A"/>
+                  <terminologyAssociation conceptId="c.option.other"
+                    code="74964007" codeSystem="2.16.840.1.113883.6.96"
+                    displayName="Other (qualifier value)"/>
+                  <terminologyAssociation conceptId="c.option.outside"
+                    code="Z" codeSystem="1.2.3" displayName="Outside"/>
+                </concept>
+              </representingTemplate>
+            </transaction>''', encoding="utf-8")
+            analysis.write_text('''<dataset id="dataset" transactionId="tx"
+                transactionEffectiveDate="2026-01-01">
+              <concept id="c" shortName="status" type="item">
+                <name>Status</name><valueDomain type="code"><conceptList>
+                  <concept id="c.option.local"><name>Lokaler Wert</name>
+                    <synonym>Lokales Synonym</synonym></concept>
+                  <concept id="c.option.other" exception="true">
+                    <name>Andere</name></concept>
+                  <concept id="c.option.outside"><name>Außerhalb</name></concept>
+                </conceptList></valueDomain>
+                <valueSet id="vs" effectiveDate="2025-01-01"/>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            terminology.write_text('''<valueSet id="vs" effectiveDate="2025-01-01">
+              <conceptList>
+                <concept code="A" codeSystem="1.2.3" displayName="Formal A"/>
+                <concept code="74964007" codeSystem="2.16.840.1.113883.6.96"
+                  displayName="Other (qualifier value)"/>
+              </conceptList>
+            </valueSet>''', encoding="utf-8")
+
+            model = compile_model(
+                analysis, [terminology], [terminology],
+                transaction_source=source,
+            )
+            logical = model["fields"]["status"]["logical_domain"]
+            local = logical["options"]["Lokaler Wert"]
+            other = logical["options"]["Andere"]
+            self.assertEqual(local["concept_id"], "c.option.local")
+            self.assertEqual(local["terminology_association"]["canonical"], "Formal A")
+            self.assertEqual(local["terminology_association"]["code"], "A")
+            self.assertEqual(
+                local["terminology_associations"],
+                [local["terminology_association"]],
+            )
+            self.assertEqual(
+                other["terminology_association"]["canonical"],
+                "Other (qualifier value)",
+            )
+            self.assertEqual(other["terminology_association"]["code"], "74964007")
+            self.assertTrue(other["exception"])
+            self.assertEqual(
+                logical["terminology_association_diagnostics"],
+                [{
+                    "kind": "outside-formal-domain",
+                    "label": "Außerhalb",
+                    "concept_id": "c.option.outside",
+                    "declared": [{"code": "Z", "code_system": "1.2.3"}],
+                    "admitted_canonical_values": [],
+                }],
+            )
+            defaults = mapping.code_mapping_defaults(model)["fields"]["status"]
+            self.assertEqual(defaults["Lokaler Wert"], "Formal A")
+            self.assertEqual(defaults["Lokales Synonym"], "Formal A")
+            self.assertEqual(defaults["Andere"], "Other (qualifier value)")
+            self.assertNotIn("Außerhalb", defaults)
+
+    def test_target_valueset_disambiguates_exact_option_associations(self) -> None:
+        field = {
+            "name": "Scale result",
+            "type": "code",
+            "repeat_chain": [],
+            "value_sets": ["source-vs", "target-vs"],
+            "accepted_values": {
+                "Source red": {
+                    "code": "1", "code_system": "source-system",
+                },
+                "Target red": {
+                    "code": "R", "code_system": "target-system",
+                },
+                "Source blue": {
+                    "code": "2", "code_system": "source-system",
+                },
+                "Target blue": {
+                    "code": "B", "code_system": "target-system",
+                },
+            },
+            "logical_domain": {"options": {
+                "Rot": {
+                    "display_name": "Rot", "concept_id": "option.red",
+                    "terminology_associations": [
+                        {"code": "1", "code_system": "source-system"},
+                        {"code": "R", "code_system": "target-system"},
+                    ],
+                },
+                "Blau": {
+                    "display_name": "Blau", "concept_id": "option.blue",
+                    "terminology_associations": [
+                        {"code": "2", "code_system": "source-system"},
+                        {"code": "B", "code_system": "target-system"},
+                    ],
+                },
+            }},
+        }
+        members = [{
+            "code": "R", "codeSystem": "target-system",
+            "displayName": "Target red",
+            "valueSetEffectiveDate": "2026",
+        }, {
+            "code": "B", "codeSystem": "target-system",
+            "displayName": "Target blue",
+            "valueSetEffectiveDate": "2026",
+        }]
+        target = {
+            "path": "hl7:observation/hl7:value",
+            "datatype": "CE", "writable": True, "locations": ["0.0"],
+            "logical_types": ["code", "ordinal"], "repeat_ancestors": [],
+            "value_representation": {
+                "kind": "coded", "logical_types": ["code", "ordinal"],
+                "attributes": ["code", "codeSystem", "displayName"],
+            },
+            "value_set_bindings": [{
+                "id": "target-vs", "effective_date": "2026",
+                "strength": "required",
+            }],
+        }
+        source_target = {
+            **target,
+            "path": "hl7:observation/hl7:translation",
+            "locations": ["0.1"],
+            "value_set_bindings": [{
+                "id": "source-vs", "effective_date": "2026",
+                "strength": "required",
+            }],
+        }
+        source_members = [{
+            "code": "1", "codeSystem": "source-system",
+            "displayName": "Source red", "valueSetEffectiveDate": "2026",
+        }, {
+            "code": "2", "codeSystem": "source-system",
+            "displayName": "Source blue", "valueSetEffectiveDate": "2026",
+        }]
+        result = mapping_compiler._bound_enum_mapping(
+            field, {"targets": {
+                "Scale.value": target,
+                "Scale.translation": source_target,
+            }},
+            {"target-vs": members, "source-vs": source_members},
+            "Scale.value",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        selection, metadata = result
+        transform = selection["mapping"]["transform"]
+        self.assertEqual(metadata["evidence_level"], "EXACT_CONCEPT_ASSOCIATION")
+        self.assertEqual(transform["map"]["Rot"]["code"], "R")
+        self.assertEqual(transform["map"]["Blau"]["codeSystem"], "target-system")
+        normalized = data.normalize_value("Rot", field, {}, {})
+        self.assertEqual(normalized, {"raw": "Rot", "canonical": "Rot"})
+        self.assertEqual(apply_transform(normalized, transform)["code"], "R")
+
+    def test_logical_only_domain_never_yields_an_empty_exact_enum(self) -> None:
+        field = {
+            "type": "code",
+            "logical_domain": {"options": {
+                "One": {"display_name": "One", "concept_id": "option.1"},
+                "Two": {"display_name": "Two", "concept_id": "option.2"},
+            }},
+            "formal_terminology": {
+                "bound": True, "complete": False, "members": {},
+            },
+        }
+        target = {
+            "path": "hl7:act/hl7:code",
+            "datatype": "CE", "writable": True, "locations": ["0.0"],
+            "logical_types": ["code", "ordinal"], "repeat_ancestors": [],
+            "value_representation": {
+                "kind": "coded", "logical_types": ["code", "ordinal"],
+                "attributes": ["code", "codeSystem", "displayName"],
+            },
+            "value_set_bindings": [{
+                "id": "target-vs", "effective_date": "2026",
+                "strength": "required",
+            }],
+        }
+        result = mapping_compiler._bound_enum_mapping(
+            field, {"targets": {"Referral.code": target}},
+            {"target-vs": [{
+                "code": "1", "codeSystem": "target-system",
+                "displayName": "One", "valueSetEffectiveDate": "2026",
+            }]},
+        )
+        self.assertIsNone(result)
+
+    def test_unresolved_shared_valueset_is_review_evidence_only(self) -> None:
+        field = {
+            "type": "code", "value_sets": ["shared-vs"],
+            "formal_terminology": {"status": "unresolved"},
+        }
+        target = {
+            "datatype": "CE", "writable": True, "locations": ["0.0"],
+            "logical_types": ["code", "ordinal"], "repeat_ancestors": [],
+            "value_representation": {
+                "kind": "coded", "logical_types": ["code", "ordinal"],
+            },
+        }
+        candidates = mapping_compiler._vocabulary_candidates(
+            field, {"shared-vs": [("Referral.code", target)]}, {}, {},
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertFalse(candidates[0]["actionable"])
+        self.assertIn("review evidence only", candidates[0]["warnings"][0])
+
     def test_named_cda_target_and_ta_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project.xml"
@@ -975,8 +1201,16 @@ class CoreTests(unittest.TestCase):
         header = element("hl7:componentOf", [encounter], fixed={"typeCode": "COMP"})
         candidate = element("hl7:code", datatype="CE", targets=["Referral.code"])
         unused = element("hl7:text", datatype="ST", targets=["Referral.unused"])
-        section = element("hl7:section", [candidate, unused], target="Referral.section")
-        document = element("hl7:ClinicalDocument", [header, element("hl7:component", [section])])
+        section = element(
+            "hl7:section", [candidate, unused], target="Referral.section", min=1,
+        )
+        document = element(
+            "hl7:ClinicalDocument",
+            [header, element("hl7:component", [section], min=1)],
+            min=1,
+        )
+        unused["min"] = 1
+        unused["mandatory"] = True
         cda_model = {
             "document_template": {
                 "id": "doc", "effective_date": "2026-01-01",
@@ -1070,8 +1304,17 @@ class CoreTests(unittest.TestCase):
         self.assertIn("!      └── Referral source", report)
         self.assertIn("✓  │       ├── low {Encounter.low} ← Start", trees)
         self.assertIn(
-            "○          └── text {Referral.unused} ← no dataset counterpart",
+            "○▲         └── text {Referral.unused} ← no dataset counterpart",
             trees,
+        )
+        section["min"] = 0
+        document["children"][1]["min"] = 0
+        optional_trees = render_cda_mapping_trees_markdown(
+            model, cda_model, mapping_cfg, audit
+        )
+        self.assertIn(
+            "○          └── text {Referral.unused} ← no dataset counterpart",
+            optional_trees,
         )
         self.assertIn('<componentOf typeCode="COMP">', accepted)
         self.assertIn('<encompassingEncounter classCode="ENC" moodCode="EVN">', accepted)
@@ -1082,11 +1325,54 @@ class CoreTests(unittest.TestCase):
         self.assertIn("SPEC → TA", report)
         self.assertIn("selectable after review", report)
 
-    def test_code_normalization_and_unmapped_code(self) -> None:
+    def test_code_normalization_rejects_unmapped_finite_domain_code(self) -> None:
         field = {"type": "code", "values": {"rot": {"code": "R", "code_system": "1.2.3", "display_name": "rot"}}}
         site = {"null_flavor": {"unmapped_code": "OTH"}, "input": {}}
         self.assertEqual(data.normalize_value("1", field, {"1": "rot"}, site)["code"], "R")
-        self.assertEqual(data.normalize_value("X", field, {}, site)["nullFlavor"], "OTH")
+        with self.assertRaisesRegex(ValueError, "not admitted"):
+            data.normalize_value("X", field, {}, site)
+
+    def test_open_code_normalization_retains_raw_value_without_null_flavor(self) -> None:
+        open_field = {
+            "type": "code",
+            "formal_terminology": {
+                "status": "unconstrained", "bound": False, "complete": True,
+            },
+        }
+        self.assertEqual(
+            data.normalize_value(
+                "local-code", open_field, {},
+                {"null_flavor": {"unmapped_code": "OTH"}},
+            ),
+            {"raw": "local-code"},
+        )
+
+        unresolved = {
+            "type": "code",
+            "formal_terminology": {
+                "status": "unresolved", "bound": True, "complete": False,
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "not admitted"):
+            data.normalize_value("local-code", unresolved, {}, {})
+        with self.assertRaisesRegex(ValueError, "finite dataset domain"):
+            data.normalize_value(
+                "local-code", unresolved,
+                {"local-code": {"code": "X", "codeSystem": "1.2.3"}},
+                {},
+            )
+
+    def test_input_transform_cannot_create_null_flavor(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cannot create.*nullFlavor"):
+            data.normalize_input_value(
+                "unknown",
+                {"type": "code"},
+                {}, {},
+                {"parse_as": "text", "transform": {
+                    "type": "enum",
+                    "map": {"unknown": {"nullFlavor": "OTH"}},
+                }},
+            )
 
     def test_cda_renderer(self) -> None:
         compiled = {
@@ -2163,6 +2449,39 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(rows[0]["kind"], "SCHEMATRON_CONSTRAINT")
         self.assertIn("SCHEMATRON_CONSTRAINT(required)", rows[0]["chain"])
 
+        coded_target = {
+            "writable": True,
+            "datatype": "CE",
+            "path": "hl7:act/hl7:code",
+            "logical_types": ["code"],
+            "repeat_ancestors": [],
+            "value_sets": ["1.2.3"],
+            "value_set_bindings": [{"id": "1.2.3", "strength": "required"}],
+            "value_representation": {"kind": "coded"},
+            "schematron_constraints": [{
+                "kind": "required", "path": "hl7:code", "value": 1,
+            }],
+        }
+        unresolved_field = {
+            "type": "code",
+            "repeat_chain": [],
+            "value_sets": ["1.2.3"],
+            "formal_terminology": {"status": "unresolved"},
+        }
+        unresolved = mapping_compiler._candidate(
+            "Act.code", coded_target, ["VS(1.2.3)"], "WEAK", 55,
+            kind="VS", actionable=False,
+            warnings=["source ValueSet membership is unresolved"],
+        )
+        rows = strengthen(
+            unresolved_field,
+            [unresolved],
+            {"targets": {"Act.code": coded_target}},
+            None,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["actionable"])
+
     def test_relationship_paths_stay_review_only_but_contains_is_origin(self) -> None:
         target = {
             "template_id": "encounter", "template_effective_date": "2026",
@@ -3206,6 +3525,7 @@ class CoreTests(unittest.TestCase):
                     "template_effective_date": "2026",
                     "path": "hl7:observation/hl7:effectiveTime",
                     "renderable": True, "writable": True,
+                    "permits_null_flavor": True,
                     "locations": ["0.0.0.1.0.0"],
                     "repeat_ancestors": [],
                     "logical_types": ["datetime", "date"],
@@ -3626,6 +3946,136 @@ class CoreTests(unittest.TestCase):
         )
         self.assertFalse(any("mandatory CDA element" in error for error in errors))
 
+        delegated = {
+            "fields": {},
+            "site_requirements": {
+                "Header.confidentiality": {
+                    "channel": "values",
+                    "reason": "Confidentiality is selected by deployment policy.",
+                },
+            },
+        }
+        mapping_only_errors = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}}, delegated,
+            site={"cda": {"values": {}, "fallback_if_active": {}}},
+            require_site_configuration=False,
+        )
+        self.assertEqual(mapping_only_errors, [])
+        accepted = render_accepted_cda_mappings_markdown(
+            {"fields": {}}, compiled, delegated,
+        )
+        self.assertIn("## Required site configuration", accepted)
+        self.assertIn("`site.cda.values`", accepted)
+
+        missing_site_errors = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}}, delegated,
+            site={"cda": {"values": {}, "fallback_if_active": {}}},
+        )
+        self.assertTrue(any(
+            "site: cda.values['Header.confidentiality'] is required" in error
+            for error in missing_site_errors
+        ))
+        self.assertFalse(any(
+            "mandatory CDA element" in error for error in missing_site_errors
+        ))
+
+        configured_site_errors = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}}, delegated,
+            site={
+                "cda": {
+                    "values": {"Header.confidentiality": "N"},
+                    "fallback_if_active": {},
+                },
+            },
+        )
+        self.assertEqual(configured_site_errors, [])
+
+        wrong_channel_errors = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}}, delegated,
+            site={
+                "cda": {
+                    "values": {},
+                    "fallback_if_active": {"Header.confidentiality": "N"},
+                },
+            },
+        )
+        self.assertTrue(any(
+            "configured under cda.fallback_if_active" in error
+            for error in wrong_channel_errors
+        ))
+
+        invalid_delegation_errors = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}},
+            {"fields": {}, "site_requirements": {
+                "Header.confidentiality": {"channel": "values"},
+            }},
+            site={"cda": {"values": {}, "fallback_if_active": {}}},
+            require_site_configuration=False,
+        )
+        self.assertTrue(any(
+            ".reason must be non-empty text" in error
+            for error in invalid_delegation_errors
+        ))
+        self.assertTrue(any(
+            "mandatory CDA element" in error
+            for error in invalid_delegation_errors
+        ))
+
+    def test_site_requirement_value_obeys_required_binding(self) -> None:
+        leaf = {
+            "kind": "element", "name": "hl7:statusCode", "datatype": "CS",
+            "min": 1, "max": 1, "mandatory": True, "attributes": [],
+            "codes": [], "fixed": {}, "children": [],
+            "targets": ["Act.statusCode"],
+        }
+        target = {
+            **leaf, "name": "Act.statusCode", "locations": ["0.0"],
+            "renderable": True, "writable": True, "has_children": False,
+            "logical_types": ["code"],
+            "value_representation": {
+                "kind": "coded", "attributes": ["code"],
+                "scalar_attribute": "code",
+            },
+            "required_binding_constraints": ["1.2.3@2026-01-01"],
+        }
+        compiled = {
+            "targets": {"Act.statusCode": target},
+            "terminology_constraints": {"1.2.3@2026-01-01": {
+                "id": "1.2.3", "resolved": True,
+                "members": [["completed", "2.16.840.1.113883.5.14"]],
+            }},
+            "document": [{
+                "kind": "element", "name": "hl7:ClinicalDocument",
+                "min": 1, "max": 1, "mandatory": True,
+                "fixed": {"classCode": "DOCCLIN"}, "attributes": [],
+                "targets": [], "children": [leaf],
+            }],
+        }
+        mapping = {"fields": {}, "site_requirements": {
+            "Act.statusCode": {
+                "channel": "fallback_if_active",
+                "reason": "The deployment supplies the assertion lifecycle.",
+            },
+        }}
+        valid = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}}, mapping,
+            site={"cda": {
+                "values": {},
+                "fallback_if_active": {"Act.statusCode": "completed"},
+            }},
+        )
+        self.assertEqual(valid, [])
+        invalid = validate.check_config(
+            {"fields": {}}, compiled, {"fields": {}}, mapping,
+            site={"cda": {
+                "values": {},
+                "fallback_if_active": {"Act.statusCode": "active"},
+            }},
+        )
+        self.assertTrue(any(
+            "outside required ART-DECOR binding" in error for error in invalid
+        ))
+
     def test_mapping_target_identity_migrates_unique_owner_slot(self) -> None:
         owner = "1.2.3|ID:slot-7|PATH:hl7:observation/hl7:value"
         current = {
@@ -3662,6 +4112,53 @@ class CoreTests(unittest.TestCase):
             ["revisionless_source_key"], owner,
         )
 
+    def test_site_requirement_target_identity_migrates_unique_owner_slot(
+        self,
+    ) -> None:
+        owner = "1.2.3|ID:slot-7|PATH:hl7:observation/hl7:statusCode"
+        current = {
+            "version": 8,
+            "fields": {},
+            "site_requirements": {
+                "OldFinding.statusCode": {
+                    "channel": "fallback_if_active",
+                    "reason": "The deployment supplies the assertion lifecycle.",
+                },
+            },
+            "target_identities": {"OldFinding.statusCode": {
+                "cda_target": "OldFinding.statusCode",
+                "revisionless_source_key": owner,
+            }},
+        }
+        proposed = {"target_identities": {"NewFinding.statusCode": {
+            "cda_target": "NewFinding.statusCode",
+            "revisionless_source_key": owner,
+        }}}
+        compiled = {"targets": {"NewFinding.statusCode": {
+            "template_id": "1.2.3", "template_effective_date": "2027-01-01",
+            "element_id": "slot-7",
+            "path": "hl7:observation/hl7:statusCode",
+            "source_key": (
+                "1.2.3@2027-01-01|ID:slot-7|"
+                "PATH:hl7:observation/hl7:statusCode"
+            ),
+        }}}
+
+        changed = mapping_compiler.migrate_mapping_target_identities(
+            current, proposed, compiled
+        )
+
+        self.assertEqual(changed, 1)
+        self.assertNotIn("OldFinding.statusCode", current["site_requirements"])
+        self.assertEqual(
+            current["site_requirements"]["NewFinding.statusCode"],
+            {
+                "channel": "fallback_if_active",
+                "reason": "The deployment supplies the assertion lifecycle.",
+            },
+        )
+        self.assertIn("NewFinding.statusCode", current["target_identities"])
+
     def test_mapping_target_identity_does_not_guess_ambiguous_slot(self) -> None:
         owner = "1.2.3|ID:slot-7|PATH:hl7:observation/hl7:value"
         current = {
@@ -3687,6 +4184,57 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(
             current["target_identities"]["OldFinding.value"]
             ["revisionless_source_key"], owner,
+        )
+
+    def test_mapping_target_identity_preserves_logical_alias_physical_target(self) -> None:
+        owner = "1.2.3|ID:slot-7|PATH:hl7:observation/hl7:value"
+        target = {
+            "template_id": "1.2.3", "template_effective_date": "2027-01-01",
+            "element_id": "slot-7", "path": "hl7:observation/hl7:value",
+            "source_key": "1.2.3@2027-01-01|ID:slot-7|PATH:hl7:observation/hl7:value",
+        }
+        current = {
+            "fields": {"finding": {
+                "target": "Finding_right.value",
+                "cda_target": "Finding.value",
+                "structure": "finding-by-side", "branch": "right",
+            }},
+            "structures": {"finding-by-side": {
+                "type": "repeat_by_discriminator",
+                "branches": [{
+                    "source": "finding", "target": "Finding_right.value",
+                    "cda_target": "Finding.value", "branch": "right",
+                }],
+            }},
+            "target_identities": {},
+        }
+        proposed = {"target_identities": {"Finding_right.value": {
+            "cda_target": "Finding.value",
+            "revisionless_source_key": owner,
+        }}}
+        compiled = {
+            "targets": {"Finding.value": target},
+            "datapoints": {"Finding_right.value": {
+                "cda_target": "Finding.value",
+            }},
+        }
+
+        changed = mapping_compiler.migrate_mapping_target_identities(
+            current, proposed, compiled
+        )
+
+        self.assertEqual(changed, 0)
+        self.assertEqual(
+            current["fields"]["finding"]["cda_target"], "Finding.value"
+        )
+        self.assertEqual(
+            current["structures"]["finding-by-side"]["branches"][0]
+            ["cda_target"],
+            "Finding.value",
+        )
+        self.assertEqual(
+            current["target_identities"]["Finding_right.value"]["cda_target"],
+            "Finding.value",
         )
 
     def test_coded_target_default_inherits_unique_compiled_coding(self) -> None:
@@ -3887,6 +4435,73 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(rows[1]["values"]["med.drug"], "B")
             self.assertEqual(rows[1]["values"]["med.route"], "oral")
             self.assertNotIn("med.drug", records[0]["values"])
+
+    def test_required_fields_are_inactive_inside_absent_optional_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp)
+            (raw / "cases.csv").write_text("patient_id\nP1\n", encoding="utf-8")
+            (raw / "events.csv").write_text(
+                "patient_id,event_id,code,time,duration\nP1,e1,X,,\n",
+                encoding="utf-8",
+            )
+            model = {
+                "groups": {
+                    "events": {"min": 0, "parent": None},
+                    "events.timing": {"min": 0, "parent": "events"},
+                },
+                "fields": {
+                    "events.code": {
+                        "type": "text", "parent": "events",
+                        "repeat_chain": ["events"], "required": True,
+                    },
+                    "events.timing.time": {
+                        "type": "datetime", "parent": "events.timing",
+                        "repeat_chain": ["events"], "required": True,
+                    },
+                    "events.timing.duration": {
+                        "type": "duration", "parent": "events.timing",
+                        "repeat_chain": ["events"], "required": True,
+                    },
+                },
+            }
+            csv_mapping = {
+                "join": {"column": "patient_id"},
+                "fields": {
+                    "events.code": "events:code",
+                    "events.timing.time": "events:time",
+                    "events.timing.duration": "events:duration",
+                },
+            }
+            site = {"input": {
+                "case_source": "cases", "empty_is_null": True,
+                "sources": {
+                    "cases": {"file": "cases.csv", "cardinality": "1:1"},
+                    "events": {
+                        "file": "events.csv", "cardinality": "1:n",
+                        "occurrence_keys": {"events": "event_id"},
+                    },
+                },
+            }}
+            record = data.ingest(
+                raw, model, csv_mapping, {"fields": {}}, site,
+            )[0]
+            row = record["instances"]["events"][0]
+            self.assertEqual(row["values"]["events.code"], "X")
+            self.assertIsNone(row["values"]["events.timing.time"])
+            self.assertIsNone(row["values"]["events.timing.duration"])
+            self.assertEqual(validate.validate_record(record, model), [])
+
+            (raw / "events.csv").write_text(
+                "patient_id,event_id,code,time,duration\n"
+                "P1,e1,X,2026-01-01T12:00:00Z,\n",
+                encoding="utf-8",
+            )
+            active = data.ingest(
+                raw, model, csv_mapping, {"fields": {}}, site,
+            )[0]["instances"]["events"][0]["values"]
+            self.assertEqual(
+                active["events.timing.duration"], {"nullFlavor": "NI"},
+            )
 
     def test_renderer_keeps_optional_repeat_value_with_its_occurrence(self) -> None:
         compiled = {
@@ -5149,7 +5764,7 @@ class CoreTests(unittest.TestCase):
                     <element name="hl7:observation" id="observation"
                              minimumMultiplicity="0" maximumMultiplicity="*">
                       <element name="hl7:code" id="observation-code" datatype="CE"
-                               minimumMultiplicity="1" maximumMultiplicity="1">
+                               minimumMultiplicity="0" maximumMultiplicity="1">
                         <vocabulary valueSet="status-vs"/>
                       </element>
                       <element name="hl7:participant" id="participant"
@@ -5158,6 +5773,7 @@ class CoreTests(unittest.TestCase):
                                  minimumMultiplicity="1" maximumMultiplicity="1">
                           <element name="hl7:code" id="agent-code" datatype="CE"
                                    minimumMultiplicity="1" maximumMultiplicity="1">
+                            <attribute name="nullFlavor" datatype="CS" isOptional="true"/>
                             <vocabulary valueSet="agent-vs" flexibility="2025"/>
                             <element name="hl7:originalText" id="agent-text" datatype="ED"
                                      minimumMultiplicity="0" maximumMultiplicity="1"/>
@@ -5196,6 +5812,39 @@ class CoreTests(unittest.TestCase):
             self.assertIn("Target-governed coded fallback", guide)
             self.assertIn('`nullFlavor="OTH"`', guide)
             self.assertIn("1 exact code/code-system pairs", guide)
+
+            csv_mapping = {"fields": {"allergies.agent": None}}
+            valid_errors = validate.check_config(
+                model, compiled, csv_mapping, proposal,
+            )
+            self.assertFalse([
+                error for error in valid_errors if "coded_fallback" in error
+            ])
+
+            wrong_flavor = json.loads(json.dumps(proposal))
+            wrong_flavor["fields"]["allergies.agent"]["transform"][
+                "null_flavor"
+            ] = "UNK"
+            wrong_flavor_errors = validate.check_config(
+                model, compiled, csv_mapping, wrong_flavor,
+            )
+            self.assertTrue(any(
+                "coded_fallback null flavor" in error
+                or "coded_fallback requires a null flavor" in error
+                for error in wrong_flavor_errors
+            ))
+
+            incomplete_members = json.loads(json.dumps(proposal))
+            incomplete_members["fields"]["allergies.agent"]["transform"][
+                "allowed"
+            ] = []
+            incomplete_errors = validate.check_config(
+                model, compiled, csv_mapping, incomplete_members,
+            )
+            self.assertTrue(any(
+                "allowed members must equal" in error
+                for error in incomplete_errors
+            ))
 
             field = model["fields"]["allergies.agent"]
             raw = data.normalize_value(
@@ -5254,6 +5903,176 @@ class CoreTests(unittest.TestCase):
                 model, ambiguous, [project]
             )
             self.assertIsNone(ambiguous_proposal["fields"]["allergies.agent"])
+
+    def test_reviewed_coded_map_is_finite_target_scoped_and_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            transaction = directory / "transaction.xml"
+            project = directory / "project.xml"
+            transaction.write_text('''<dataset templateId="doc" templateEffectiveDate="2026">
+              <concept id="referral" shortName="referral" type="item">
+                <name>Referral</name>
+                <valueDomain type="code"><conceptList id="referral-options">
+                  <concept id="referral.internal"><name>Internal</name></concept>
+                  <concept id="referral.other" exception="true"><name>Other</name></concept>
+                </conceptList></valueDomain>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            project.write_text('''<project>
+              <template id="doc" effectiveDate="2026" name="ExampleDocument">
+                <element name="hl7:ClinicalDocument" id="root"
+                         minimumMultiplicity="1" maximumMultiplicity="1">
+                  <element name="hl7:section" id="section"
+                           minimumMultiplicity="0" maximumMultiplicity="1">
+                    <element name="hl7:act" id="referral-act"
+                             minimumMultiplicity="0" maximumMultiplicity="1">
+                      <element name="hl7:code" id="referral-code" datatype="CE"
+                               minimumMultiplicity="1" maximumMultiplicity="1">
+                        <attribute name="nullFlavor" datatype="CS" isOptional="true"/>
+                        <vocabulary valueSet="missing-referral-vs" flexibility="2025"/>
+                        <element name="hl7:originalText" id="referral-text" datatype="ED"
+                                 minimumMultiplicity="0" maximumMultiplicity="1"/>
+                      </element>
+                    </element>
+                  </element>
+                </element>
+              </template>
+            </project>''', encoding="utf-8")
+            model = compile_model(transaction)
+            compiled = compile_cda([project], model)
+            target_name = next(
+                name for name, target in compiled["targets"].items()
+                if target.get("element_id") == "referral-code"
+                and target.get("path") == "hl7:ClinicalDocument/hl7:section/hl7:act/hl7:code"
+            )
+            target = compiled["targets"][target_name]
+            original_binding_key = target["required_binding_constraints"][0]
+            compiled_binding = compiled["terminology_constraints"].pop(
+                original_binding_key
+            )
+            binding_key = "missing-referral-vs@2025"
+            compiled_binding.update({
+                "id": "missing-referral-vs",
+                "effective_date": "2025",
+                "resolved_effective_date": "2025",
+            })
+            compiled["terminology_constraints"][binding_key] = compiled_binding
+            target["required_binding_constraints"] = [binding_key]
+            self.assertFalse(
+                compiled_binding["resolved"]
+            )
+            transform = {
+                "type": "reviewed_coded_map",
+                "value_set": {
+                    "id": compiled_binding["id"],
+                    "effective_date": compiled_binding["effective_date"],
+                },
+                "reason": (
+                    "Reviewed finite bridge while the exact target terminology "
+                    "artifact remains unavailable."
+                ),
+                "source_options": {
+                    "Internal": "referral.internal",
+                    "Other": "referral.other",
+                },
+                "map": {
+                    "referral.internal": {
+                        "value": {
+                            "code": "1", "codeSystem": "1.2.3",
+                            "displayName": "Internal referral",
+                        },
+                        "reason": "The owner associates this exact option with code 1.",
+                    },
+                    "referral.other": {
+                        "value": {"nullFlavor": "OTH"},
+                        "reason": "No one target code is established; retain its wording.",
+                    },
+                },
+            }
+            mapping_cfg = {
+                "fields": {"referral": {
+                    "target": target_name, "transform": transform,
+                }},
+            }
+            errors = validate.check_config(
+                model, compiled, {"fields": {"referral": None}}, mapping_cfg,
+            )
+            self.assertEqual(errors, [])
+
+            field = model["fields"]["referral"]
+            internal = data.normalize_value("Internal", field, {}, {})
+            payload, problems = cda.emit(
+                {"key": "P1", "values": {"referral": internal}, "instances": {}},
+                model, compiled, mapping_cfg, {},
+            )
+            self.assertEqual(problems, [])
+            code = find_required(
+                ET.fromstring(payload), ".//{urn:hl7-org:v3}act/{urn:hl7-org:v3}code",
+            )
+            self.assertEqual(code.get("code"), "1")
+            self.assertEqual(code.get("codeSystem"), "1.2.3")
+
+            other = data.normalize_value("Other", field, {}, {})
+            payload, problems = cda.emit(
+                {"key": "P2", "values": {"referral": other}, "instances": {}},
+                model, compiled, mapping_cfg, {},
+            )
+            self.assertEqual(problems, [])
+            code = find_required(
+                ET.fromstring(payload), ".//{urn:hl7-org:v3}act/{urn:hl7-org:v3}code",
+            )
+            self.assertEqual(code.get("nullFlavor"), "OTH")
+            self.assertEqual(
+                find_required(code, "{urn:hl7-org:v3}originalText").text,
+                "Other",
+            )
+
+            incomplete = json.loads(json.dumps(mapping_cfg))
+            incomplete["fields"]["referral"]["transform"]["source_options"].pop(
+                "Other"
+            )
+            incomplete["fields"]["referral"]["transform"]["map"].pop(
+                "referral.other"
+            )
+            incomplete_errors = validate.check_config(
+                model, compiled, {"fields": {"referral": None}}, incomplete,
+            )
+            self.assertTrue(any(
+                "source_options must equal every executable logical source option"
+                in error for error in incomplete_errors
+            ))
+
+            resolved = json.loads(json.dumps(compiled))
+            resolved["terminology_constraints"][binding_key]["resolved"] = True
+            resolved["terminology_constraints"][binding_key]["members"] = [
+                ["1", "1.2.3"],
+            ]
+            resolved_errors = validate.check_config(
+                model, resolved, {"fields": {"referral": None}}, mapping_cfg,
+            )
+            self.assertTrue(any(
+                "now-resolved target binding" in error
+                for error in resolved_errors
+            ))
+
+            ordinary_mapping = json.loads(json.dumps(mapping_cfg))
+            ordinary_mapping["fields"]["referral"]["transform"] = {
+                "type": "enum", "select": "canonical",
+                "map": {"Internal": {
+                    "code": "1", "codeSystem": "1.2.3",
+                }},
+            }
+            with self.assertRaisesRegex(
+                ValueError, "required ART-DECOR binding membership is unavailable",
+            ):
+                cda.emit(
+                    {
+                        "key": "P3",
+                        "values": {"referral": internal},
+                        "instances": {},
+                    },
+                    model, compiled, ordinary_mapping, {},
+                )
 
     def test_neutral_examples_derive_and_coalesce_boolean_discriminators(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6043,11 +6862,11 @@ class CoreTests(unittest.TestCase):
         )
         self.assertIn(("valueset", "1.2.3", "2020"), _inventory(root))
 
-    def test_uncoded_code_option_becomes_oth_until_mapped_to_real_code(self) -> None:
+    def test_uncoded_code_option_stays_target_neutral_until_transformed(self) -> None:
         field = {"type": "code", "values": {"Label": {"display_name": "Label"}, "Coded": {"code": "A", "code_system": "9", "display_name": "Coded"}}}
         site = {"null_flavor": {"unmapped_code": "OTH"}}
         logical = data.normalize_value("Label", field, {}, site)
-        self.assertEqual(logical["nullFlavor"], "OTH")
+        self.assertEqual(logical, {"raw": "Label", "canonical": "Label"})
         self.assertEqual(
             apply_transform(logical, {
                 "type": "ordinal", "map": {"Label": 2},

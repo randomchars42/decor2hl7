@@ -652,9 +652,7 @@ def _copy_children(
     the definition.  Only the latter is valid publication-transform input.
     """
     seen: dict[tuple[str, str, str], ET.Element] = {}
-    selected_template_ids = {
-        identifier for identifier, _ in identities or () if identifier
-    }
+    selected_identities = set(identities) if identities is not None else None
     for path in paths:
         try:
             declared_namespaces = dict(
@@ -683,13 +681,12 @@ def _copy_children(
             ]
         for node, extensional in candidates:
             if (
-                identities is not None
+                selected_identities is not None
                 and node.tag == "template"
-                and str(node.get("id") or "") in selected_template_ids
                 and (
                     str(node.get("id") or ""),
                     str(node.get("effectiveDate") or ""),
-                ) not in identities
+                ) not in selected_identities
             ):
                 continue
             identity = (
@@ -741,6 +738,83 @@ def _copy_children(
                 continue
             seen[identity] = copied
             destination.append(copied)
+
+
+def _require_selected_template_reference_closure(
+    rules: ET.Element,
+    selected_template_revisions: Collection[tuple[str, str]],
+) -> None:
+    """Fail when selected executable template references leave the closure."""
+    selected = set(selected_template_revisions)
+    present = {
+        (
+            str(template.get("id") or ""),
+            str(template.get("effectiveDate") or ""),
+        )
+        for template in rules
+        if template.tag == "template"
+    }
+    missing_definitions = sorted(selected - present)
+    if missing_definitions:
+        rendered = ", ".join(
+            f"{identifier}@{effective}"
+            for identifier, effective in missing_definitions
+        )
+        raise ValueError(
+            "selected template reference closure is incomplete; missing "
+            f"selected definitions: {rendered}"
+        )
+
+    revisions_by_id: dict[str, set[str]] = {}
+    for identifier, effective in selected:
+        revisions_by_id.setdefault(identifier, set()).add(effective)
+
+    unresolved: set[str] = set()
+    for template in rules:
+        if template.tag != "template":
+            continue
+        owner = (
+            str(template.get("id") or ""),
+            str(template.get("effectiveDate") or ""),
+        )
+        for node in template.iter():
+            local_name = node.tag.rsplit("}", 1)[-1]
+            target_id = str(node.get("contains") or "")
+            relationship = "contains"
+            if not target_id and local_name == "include":
+                target_id = str(node.get("ref") or "")
+                relationship = "include"
+            if not target_id:
+                continue
+            target_revisions = revisions_by_id.get(target_id, set())
+            requested_revision = str(node.get("tmeffectiveDate") or "")
+            flexibility = str(node.get("flexibility") or "")
+            if (
+                not requested_revision
+                and flexibility
+                and flexibility.lower() != "dynamic"
+            ):
+                requested_revision = flexibility
+            if not target_revisions:
+                target = f"{target_id}@{requested_revision or flexibility or 'dynamic'}"
+                unresolved.add(
+                    f"{owner[0]}@{owner[1]} {relationship} {target}"
+                )
+            elif requested_revision and requested_revision not in target_revisions:
+                unresolved.add(
+                    f"{owner[0]}@{owner[1]} {relationship} "
+                    f"{target_id}@{requested_revision}"
+                )
+            elif not requested_revision and len(target_revisions) != 1:
+                unresolved.add(
+                    f"{owner[0]}@{owner[1]} {relationship} "
+                    f"{target_id}@{flexibility or 'dynamic'}"
+                )
+    if unresolved:
+        raise ValueError(
+            "selected template reference closure is incomplete: "
+            + "; ".join(sorted(unresolved))
+        )
 
 
 def _merge_terminology_resource(
@@ -860,13 +934,20 @@ def assemble_decor_closure(
     )
 
     rules = ET.SubElement(root, "rules")
+    selected_revisions = (
+        set(selected_template_revisions)
+        if selected_template_revisions is not None
+        else None
+    )
     _copy_children(
         rules,
         inputs.get("templates", []),
         {"template"},
         namespace_registry,
-        selected_template_revisions,
+        selected_revisions,
     )
+    if selected_revisions is not None:
+        _require_selected_template_reference_closure(rules, selected_revisions)
     ET.SubElement(root, "issues")
     for prefix, uri in namespace_registry.items():
         if prefix not in {"xml", "hl7", "cda", "xsi", "xs"}:
@@ -993,12 +1074,10 @@ def _generation_message_scope(
 ) -> dict[str, Any]:
     """Classify one upstream generation message against the selected closure.
 
-    The publication transform generates rules for every template the assembled
-    specification carries, including referenced branches the selected document
-    never instantiates.  A message whose rule context names only templates
-    outside the selected closure reports an upstream gap this build does not
-    consume.  A message with no recognisable template context stays inside the
-    closure so an unparsed message can never silently weaken the claim.
+    Normal builds assemble selected revisions only.  Scope metadata remains a
+    conservative provenance contract for every emitted message and for callers
+    that generate from a broader input: an unrecognised context always stays
+    inside the closure and can never silently weaken the completeness claim.
     """
     contexts = sorted(set(_GENERATION_CONTEXT_TEMPLATE.findall(message)))
     if selected_templates is None or not contexts:
@@ -1094,11 +1173,9 @@ def generate_transaction_schematron(
         except ValueError as error:
             probe_error = str(error)
     compiled["executable"] = not probe_error
-    # Completeness is a claim about the selected transaction document: every
-    # rule that can apply to it was generated.  A rule skipped for a template
-    # the selected document never instantiates stays visible in
-    # `generation_messages` and in the scope table, but does not deny the claim
-    # (`DEC-019`).
+    # Completeness is a claim about the selected transaction document. Exact
+    # assembly has already required every selected formal template reference;
+    # any remaining unclassified generation error therefore fails closed.
     compiled["complete"] = compiled["executable"] and not any(
         scope["severity"] == "error" and scope["in_selected_closure"]
         for scope in compiled["generation_message_scopes"]
@@ -1401,7 +1478,8 @@ def validate_cda_documents(
         )
     elif not generation_complete:
         provenance_detail = (
-            "upstream generation reported missing terminology; see generation-messages.txt"
+            "upstream Schematron generation was incomplete; see "
+            "generation-messages.txt"
         )
     else:
         provenance_detail = "exact transaction validator is complete"

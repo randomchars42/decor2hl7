@@ -1,5 +1,10 @@
 # ART-DECOR closure gap analysis (PLAN workstream A1)
 
+> Historical snapshot. The exact selected validator described here has since
+> been narrowed to its formally closed 119 effective-dated revisions and now
+> generates without messages. The artifact-gap evidence below remains a record
+> of the earlier closure state.
+
 Date: 2026-09-03
 
 Status: evidence snapshot. Documents why the reference `spec/2026.1.2` closure

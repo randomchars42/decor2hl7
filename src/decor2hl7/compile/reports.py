@@ -9,7 +9,11 @@ from typing import Any, Mapping, Sequence, cast
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape, quoteattr
 
-from ..bindings import required_construction_gaps, required_unmapped_null_flavor
+from ..bindings import (
+    required_construction_gaps,
+    required_construction_gap_targets,
+    required_unmapped_null_flavor,
+)
 from ..transforms import cda_target_name, mapping_rules
 
 
@@ -308,6 +312,7 @@ def _cda_coverage_tree(
     for path, targets in coverage.get("suggested", {}).items():
         for target in targets:
             suggested_sources[str(target)].append(str(path))
+    required_gap_targets = required_construction_gap_targets(cda, mapping)
 
     included = {
         str(name) for name, target in cda.get("targets", {}).items()
@@ -395,6 +400,8 @@ def _cda_coverage_tree(
                             "; default value="
                             + json.dumps(default["value"], ensure_ascii=False)
                         )
+                if row["name"] in required_gap_targets:
+                    status += "▲"
                 leaf = _leaf(row["target"].get("path") or row["target"].get("element_name"))
                 lines.append(
                     f"{status:<3}{area_stem}{entity_stem[len(area_stem):]}{branch} "
@@ -893,7 +900,7 @@ def _configuration_excerpt(
         if isinstance(transform, Mapping):
             compact_transform = {
                 key: transform[key] for key in (
-                    "type", "select", "null_flavor", "value_set",
+                    "type", "select", "null_flavor", "value_set", "reason",
                 )
                 if transform.get(key) is not None
             }
@@ -906,6 +913,12 @@ def _configuration_excerpt(
             if isinstance(allowed, list):
                 compact_transform["allowed"] = (
                     f"{len(allowed)} exact code/code-system pairs; see cda-mapping.json"
+                )
+            source_options = transform.get("source_options")
+            if isinstance(source_options, Mapping):
+                compact_transform["source_options"] = (
+                    f"{len(source_options)} exact source concept identities; "
+                    "see cda-mapping.json"
                 )
             result["transform"] = compact_transform
         return result
@@ -1620,6 +1633,34 @@ def _structural_and_completion_lines(
         lines.append("")
     else:
         lines += ["No target-specific defaults are configured.", ""]
+    site_requirements = mapping.get("site_requirements", {})
+    if isinstance(site_requirements, Mapping) and site_requirements:
+        lines += [
+            "## Required site configuration",
+            "",
+            "These portable declarations assign ownership but contain no site "
+            "value. `check-cda-mapping` validates the association; site/input "
+            "validation requires the configured value:",
+            "",
+            "| CDA target | Site configuration | Reason |",
+            "|---|---|---|",
+        ]
+        for name, rule in sorted(site_requirements.items()):
+            channel = (
+                str(rule.get("channel") or "?")
+                if isinstance(rule, Mapping) else "?"
+            )
+            reason = (
+                str(rule.get("reason") or "")
+                if isinstance(rule, Mapping) else "Invalid declaration."
+            )
+            lines.append(
+                f"| `{{{name}}}` | `site.cda.{channel}` | "
+                f"{reason or 'A site value is required.'} |"
+            )
+        lines.append("")
+    else:
+        lines += ["No CDA values are explicitly delegated to site configuration.", ""]
     gaps = required_construction_gaps(cda, mapping)
     if gaps:
         lines += [
@@ -1713,6 +1754,25 @@ def render_accepted_cda_mappings_markdown(
                     "pair is written as that code. Any other source value is written as "
                     "`nullFlavor=\"OTH\"`, and its wording is preserved in the compiled "
                     "coded datatype's `originalText` child.",
+                    "",
+                ]
+
+            reviewed_coded_maps = [
+                row for row in entity_rows
+                if isinstance(row.get("rule"), Mapping)
+                and isinstance(row["rule"].get("transform"), Mapping)
+                and row["rule"]["transform"].get("type")
+                == "reviewed_coded_map"
+            ]
+            if reviewed_coded_maps:
+                lines += [
+                    "Reviewed finite coded map: every executable source option is "
+                    "pinned to its exact owner concept identity and converted only "
+                    "to the explicitly reviewed value for this exact target "
+                    "ValueSet revision. This does not complete the unresolved "
+                    "upstream terminology. Reviewed OTH/UNC cases preserve the "
+                    "source wording in the compiled coded datatype's "
+                    "`originalText` child.",
                     "",
                 ]
 
@@ -1925,10 +1985,15 @@ def render_cda_mapping_trees_markdown(
         "- ! **Suggested** — a writable CDA leaf exists, but no executable mapping is selected.",
         "- × **No target** — no suitable writable CDA leaf was found.",
         "- ○ **No source** — a reportable writable CDA leaf has no dataset counterpart.",
+        "- ▲ **Required gap** — an active owner-required CDA value has no "
+        "portable configured source; this combines with its coverage symbol "
+        "(for example `○▲`).",
         "- ✓! **Mapped and suggested** — one datapoint is selected and another remains under review.",
         "",
         "The CDA tree excludes generic datatype-expansion plumbing and fixed, "
         "conditional-fixed, or system-supplied values. Those remain available in `cda.json`.",
+        "The required-gap marker evaluates the portable mapping proposal; site "
+        "values can satisfy the marked slots at deployment or test setup.",
         "",
         "## Complete dataset tree",
         "",

@@ -510,7 +510,10 @@ cda-expanded-readable.xml     cda-expanded-readable.md
 `propose-input` is intentionally heuristic and input-local. Source filenames, case source, 1:1/1:n cardinalities, join columns, and occurrence semantics remain explicit configuration rather than inferred relationships.
 
 `decor2hl7 init-cda-mapping` copies the CDA proposal and all three generated CDA
-mapping guides to the shareable transaction-specific `mapping/` bundle.
+mapping guides to the shareable transaction-specific `mapping/` bundle. If it
+preserves reviewer choices that differ from the proposal, it rerenders the
+guides for that actual mapping; the details appendix retains the compiler-only
+proposal evidence under a separate heading.
 `mapping-lock.json` records the release,
 transaction identity, and compiled model hashes; test results record the exact
 hash of the mapping that was exercised.
@@ -519,7 +522,9 @@ Use `decor2hl7 init-cda-mapping --reset` only when the current generated
 proposal should replace every reviewed field, structure, and default choice.
 The command also refreshes the guides and mapping lock. A reset proposal may
 still require explicit mandatory CDA values; `check-cda-mapping` lists those
-gaps instead of manufacturing defaults.
+gaps instead of manufacturing defaults. A reviewed `site_requirements`
+declaration turns an intentional deployment-owned gap into a configuration
+note; it never embeds the site value in the portable mapping.
 
 Generated workspaces may be excluded from Git without discarding non-generated
 review decisions. DEC-038 stores the pinned reference transaction's
@@ -527,7 +532,7 @@ proposal-null field selections, reviewed target defaults, and target-alias
 migrations in the compact source-controlled recovery overlay
 [`docs/recovery/2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json`](docs/recovery/2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json).
 Recovery starts from a fresh proposal, verifies the recorded model/CDA hashes,
-shallow-merges the two override objects, and must finish with
+shallow-merges the three override objects, and must finish with
 `decor2hl7 check-cda-mapping`. The overlay preserves human decisions; it is not
 additional evidence for automatic proposal generation.
 
@@ -618,18 +623,21 @@ decor2hl7 validate-cda out/*.xml --report /tmp/cda-conformance
 ```
 
 The command writes JSON, Markdown and SVRL evidence and exits non-zero for an
-XSD or Schematron error. It also fails closed when the exact validator was
-generated with unresolved terminology, its Saxon compilation probe fails, its
-checksum no longer matches its manifest, or packages are missing. Generation
-and compilation logs remain beside the validator. This gate is deliberately
-independent of `cda-mapping.md`: passing mapping review does not prove document
-conformance, and a structurally legal target does not prove a clinical mapping.
+XSD or Schematron error. It also fails closed when exact validator generation
+is incomplete, its Saxon compilation probe fails, its checksum no longer
+matches its manifest, or packages are missing. Generation and compilation logs
+remain beside the validator. This gate is deliberately independent of
+`cda-mapping.md`: passing mapping review does not prove document conformance,
+and a structurally legal target does not prove a clinical mapping.
 
-Validator generation keeps all dependency-only templates but activates only
-the exact effective-dated revisions selected at physical compiled document
-locations. The base-XSD projection preserves the CDA default namespace so
-unprefixed `xsi:type` values retain their QName meaning after reviewed foreign
-extensions are removed.
+Validator generation receives only the exact effective-dated revisions
+selected at physical compiled document locations. Assembly fails first if any
+selected definition or formal `include`/`contains` target is absent or
+revision-inconsistent. Non-selected fetched templates remain available to
+source validation and mapping evidence; they simply cannot contribute rules or
+errors to the exact transaction validator. The base-XSD projection preserves
+the CDA default namespace so unprefixed `xsi:type` values retain their QName
+meaning after reviewed foreign extensions are removed.
 
 `cda-mapping.md` is the working report for completing unresolved decisions. It
 contains a pruned dataset tree, a pruned CDA candidate tree and one decision card
@@ -646,7 +654,9 @@ adds the build summary, evidence chains, scores, template/element identifiers,
 and structural group context. `cda-mapping-trees.md` owns the two exhaustive
 status-gutter trees. Generic datatype plumbing and fixed/system values are
 excluded from the inverse coverage surface; stable identifiers remain on one
-physical line. The reusable, target-neutral format is specified in
+physical line. In the inverse tree, `▲` marks active owner-required values that
+still need a portable or site-configured source. The reusable, target-neutral
+format is specified in
 [`docs/mapping-documentation-format.md`](docs/mapping-documentation-format.md).
 When selected mappings use reviewed attachment or source-resolution
 configuration, the editable JSON also contains short generated
@@ -712,13 +722,17 @@ select a clinical dose, rate, or timing mapping.
 }
 ```
 
-Unmapped raw codes become `nullFlavor="OTH"` by default.
+An unmapped value in a finite or unresolved coded domain is rejected. An
+unmapped value in an explicitly open source domain remains target-neutral as
+`raw` wording; it becomes `nullFlavor="OTH"` only through a reviewed CDA
+mapping whose exact target binding admits `OTH` and whose datatype exposes
+`originalText`.
 
 ### Model → CDA
 
 ```json
 {
-  "version": 7,
+  "version": 8,
   "fields": {
     "patient.identifikatoren.patienten_id": "PatientIdentifier.id",
     "administrative_aufnahmeinformationen.aufnahmezeitpunkt": [
@@ -756,6 +770,16 @@ Unmapped raw codes become `nullFlavor="OTH"` by default.
     "ProblemConcern.statusCode": {
       "value": "active",
       "reason": "This profile treats the emitted concern as actively tracked."
+    }
+  },
+  "site_requirements": {
+    "Header.confidentialityCode": {
+      "channel": "values",
+      "reason": "Document confidentiality is selected by deployment policy."
+    },
+    "Medication.statusCode": {
+      "channel": "fallback_if_active",
+      "reason": "The site supplies lifecycle status for each active medication."
     }
   }
 }
@@ -823,6 +847,15 @@ target binds an exact ValueSet with an `OTH` exception plus a compiled
 `originalText` companion. Exact admitted code/code-system pairs are preserved;
 other values render as `nullFlavor="OTH"` with their wording in `originalText`.
 
+For a finite source domain, `reviewed_coded_map` can record a deliberately
+reviewed bridge while one exact required target binding remains unresolved. It
+must list every source label with its owner concept ID, map every one of those
+IDs to an exact code/system or payload-preserving `OTH`/`UNC` result, identify
+the exact target ValueSet revision, and explain every case. It does not repair
+the terminology closure. The authorization is limited to that transform and
+target; ordinary mappings, site values, and defaults still fail closed. Once
+the exact ValueSet resolves, its formal membership takes precedence.
+
 `cda-mapping.json` version 8 may also contain declarative scalar, structural,
 and completion rules. The generated proposal currently derives only semantics
 supported by the specification itself:
@@ -844,7 +877,7 @@ disorder codes are never written as allergen codes. A `for_each` names the exact
 CDA repeat node driven by its source group, so additional repeat-capable target
 ancestors are not populated positionally. The transform vocabulary is
 intentionally small (`identity`, `enum`, `ordinal`, `not`, `code_system`,
-`coded_fallback`) and remains data
+`coded_fallback`, `reviewed_coded_map`) and remains data
 rather than clinical Python code.
 
 Generated ordinal evidence is conservative. A bare leading integer counts only
@@ -874,7 +907,8 @@ Existing reviewed version-5 `fan_out` rules remain executable. During
 `repeat_by_discriminator` rule proves the same source set and physical CDA
 target; otherwise the accepted mapping is left untouched for review.
 
-Completion belongs to the shareable CDA mapping rather than site configuration.
+Portable completion policy belongs to the shareable CDA mapping rather than
+being silently inferred from site configuration.
 `defaults.required_unmapped` supplies `nullFlavor="NI"` to an otherwise empty
 required leaf in an active CDA occurrence; optional unmapped elements are omitted.
 `target_defaults` records reviewed, more specific decisions. A rule contains
@@ -889,6 +923,14 @@ required complex element is eligible only when its compiled
 template exposes a writable optional `@nullFlavor`; other complex elements are
 rejected. Scalar defaults cannot supply identifiers or compound values
 whose non-null companion semantics require a structural mapping.
+
+When the value itself is deployment policy, `site_requirements` records the
+exact required target, either `values` or `fallback_if_active`, and a review
+reason without recording the value. `check-cda-mapping` validates this
+association and prints the required `site.cda` path as a note. Validation of a
+real site requires a non-empty value in that exact channel and applies the
+compiled required binding. An invalid declaration remains a construction
+error; it cannot hide a missing mandatory target.
 
 ART-DECOR `<example>` fragments never supply automatic values or display
 metadata. They are instance illustrations, not fixed template constraints. For

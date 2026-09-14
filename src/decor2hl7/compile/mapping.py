@@ -15,12 +15,13 @@ from ..retrieval.xml import child_text, local, parse_file
 from ..workspace import write_json
 from ..semantics import (
     accepted_values, base_datatype, direct_compatibility,
-    payload_match, required_value_set_ids, target_type_match,
+    logical_values, payload_match, required_value_set_ids, target_type_match,
     transformed_compatibility, type_match,
 )
 from ..transforms import cda_target_name, mapping_rules
 from ..cda.datatypes import classify_datatype
 from ..cda.model import ValueRepresentationKind
+from ..cda.terminology import NULL_FLAVORS_WITH_ORIGINAL_TEXT
 from ..bindings import non_null_requirement_satisfied
 from ..cooccurrence import (
     constrained_datatype_components, cooccurrence_problem_message,
@@ -927,6 +928,11 @@ def _vocabulary_candidates(
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     model_type = str(field.get("type") or "")
+    formal = field.get("formal_terminology", {})
+    source_binding_complete = not (
+        isinstance(formal, Mapping)
+        and str(formal.get("status") or "") == "unresolved"
+    )
     value_sets = {str(value) for value in field.get("value_sets", [])}
     terms = {
         (str(code.get("code")), str(code.get("code_system")))
@@ -939,6 +945,12 @@ def _vocabulary_candidates(
         for name, target in by_vs.get(oid, []):
             vs_hits.append((name, target, oid))
             actionable, warnings = _direct(field, target)
+            if not source_binding_complete:
+                actionable = False
+                warnings = [
+                    *warnings,
+                    "source ValueSet membership is unresolved; shared binding identity is review evidence only",
+                ]
             result.append(_candidate(
                 name, target, [f"VS({oid})"], "WEAK", 55, kind="VS",
                 actionable=actionable, warnings=warnings,
@@ -960,6 +972,12 @@ def _vocabulary_candidates(
         if locators:
             labels = ",".join(sorted({term[0] for _, _, term in locators}))
             actionable, warnings = _direct(field, target)
+            if not source_binding_complete:
+                actionable = False
+                warnings = [
+                    *warnings,
+                    "source ValueSet membership is unresolved; shared binding identity is review evidence only",
+                ]
             result.append(_candidate(
                 name,
                 target,
@@ -1043,6 +1061,11 @@ def _schematron_constraint_candidates(
     explicit ValueSet, and direct compatibility must still hold.
     """
     result: list[dict[str, Any]] = []
+    formal = field.get("formal_terminology", {})
+    source_terminology_unresolved = bool(
+        isinstance(formal, Mapping)
+        and str(formal.get("status") or "") == "unresolved"
+    )
     for candidate in candidates:
         confidence = str(candidate.get("confidence") or "")
         if confidence not in {"WEAK", "MEDIUM"}:
@@ -1074,7 +1097,8 @@ def _schematron_constraint_candidates(
             "score": int(candidate.get("score") or 0) + 5,
             "kind": "SCHEMATRON_CONSTRAINT",
             "actionable": bool(
-                not candidate.get("occurrence_mismatch")
+                not source_terminology_unresolved
+                and not candidate.get("occurrence_mismatch")
                 and not candidate.get("semantic_blocked")
                 and (candidate.get("actionable") or compatible)
             ),
@@ -2521,10 +2545,14 @@ def _open_coded_domain_candidates(
         members, binding = _members_for_target(target, value_sets)
         if not members or binding is None:
             continue
+        legal_null_flavors = {
+            str(value) for value in target.get("null_flavor_exceptions", [])
+            if str(value) in NULL_FLAVORS_WITH_ORIGINAL_TEXT
+        }
         other = [
             member for member in members
             if str(member.get("kind") or "") == "exception"
-            and str(member.get("code") or "") == "OTH"
+            and str(member.get("code") or "") in legal_null_flavors
         ]
         allowed = [
             {
@@ -2537,6 +2565,7 @@ def _open_coded_domain_candidates(
         ]
         if len(other) != 1:
             continue
+        null_flavor = str(other[0].get("code") or "")
         parent_location = str(target["locations"][0])
         original_text = [
             (str(child_name), child)
@@ -2553,7 +2582,7 @@ def _open_coded_domain_candidates(
         transform = {
             "type": "coded_fallback",
             "allowed": allowed,
-            "null_flavor": "OTH",
+            "null_flavor": null_flavor,
             "value_set": dict(binding),
         }
         compatible, _ = _direct(
@@ -2574,14 +2603,16 @@ def _open_coded_domain_candidates(
         name, target,
         _context_chain(context) + [
             f"OPEN_CODED_DOMAIN({domain_id})",
-            f"VS({binding['id']}@{effective}:OTH)",
+            f"VS({binding['id']}@{effective}:{null_flavor})",
             f"CODED_ORIGINAL_TEXT({original_text_name})",
             "UNIQUE_DESCENDANT",
         ],
         "STRONG", 97, kind="OPEN_CODED_DOMAIN", actionable=True,
         mapping={"target": name, "transform": transform},
         warnings=[
-            "unrecognized source codes use the target ValueSet's OTH exception and preserve their wording in originalText"
+            "unrecognized source codes use the target ValueSet's explicit "
+            f"{null_flavor} null-flavor exception and preserve their wording "
+            "in originalText"
         ],
     )]
 
@@ -2745,6 +2776,7 @@ def _certainty_mapping(
     return {"mapping": rules, "primary": primary}, {
         "aliases": aliases,
         "target_defaults": target_defaults,
+        "site_requirements": {},
     }
 
 
@@ -2752,17 +2784,23 @@ def _bound_enum_mapping(
     field: Mapping[str, Any],
     cda: Mapping[str, Any],
     value_sets: Mapping[Any, list[dict[str, Any]]],
+    preferred_target: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Map a complete source enumeration to one bound CDA ValueSet.
 
-    Every source label (or a declared synonym) must identify exactly one
-    member, and exactly one writable CDA target must satisfy the complete
-    enumeration.  Partial lexical similarities are deliberately insufficient.
+    Prefer the owner's exact concept-member terminology associations, narrowed
+    by the target's required ValueSet. Otherwise every formal source label (or
+    a declared synonym) must identify exactly one target member. Exactly one
+    writable CDA target must satisfy the complete enumeration. Partial lexical
+    similarities are deliberately insufficient.
     """
     source = accepted_values(field)
-    if len(source) < 2:
+    logical_source = logical_values(field)
+    if max(len(source), len(logical_source)) < 2:
         return None
-    matches: list[tuple[str, Mapping[str, Any], str, str, dict[str, Any]]] = []
+    matches: list[
+        tuple[str, Mapping[str, Any], str, str, dict[str, Any], str]
+    ] = []
     for name, target in cda.get("targets", {}).items():
         if (
             not target.get("writable")
@@ -2773,6 +2811,81 @@ def _bound_enum_mapping(
         oid = next(iter(required_value_set_ids(target)))
         members = value_sets.get(oid, [])
         if not members:
+            continue
+
+        # The source option may have several exact formal codifications. The
+        # target binding is allowed to disambiguate only when exactly one of
+        # those code/system pairs is an actual member of its required set.
+        exact_table: dict[str, Any] = {}
+        exact_members: list[dict[str, Any]] = []
+        if len(logical_source) >= 2:
+            target_by_pair: dict[
+                tuple[str, str], list[dict[str, Any]]
+            ] = defaultdict(list)
+            for member in members:
+                pair = (
+                    str(member.get("code") or ""),
+                    str(member.get("codeSystem") or ""),
+                )
+                if pair[0] and pair[1]:
+                    target_by_pair[pair].append(dict(member))
+            for label, detail in logical_source.items():
+                info = detail if isinstance(detail, Mapping) else {}
+                associations = info.get("terminology_associations", [])
+                associations = (
+                    associations if isinstance(associations, list) else []
+                )
+                selected = {
+                    (
+                        str(member.get("code") or ""),
+                        str(member.get("codeSystem") or ""),
+                    ): member
+                    for association in associations
+                    if isinstance(association, Mapping)
+                    for member in target_by_pair.get((
+                        str(association.get("code") or ""),
+                        str(association.get("code_system") or ""),
+                    ), [])
+                }
+                if len(selected) != 1:
+                    exact_table = {}
+                    exact_members = []
+                    break
+                member = next(iter(selected.values()))
+                exact_members.append(member)
+                for alias in [str(label)] + [
+                    str(value) for value in info.get("synonyms", [])
+                ]:
+                    exact_table[alias] = member
+            if exact_table and len({
+                (
+                    str(item.get("code") or ""),
+                    str(item.get("codeSystem") or ""),
+                )
+                for item in exact_members
+            }) == len(logical_source):
+                transform = {
+                    "type": "enum", "select": "raw", "map": exact_table,
+                }
+                compatible, _ = transformed_compatibility(
+                    field, target, transform,
+                )
+                if compatible:
+                    versions = {
+                        str(item.get("valueSetEffectiveDate") or "")
+                        for item in exact_members
+                    }
+                    matches.append((
+                        str(name), target, oid,
+                        versions.pop() if len(versions) == 1 else "",
+                        transform, "EXACT_CONCEPT_ASSOCIATION",
+                    ))
+                    continue
+
+        if len(source) < 2:
+            # The generic lexical rule is defined over the executable formal
+            # source enumeration. Logical-only options cannot prove an exact
+            # ValueSet mapping, and an empty table is never a transform.
             continue
         table: dict[str, Any] = {}
         selected_members: list[dict[str, Any]] = []
@@ -2818,21 +2931,24 @@ def _bound_enum_mapping(
                 matches.append((
                     str(name), target, oid,
                     versions.pop() if len(versions) == 1 else "",
-                    transform,
+                    transform, "EXACT_ENUM",
                 ))
+    preferred = [row for row in matches if row[0] == preferred_target]
+    if len(preferred) == 1:
+        matches = preferred
     if len(matches) != 1:
         return None
-    name, target, oid, effective, transform = matches[0]
+    name, target, oid, effective, transform, evidence = matches[0]
     selection = _candidate(
         name, target,
-        [f"VS({oid}@{effective or 'latest'})", "EXACT_ENUM"],
+        [f"VS({oid}@{effective or 'latest'})", evidence],
         "STRONG", 96, kind="VALUE_SET_ENUM", actionable=True,
         mapping={"target": name, "transform": transform},
     )
     return {"mapping": selection["mapping"], "primary": selection}, {
         "kind": "bound_value_set_enum",
         "value_set": {"id": oid, "effective_date": effective},
-        "evidence_level": "EXACT",
+        "evidence_level": evidence,
     }
 
 
@@ -2922,14 +3038,18 @@ def _cda_mapping_analysis(
 
     target_defaults: dict[str, dict[str, str]] = {}
     for path, field in model_fields.items():
+        old_primary = details[path].get("primary")
         semantic = (
             _certainty_mapping(path, field, cda, value_set_members)
-            or _bound_enum_mapping(field, cda, value_set_members)
+            or _bound_enum_mapping(
+                field, cda, value_set_members,
+                str(old_primary.get("target") or "")
+                if isinstance(old_primary, Mapping) else None,
+            )
         )
         if semantic is None:
             continue
         selection, metadata = semantic
-        old_primary = details[path].get("primary")
         if old_primary is not None:
             details[path]["alternatives"] = [old_primary] + list(details[path].get("alternatives", []))
         details[path]["primary"] = selection["primary"]
@@ -4022,32 +4142,64 @@ def _code_mapping_defaults_for_field(field: Mapping[str, Any]) -> dict[str, str]
     permitted values.
     """
     values = accepted_values(field)
-    defaults: dict[str, str] = {}
+    candidates: dict[str, set[str]] = defaultdict(set)
+    canonical_names = {str(value) for value in values}
+
+    def add(alias: Any, canonical: Any) -> None:
+        alias_text = str(alias or "").strip()
+        canonical_text = str(canonical or "").strip()
+        if alias_text and canonical_text in canonical_names:
+            candidates[alias_text].add(canonical_text)
 
     for canonical, raw_info in values.items():
         canonical_text = str(canonical)
         info = raw_info if isinstance(raw_info, Mapping) else {}
-        defaults.setdefault(canonical_text, canonical_text)
+        add(canonical_text, canonical_text)
 
         code = str(info.get("code") or "").strip()
         if code:
-            defaults.setdefault(code, canonical_text)
+            add(code, canonical_text)
 
         display = str(info.get("display_name") or "").strip()
         if display and display != canonical_text:
-            defaults.setdefault(display, canonical_text)
+            add(display, canonical_text)
         for synonym in info.get("synonyms", []):
-            synonym_text = str(synonym).strip()
-            if synonym_text:
-                defaults.setdefault(synonym_text, canonical_text)
+            add(synonym, canonical_text)
+
+    # Dataset concept-list labels are not matched to formal display names.
+    # They become generated input aliases only through the exact
+    # concept-list-member terminology association compiled into model.json.
+    logical_domain = field.get("logical_domain", {})
+    logical_options = (
+        logical_domain.get("options", {})
+        if isinstance(logical_domain, Mapping) else {}
+    )
+    if isinstance(logical_options, Mapping):
+        for label, raw_option in logical_options.items():
+            option = raw_option if isinstance(raw_option, Mapping) else {}
+            association = option.get("terminology_association", {})
+            if not isinstance(association, Mapping):
+                continue
+            canonical = association.get("canonical")
+            add(label, canonical)
+            for synonym in option.get("synonyms", []):
+                add(synonym, canonical)
 
     # Keep compatibility with hand-built/minimal models where concept-list
     # options have not yet been folded into ``values``.
     for option in field.get("options", []):
         option_text = str(option).strip()
         if option_text:
-            defaults.setdefault(option_text, option_text)
+            candidates.setdefault(option_text, set()).add(option_text)
 
+    defaults: dict[str, str] = {}
+    for alias, destinations in candidates.items():
+        # A canonical executable value always means itself. Other aliases are
+        # emitted only when the compiled evidence has one destination.
+        if alias in canonical_names:
+            defaults[alias] = alias
+        elif len(destinations) == 1:
+            defaults[alias] = next(iter(destinations))
     return defaults
 
 
@@ -4079,7 +4231,8 @@ def codes_mapping_proposal(model: Mapping[str, Any], csv_mapping: Mapping[str, A
         "",
         "Edit `codes-mapping.json`. Canonical dataset values are accepted unchanged;",
         "the tables therefore show only aliases that require translation and unresolved",
-        "input values observed in the CSV files.",
+        "input values observed in the CSV files. An unresolved value in a finite domain",
+        "is an input error; source normalization does not choose an HL7 missing-data code.",
         "",
     ]
 
@@ -4132,7 +4285,7 @@ def codes_mapping_proposal(model: Mapping[str, Any], csv_mapping: Mapping[str, A
                 destination = (
                     f"`{destination_value}`"
                     if destination_value
-                    else "**UNMAPPED → nullFlavor OTH**"
+                    else "**UNRESOLVED — outside executable dataset domain**"
                 )
                 lines.append(f"| `{raw}` | {destination} |")
         else:
@@ -4340,6 +4493,8 @@ def mapping_target_identities(
                 remember(name)
     for name in mapping.get("target_defaults", {}):
         remember(name)
+    for name in mapping.get("site_requirements", {}):
+        remember(name)
     return dict(sorted(result.items()))
 
 
@@ -4383,9 +4538,9 @@ def migrate_mapping_target_identities(
 
     changed = 0
 
-    def migrate_reference(name: Any) -> tuple[str, str]:
+    def migrate_reference(name: Any) -> tuple[str, str | None]:
         configured = str(name or "")
-        return migrations.get(configured, (configured, configured))
+        return migrations.get(configured, (configured, None))
 
     def migrate_selection(selection: Any) -> Any:
         nonlocal changed
@@ -4402,11 +4557,15 @@ def migrate_mapping_target_identities(
         if rule.get("target"):
             target, physical = migrate_reference(rule["target"])
             current_physical = str(rule.get("cda_target") or rule["target"])
-            if target != str(rule["target"]) or physical != current_physical:
+            migrated_physical = physical or current_physical
+            if (
+                target != str(rule["target"])
+                or migrated_physical != current_physical
+            ):
                 changed += 1
             rule["target"] = target
-            if "cda_target" in rule or physical != target:
-                rule["cda_target"] = physical
+            if "cda_target" in rule or migrated_physical != target:
+                rule["cda_target"] = migrated_physical
         return rule
 
     fields = current.get("fields", {})
@@ -4430,11 +4589,12 @@ def migrate_mapping_target_identities(
                 target, physical = migrate_reference(owner["target"])
                 old_target = str(owner["target"])
                 old_physical = str(owner.get("cda_target") or old_target)
-                if target != old_target or physical != old_physical:
+                migrated_physical = physical or old_physical
+                if target != old_target or migrated_physical != old_physical:
                     changed += 1
                 owner["target"] = target
-                if "cda_target" in owner or physical != target:
-                    owner["cda_target"] = physical
+                if "cda_target" in owner or migrated_physical != target:
+                    owner["cda_target"] = migrated_physical
             constants = owner.get("constants", {})
             if isinstance(constants, dict):
                 for old_name in list(constants):
@@ -4449,6 +4609,13 @@ def migrate_mapping_target_identities(
             new_name, _physical = migrate_reference(old_name)
             if new_name != old_name:
                 defaults[new_name] = defaults.pop(old_name)
+                changed += 1
+    requirements = current.get("site_requirements", {})
+    if isinstance(requirements, dict):
+        for old_name in list(requirements):
+            new_name, _physical = migrate_reference(old_name)
+            if new_name != old_name:
+                requirements[new_name] = requirements.pop(old_name)
                 changed += 1
     refreshed = mapping_target_identities(cda, current)
     for name, identity in old.items():

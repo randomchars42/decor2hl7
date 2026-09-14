@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .semantics import accepted_values
+from .semantics import accepted_values, logical_values
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import xml.etree.ElementTree as ET
 
@@ -18,10 +18,12 @@ from .bindings import (
     non_null_requirement_satisfied,
     presence_target_complete,
     structure_rules,
+    site_requirement_targets,
+    validate_site_requirements,
     validate_structures,
     validate_target_defaults,
 )
-from .data import mapping_locator
+from .data import field_required_in_scope, mapping_locator
 from .cooccurrence import (
     cooccurrence_problem_message, datatype_cooccurrence_problems,
     unavoidable_targets_problems,
@@ -30,6 +32,10 @@ from .retrieval.xml import local, parse_file
 from .semantics import direct_compatibility, transformed_compatibility, identifier_root_for_target, valid_oid
 from .transforms import mapping_rules, validate_transform
 from .cda.model import ValueRepresentationKind
+from .cda.terminology import (
+    coded_fallback_rule_errors,
+    reviewed_coded_map_rule_errors,
+)
 
 
 def check_site(site: Mapping[str, Any], cda: Mapping[str, Any] | None = None) -> list[str]:
@@ -100,6 +106,7 @@ def check_config(
     model: Mapping[str, Any], cda: Mapping[str, Any], csv_mapping: Mapping[str, Any],
     cda_mapping: Mapping[str, Any], codes_mapping: Mapping[str, Any] | None = None,
     site: Mapping[str, Any] | None = None,
+    *, require_site_configuration: bool = True,
 ) -> list[str]:
     errors: list[str] = []
     model_identity = model.get("meta", {})
@@ -226,6 +233,30 @@ def check_config(
                 errors.append(
                     f"cda-mapping: {path} -> {target_name}: {transform_reason}"
                 )
+            if (
+                isinstance(transform, Mapping)
+                and transform.get("type") == "coded_fallback"
+            ):
+                for transform_reason in coded_fallback_rule_errors(
+                    transform, target, targets,
+                    cda.get("terminology_constraints", {}),
+                ):
+                    errors.append(
+                        f"cda-mapping: {path} -> {target_name}: "
+                        + transform_reason
+                    )
+            if (
+                isinstance(transform, Mapping)
+                and transform.get("type") == "reviewed_coded_map"
+            ):
+                for transform_reason in reviewed_coded_map_rule_errors(
+                    transform, field, target, targets,
+                    cda.get("terminology_constraints", {}),
+                ):
+                    errors.append(
+                        f"cda-mapping: {path} -> {target_name}: "
+                        + transform_reason
+                    )
             if mode == "presence":
                 if str(field.get("type") or "") != "boolean":
                     errors.append(
@@ -300,8 +331,9 @@ def check_config(
             else {}
         )
     }
-    supplied_targets = configured_targets | site_targets
-    for target_name in sorted(configured_targets):
+    declared_site_targets = site_requirement_targets(cda, cda_mapping)
+    supplied_targets = configured_targets | site_targets | declared_site_targets
+    for target_name in sorted(configured_targets | declared_site_targets):
         for required_target in map(
             str, targets.get(target_name, {}).get("non_null_requires", [])
         ):
@@ -334,7 +366,17 @@ def check_config(
             errors.append(f"codes-mapping: unknown model field {path}")
         for path, translations in codes_mapping.get("fields", {}).items():
             field = model.get("fields", {}).get(path, {})
-            canonical = set(accepted_values(field))
+            canonical = set(accepted_values(field)) | set(logical_values(field))
+            formal = field.get("formal_terminology", {})
+            formal_status = (
+                str(formal.get("status") or "")
+                if isinstance(formal, Mapping) else ""
+            )
+            coded_domain = field.get("coded_domain", {})
+            coded_status = (
+                str(coded_domain.get("status") or "")
+                if isinstance(coded_domain, Mapping) else ""
+            )
             if not isinstance(translations, Mapping):
                 errors.append(f"codes-mapping: {path} must contain a JSON object")
                 continue
@@ -342,6 +384,8 @@ def check_config(
                 explicit_unbound_code = (
                     not canonical
                     and field.get("type") == "code"
+                    and formal_status in {"", "unbound", "unconstrained"}
+                    and coded_status not in {"referenced", "unresolved"}
                     and isinstance(value, Mapping)
                     and isinstance(value.get("code"), str)
                     and bool(value.get("code"))
@@ -378,6 +422,10 @@ def check_config(
                     f"site: cda.values[{problem.get('target')!r}] is not admissible: "
                     + cooccurrence_problem_message(problem)
                 )
+    errors.extend(validate_site_requirements(
+        cda, cda_mapping, site,
+        require_configured=require_site_configuration,
+    ))
     errors.extend(validate_target_defaults(cda, cda_mapping))
     errors.extend(validate_structures(model, cda, cda_mapping))
     errors.extend(
@@ -636,19 +684,26 @@ def _problem(severity: str, path: str, message: str) -> dict[str, str]:
 def validate_record(record: Mapping[str, Any], model: Mapping[str, Any]) -> list[dict[str, str]]:
     problems = list(record.get("problems", []))
 
-    def occurrence_values(path: str, field: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    def occurrence_values(
+        path: str, field: Mapping[str, Any],
+    ) -> list[tuple[str, Any, Mapping[str, Any]]]:
         chain = list(field.get("repeat_chain") or ([] if not field.get("repeat") else [field.get("repeat")]))
         if not chain:
-            return [(path, record.get("values", {}).get(path))]
-        out: list[tuple[str, Any]] = []
+            scope = record.get("values", {})
+            return [(path, scope.get(path), scope)]
+        out: list[tuple[str, Any, Mapping[str, Any]]] = []
         def walk(instances: Mapping[str, Any], depth: int, coords: tuple[int, ...]) -> None:
             rows = instances.get(str(chain[depth]), []) if isinstance(instances, Mapping) else []
             for index, row in enumerate(rows if isinstance(rows, list) else []):
                 current = coords + (index,)
                 if not isinstance(row, Mapping):
-                    out.append((path + "".join(f"[{i}]" for i in current), None)); continue
+                    out.append((path + "".join(f"[{i}]" for i in current), None, {})); continue
                 if depth == len(chain) - 1:
-                    out.append((path + "".join(f"[{i}]" for i in current), row.get("values", {}).get(path)))
+                    scope = row.get("values", {})
+                    out.append((
+                        path + "".join(f"[{i}]" for i in current),
+                        scope.get(path), scope,
+                    ))
                 else:
                     walk(row.get("instances", {}), depth + 1, current)
         walk(record.get("instances", {}), 0, ())
@@ -660,9 +715,9 @@ def validate_record(record: Mapping[str, Any], model: Mapping[str, Any]) -> list
             problems.append(_problem("error", path, "required field is absent after normalization"))
             continue
         check_values: list[tuple[str, Any]] = []
-        for item_path, item in occurrences:
+        for item_path, item, scope in occurrences:
             if item is None:
-                if field.get("required"):
+                if field_required_in_scope(path, field, scope, model):
                     problems.append(_problem("error", item_path, "required field is absent after normalization"))
                 continue
             check_values.append((item_path, item))

@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from .semantics import accepted_values
+from .semantics import accepted_values, logical_values
 from .transforms import OMIT, apply_transform, validate_transform
 
 _MISSING = object()
@@ -213,12 +213,33 @@ def _canonical_code(
     translations: Mapping[str, Any],
     site: Mapping[str, Any],
 ) -> Any:
+    """Normalize one dataset code without choosing a target missing-data rule.
+
+    Complete finite domains reject values that are not admitted. Open source
+    domains retain their wording so a reviewed target transform can decide how
+    to represent it. In particular, input normalization never manufactures a
+    CDA ``nullFlavor`` for an unrecognized code.
+    """
     values = accepted_values(field)
+    logical = logical_values(field)
+    formal = field.get("formal_terminology", {})
+    status = (
+        str(formal.get("status") or "")
+        if isinstance(formal, Mapping) else ""
+    )
+    coded_domain = field.get("coded_domain", {})
+    if not status and isinstance(coded_domain, Mapping):
+        status = str(coded_domain.get("status") or "")
+    closed_or_unresolved = bool(values) or status in {
+        "bound", "logical", "enumerated", "unresolved", "referenced",
+    }
     canonical = translations.get(raw)
     if canonical is None:
         # Raw data that already uses a canonical dataset label or code does not
         # require an explicit translation entry.
         if raw in values:
+            canonical = raw
+        elif raw in logical:
             canonical = raw
         else:
             for key, info in values.items():
@@ -226,11 +247,32 @@ def _canonical_code(
                     canonical = key
                     break
     if canonical is None:
-        flavor = str(site.get("null_flavor", {}).get("unmapped_code") or "OTH")
-        return _null(flavor, raw)
+        if closed_or_unresolved:
+            identity = str(field.get("name") or field.get("concept") or "coded field")
+            raise ValueError(
+                f"code {raw!r} is not admitted by the executable domain of {identity}"
+            )
+        return {"raw": raw}
+    if isinstance(canonical, Mapping):
+        # Explicit code/system objects are admitted only for an unbound/open
+        # source field; configuration validation applies the same boundary.
+        if closed_or_unresolved:
+            raise ValueError(
+                f"coded translation for {raw!r} cannot extend a finite dataset domain"
+            )
+        return {"raw": raw, **dict(canonical)}
     info = values.get(str(canonical))
     if not info:
-        return canonical
+        if str(canonical) in logical:
+            # An exact owner-defined concept-list member is executable source
+            # evidence even when it has several formal codifications. Keep it
+            # target-neutral for a target-scoped transform to disambiguate.
+            return {"raw": raw, "canonical": canonical}
+        if not closed_or_unresolved:
+            return {"raw": raw, "canonical": canonical}
+        raise ValueError(
+            f"code translation for {raw!r} selects unknown canonical value {canonical!r}"
+        )
     if info.get("code"):
         return {
             "raw": raw,
@@ -239,11 +281,9 @@ def _canonical_code(
             "codeSystem": info.get("code_system"),
             "displayName": info.get("display_name") or canonical,
         }
-    # A textual concept-list option is not a CDA code.  Keep it visible as an
-    # unmapped terminology value until codes-mapping.json translates it to a
-    # canonical entry that actually carries code + codeSystem.
-    flavor = str(site.get("null_flavor", {}).get("unmapped_code") or "OTH")
-    return _null(flavor, raw)
+    # A logical concept-list option is target-neutral until an explicit enum,
+    # ordinal, code-system, or target-governed fallback transform consumes it.
+    return {"raw": raw, "canonical": canonical}
 
 
 def _canonical_ordinal(
@@ -336,6 +376,10 @@ def _normalize_transformed(
     if kind == "quantity":
         return _parse_quantity(value, field, site)
     if isinstance(value, Mapping):
+        if value.get("nullFlavor") or value.get("null_flavor"):
+            raise ValueError(
+                "input transforms cannot create a target-specific nullFlavor"
+            )
         return dict(value)
     if kind == "boolean" and isinstance(value, bool):
         return value
@@ -452,6 +496,93 @@ def field_value(record: Mapping[str, Any], path: str, field: Mapping[str, Any]) 
         return result
 
     return collect(record.get("instances", {}), 0)
+
+
+def field_required_in_scope(
+    path: str,
+    field: Mapping[str, Any],
+    scope_values: Mapping[str, Any],
+    model: Mapping[str, Any],
+) -> bool:
+    """Apply field requiredness only inside active optional parent groups."""
+    if not field.get("required"):
+        return False
+    groups = model.get("groups", {})
+    parent = str(field.get("parent") or "")
+    seen: set[str] = set()
+    while parent and parent not in seen:
+        seen.add(parent)
+        group = groups.get(parent, {}) if isinstance(groups, Mapping) else {}
+        if not isinstance(group, Mapping) or not group:
+            break
+        if int(group.get("min") or 0) == 0:
+            prefix = parent + "."
+            if not any(
+                str(candidate).startswith(prefix) and value is not None
+                for candidate, value in scope_values.items()
+            ):
+                return False
+        parent = str(group.get("parent") or "")
+    return True
+
+
+def _complete_missing_required_values(
+    values: dict[str, Any],
+    instances: dict[str, list[dict[str, Any]]],
+    model: Mapping[str, Any],
+    null_flavor: str,
+) -> None:
+    """Fill missing required fields after optional-group activation is known."""
+    fields = model.get("fields", {})
+    if not isinstance(fields, Mapping):
+        return
+
+    def complete_scope(
+        scope: dict[str, Any], selected: list[tuple[str, Mapping[str, Any]]],
+    ) -> None:
+        original = dict(scope)
+        for path, field in selected:
+            if (
+                scope.get(path) is None
+                and field_required_in_scope(path, field, original, model)
+            ):
+                scope[path] = _null(null_flavor)
+
+    complete_scope(
+        values,
+        [
+            (str(path), field) for path, field in fields.items()
+            if isinstance(field, Mapping) and not field.get("repeat_chain")
+            and not field.get("repeat")
+        ],
+    )
+
+    by_chain: dict[tuple[str, ...], list[tuple[str, Mapping[str, Any]]]] = {}
+    for path, field in fields.items():
+        if not isinstance(field, Mapping):
+            continue
+        chain = tuple(str(value) for value in (
+            field.get("repeat_chain")
+            or ([] if not field.get("repeat") else [field.get("repeat")])
+        ))
+        if chain:
+            by_chain.setdefault(chain, []).append((str(path), field))
+
+    for chain, selected in by_chain.items():
+        def visit(current: Mapping[str, Any], depth: int) -> None:
+            rows = current.get(chain[depth], [])
+            for row in rows if isinstance(rows, list) else []:
+                if not isinstance(row, dict):
+                    continue
+                if depth + 1 == len(chain):
+                    scope = row.setdefault("values", {})
+                    if isinstance(scope, dict):
+                        complete_scope(scope, selected)
+                else:
+                    nested = row.get("instances", {})
+                    if isinstance(nested, Mapping):
+                        visit(nested, depth + 1)
+        visit(instances, 0)
 
 
 def _ensure_occurrence(
@@ -663,9 +794,6 @@ def ingest(
                             "message": str(error),
                         })
                         normalized = None
-                    if normalized is None and field.get("required"):
-                        flavor = str(site.get("null_flavor", {}).get("missing_required") or "NI")
-                        normalized = _null(flavor)
                     existing = occurrence["values"].get(field_path, _MISSING)
                     if existing is not _MISSING and existing != normalized:
                         raise ValueError(
@@ -691,9 +819,12 @@ def ingest(
                 normalized = None
             if normalized is not None:
                 values[field_path] = normalized
-            elif field.get("required") and not chain:
-                flavor = str(site.get("null_flavor", {}).get("missing_required") or "NI")
-                values[field_path] = _null(flavor)
+        _complete_missing_required_values(
+            values,
+            instances,
+            model,
+            str(site.get("null_flavor", {}).get("missing_required") or "NI"),
+        )
 
         records.append({"key": key, "values": values, "instances": instances, "problems": problems})
     return records

@@ -11,17 +11,18 @@
     "effective_date": "2026-03-25T00:00:00"
   },
   "base": "model/<release>/<transaction>/cda-mapping.proposed.json",
-  "merge_semantics": "Shallow-merge field_overrides into fields and target_default_overrides into target_defaults; preserve all other generated keys.",
+  "merge_semantics": "Shallow-merge field_overrides into fields, target_default_overrides into target_defaults, and site_requirement_overrides into site_requirements; preserve all other generated keys.",
   "expected": {
     "dataset_fields": 120,
-    "generated_mapped_fields": 85,
-    "reviewed_mapped_fields": 98,
-    "field_override_count": 13,
-    "target_default_override_count": 7
+    "generated_mapped_fields": 84,
+    "reviewed_mapped_fields": 95,
+    "field_override_count": 11,
+    "target_default_override_count": 6,
+    "site_requirement_override_count": 6
   },
   "identity": {
-    "model_sha256": "650ffff2d3ee8a8d8c2691c6ef72c5ad6131174d6a919a52de3607e6fb7df47b",
-    "cda_sha256": "8d2dc82fc974133db023956d3b5a6b8b09dd33dc25222a758b061f70dcf332cf"
+    "model_sha256": "ce199532643b1bfb28f38e45dafe9862de92631c4a4e54962942805cfc8fae9d",
+    "cda_sha256": "8610fd06ab1221d3aeec90a445456ba6c772f18ebec7b03cdca7018fb7ca84f1"
   },
   "target_alias_migrations": {
     "CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.low@20160601": "CDAEncompassingEncounter.low",
@@ -52,10 +53,72 @@
         "reason": "AKTIN confirmed that the emergency-department collection time may populate the Allergy Concern Act start; this reviewed mapping uses Aufnahmezeitpunkt and must not activate an otherwise absent allergy branch."
       }
     ],
-    "notfallanamnese.beschwerden_bei_vorstellung.ereigniseintritt": "Problemobservationcedis.observation.effectiveTime.low",
+    "administrative_verlegungsentlassungsinformationen.typ_verlegung": {
+      "target": "Referralto.act.code",
+      "transform": {
+        "type": "reviewed_coded_map",
+        "value_set": {
+          "id": "1.2.276.0.76.11.53",
+          "effective_date": "2015-11-17T00:00:00"
+        },
+        "reason": "DEC-042 records a finite target-scoped bridge while the exact 2019 DIVI CodeSystem included by this target ValueSet remains unavailable; this does not complete or alias that terminology artifact.",
+        "source_options": {
+          "intern: OP / Intervention (z.B. Herzkatheter, Endoskopie, ...)": "2.16.840.1.113883.2.6.60.3.2.6.20021.1",
+          "intern: Überwachung (ICU / IMC / Chest-Pain-Unit / Stroke)": "2.16.840.1.113883.2.6.60.3.2.6.20021.2",
+          "intern: Beobachtungsstation der Notaufnahme/INZ": "2.16.840.1.113883.2.6.60.3.2.6.20021.11",
+          "intern: Normalstation": "2.16.840.1.113883.2.6.60.3.2.6.20021.3",
+          "Verlegung in ein anderes Krankenhaus": "2.16.840.1.113883.2.6.60.3.2.6.20021.10",
+          "Sonstiges": "2.16.840.1.113883.2.6.60.3.2.6.20021.7"
+        },
+        "map": {
+          "2.16.840.1.113883.2.6.60.3.2.6.20021.1": {
+            "value": {
+              "code": "1",
+              "codeSystem": "1.2.276.0.76.3.1.195.5.53",
+              "displayName": "intern: OP / Intervention (z.B. Herzkatheter, Endoskopie, ...)"
+            },
+            "reason": "The exact source option carries the owner terminology association to code 1 in the CodeSystem named by the target ValueSet include."
+          },
+          "2.16.840.1.113883.2.6.60.3.2.6.20021.2": {
+            "value": {
+              "code": "3",
+              "codeSystem": "1.2.276.0.76.3.1.195.5.53",
+              "displayName": "intern: Überwachung (ICU / IMC / Chest-Pain-Unit / Stroke)"
+            },
+            "reason": "The exact source option carries the owner terminology association to code 3 in the CodeSystem named by the target ValueSet include."
+          },
+          "2.16.840.1.113883.2.6.60.3.2.6.20021.11": {
+            "value": {
+              "code": "7",
+              "codeSystem": "1.2.276.0.76.3.1.195.5.53",
+              "displayName": "intern - Beobachtungsstation der Notaufnahme/INZ"
+            },
+            "reason": "Reviewed cross-revision assumption: the selected transaction has this exact 2024 option association and the newer owner referral-actions ValueSet explicitly enumerates code 7, but membership in the unavailable 2019 CodeSystem revision is not claimed."
+          },
+          "2.16.840.1.113883.2.6.60.3.2.6.20021.3": {
+            "value": {
+              "code": "5",
+              "codeSystem": "1.2.276.0.76.3.1.195.5.53",
+              "displayName": "intern: Normalstation"
+            },
+            "reason": "The exact source option carries the owner terminology association to code 5 in the CodeSystem named by the target ValueSet include."
+          },
+          "2.16.840.1.113883.2.6.60.3.2.6.20021.10": {
+            "value": {
+              "nullFlavor": "OTH"
+            },
+            "reason": "The source option is associated with SNOMED CT, but that system is not proven inside the older target binding and no single legacy referral destination can be selected; OTH preserves the exact source wording in originalText."
+          },
+          "2.16.840.1.113883.2.6.60.3.2.6.20021.7": {
+            "value": {
+              "nullFlavor": "OTH"
+            },
+            "reason": "The exact source option carries the owner HL7 NullFlavor OTH association; the reviewed target CE permits nullFlavor and exposes originalText for the source wording."
+          }
+        }
+      }
+    },
     "notfallanamnese.zeitpunkt_erster_arztkontakt": "CDADocumentationOf.documentationOf.serviceEvent.performer.time.low",
-    "diagnostik.bildgebende_diagnostik.magnetresonanztomographie.untersuchungsregion": "Magneticresonanceimaging.observation.targetSiteCode",
-    "diagnostik.bildgebende_diagnostik.rontgen.untersuchungsregion": "Plainradiography.observation.targetSiteCode",
     "abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose": "Problemobservationeddiagnosis.originalText",
     "abschlussdiagnosen.abschlussdiagnose.icd10": "Problemobservationeddiagnosis.observation.value",
     "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname": "UVMedicationInformationsimple.manufacturedProduct.manufacturedMaterial.name",
@@ -72,7 +135,7 @@
   "target_default_overrides": {
     "Allergyintoleranceobservation.effectiveTime": {
       "nullFlavor": "UNK",
-      "reason": "The transaction does not provide the allergy onset; AKTIN confirmed that the required Allergy Intolerance Observation effectiveTime may therefore carry nullFlavor UNK."
+      "reason": "The host transaction does not provide the allergy onset; AKTIN confirmed that the required Allergy Intolerance Observation effectiveTime may therefore carry nullFlavor UNK."
     },
     "Allergyintoleranceobservation.statusCode": {
       "value": "completed",
@@ -93,10 +156,32 @@
     "Problemobservationeddiagnosis.code": {
       "value": "29308-4",
       "reason": "This element identifies the statement as a diagnosis observation. The template explicitly prefers LOINC 29308-4 over 75324-4."
+    }
+  },
+  "site_requirement_overrides": {
+    "CDAauthor.assignedPerson::PersonElements.name": {
+      "channel": "fallback_if_active",
+      "reason": "The document author identity is deployment configuration and completes the active author participation."
+    },
+    "CDAconfidentialityCode.confidentialityCode": {
+      "channel": "values",
+      "reason": "Document confidentiality is deployment policy and must be supplied by the site."
+    },
+    "CDAlanguageCode.languageCode": {
+      "channel": "values",
+      "reason": "Document language is deployment configuration and must be supplied by the site."
     },
     "Medikation.moodCode": {
-      "value": "EVN",
-      "reason": "The current transaction includes only medication given during treatment in the emergency department. Medication history and future recommendations require an explicit per-medication source discriminator."
+      "channel": "fallback_if_active",
+      "reason": "Medication mood depends on the local source and export semantics and must be supplied for each active medication entry."
+    },
+    "UVSubordinateadministration.moodCode": {
+      "channel": "fallback_if_active",
+      "reason": "Subordinate-administration mood depends on the local source and export semantics and must be supplied for each active entry."
+    },
+    "UVSubordinateadministration.statusCode": {
+      "channel": "fallback_if_active",
+      "reason": "Subordinate-administration lifecycle status depends on local export semantics and must be supplied for each active entry."
     }
   }
 }

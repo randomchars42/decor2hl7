@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
 from copy import deepcopy
+from dataclasses import replace
 import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -37,11 +38,13 @@ from .datatypes import (
     POLYMORPHIC_COMPLEX_ROOTS,
     base_datatype,
     classify_datatype,
+    datatype_definition,
     datatype_inventory,
     expand_datatype,
     value_representation,
 )
 from .extensions import CdaExtension, normalize_extensions
+from .terminology import NULL_FLAVOR_CODE_SYSTEM
 from .core import (
     DefinitionIndex,
     element_definition,
@@ -57,7 +60,6 @@ from .model import (
 
 TemplateKey = tuple[str, str]
 TEMPLATE_PROTOTYPE_RELATIONSHIP = "SPEC"
-NULLFLAVOR_CODE_SYSTEM = "2.16.840.1.113883.5.1008"
 
 
 def _xml_true(value: str | None) -> bool:
@@ -110,8 +112,31 @@ def _node_value_representation(
     representation = value_representation(
         node.get("representation_datatype") or node.get("datatype")
     )
+    allowed_attributes = node.get("representation_attributes")
+    if (
+        representation is not None
+        and isinstance(allowed_attributes, list)
+        and representation.attributes
+    ):
+        allowed = {str(name) for name in allowed_attributes}
+        representation = replace(
+            representation,
+            attributes=tuple(
+                name for name in representation.attributes if name in allowed
+            ),
+        )
     if representation is not None:
         return representation
+    # ART-DECOR permits coded constraints to carry the formal vocabulary
+    # without repeating the CDA datatype on the element.  The vocabulary is
+    # still machine-readable evidence for the CD XML representation; without
+    # it, fixed code/codeSystem members could not be rendered at all.
+    if (
+        node.get("codes")
+        or node.get("value_sets")
+        or node.get("value_set_bindings")
+    ):
+        return value_representation("CD")
     if node.get("mixed_content"):
         return ValueRepresentation(
             ValueRepresentationKind.ELEMENT_TEXT, ("text",)
@@ -1968,6 +1993,22 @@ def _expand_datatype_structure(
     stack: tuple[str, ...] = (),
 ) -> None:
     """Overlay explicit template constraints on recursively expanded datatypes."""
+    def schema_datatype(name: str) -> Any | None:
+        """Resolve a declared datatype flavour to its nearest pinned XSD type."""
+        current = name
+        seen: set[str] = set()
+        while current and current not in seen:
+            seen.add(current)
+            if current in (definitions or {}):
+                resolved = resolve_definition(  # type: ignore[arg-type]
+                    definitions, current,
+                )
+                return resolved if resolved.category == "datatype" else None
+            if classify_datatype(current) not in {"datatype", "alias"}:
+                return None
+            current = str(datatype_definition(current).base or "")
+        return None
+
     def representation_type(name: str) -> str | None:
         current = name
         seen: set[str] = set()
@@ -1989,18 +2030,14 @@ def _expand_datatype_structure(
             continue
         declared = str(node.get("datatype") or "")
         classification = classify_datatype(declared)
-        schema_definition = None
-        if declared in (definitions or {}):
-            schema_definition = resolve_definition(definitions, declared)  # type: ignore[arg-type]
-            if schema_definition.category == "datatype":
-                classification = "datatype"
-                if schema_definition.mixed:
-                    node["mixed_content"] = True
-            else:
-                # Structural classes are materialized only by the CDA/RIM
-                # pass.  Letting the datatype pass follow them would unfold
-                # the cyclic document grammar from every generated child.
-                schema_definition = None
+        schema_definition = schema_datatype(declared)
+        if schema_definition is not None:
+            classification = "datatype"
+            node["representation_attributes"] = [
+                attribute.name for attribute in schema_definition.attributes
+            ]
+            if schema_definition.mixed:
+                node["mixed_content"] = True
         if classification == "unsupported":
             raise ValueError(
                 f"unsupported HL7 V3 datatype {declared!r} at {node.get('origin', {}).get('path') or node.get('name')}"
@@ -2308,7 +2345,7 @@ def _annotate_null_flavor_exceptions(
                     if isinstance(codes, Mapping)
                     and isinstance(codes.get(str(code)), Mapping)
                     and str(codes[str(code)].get("code_system") or "")
-                    == NULLFLAVOR_CODE_SYSTEM
+                    == NULL_FLAVOR_CODE_SYSTEM
                 }
                 if exceptions:
                     exception_sets.append(exceptions)

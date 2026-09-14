@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from decor2hl7.compile.artifacts import compiler_inputs, selected_closure_templa
 from decor2hl7.compile.mapping import mapping_field_delta
 from decor2hl7.compile.schematron import read_datatype_cooccurrences
 from decor2hl7.cooccurrence import unavoidable_targets_problems
+from decor2hl7.testing import json_digest
 from decor2hl7.transforms import cda_target_name, mapping_rules
 
 
@@ -24,15 +26,15 @@ ALLOWED_BUILD_DEGRADED = {
     "valueset:1.2.276.0.76.11.53",
     "codesystem:1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00",
 }
-MAX_GENERATION_MESSAGES = 88
-MAX_SELECTED_GENERATION_ERRORS = 31
+MAX_GENERATION_MESSAGES = 0
+MAX_SELECTED_GENERATION_ERRORS = 0
 MAX_CRAWL_DEGRADED = 2
 MAX_UNAVAILABLE_ARTIFACTS = 1
 EXPECTED_UNRESOLVED_TEMPLATES = 0
 EXPECTED_UNRESOLVED_PROTOTYPES = 6
-ASSEMBLED_SHA256 = "ee9f942a6eb4462291c51eeb5cf7c2b8e201ee98b7d6fa12f10e8afa4d1bab4f"
-SCHEMATRON_SHA256 = "e019497006ab9973acab6840141eec86f9eabc90d52fb44d2c24f0ffdb9b7373"
-VALIDATOR_SHA256 = "4f8afacc80b5e078e22efdd912c6e5b56af50ed732e1386453955aaf07527179"
+ASSEMBLED_SHA256 = "deb0b22a7ec2b53c1d4af8f73f9e023abe8316539e242624677b1b509e11fc0b"
+SCHEMATRON_SHA256 = "517ba6a4dc62ea02de3d71946ea38520b3073528264872de75229c269f224e55"
+VALIDATOR_SHA256 = "abbadf9200e0d6519308281a1c76692672c645298d40b9b4d22dccde7c93cbb7"
 
 
 class ReferenceClosureTests(unittest.TestCase):
@@ -114,7 +116,7 @@ class ReferenceClosureTests(unittest.TestCase):
         self.assertTrue(all(value["items"] for value in inventories.values()))
         self.assertEqual(
             {value["document_pool_size"] for value in inventories.values()},
-            {903},
+            {928},
         )
 
         xray_path = (
@@ -227,6 +229,21 @@ class ReferenceClosureTests(unittest.TestCase):
         manifest = self._load(
             self.model_dir / "conformance-validation" / "validator-manifest.json"
         )
+        selected = {
+            (str(item["id"]), str(item["effective_date"]))
+            for item in manifest.get("selected_closure_template_revisions", [])
+        }
+        assembled = ET.parse(
+            self.model_dir / "conformance-validation" / "decor-assembled.xml"
+        ).getroot()
+        rules = assembled.find("rules")
+        definitions = {
+            (str(item.get("id") or ""), str(item.get("effectiveDate") or ""))
+            for item in (rules if rules is not None else ())
+            if item.tag == "template"
+        }
+        self.assertEqual(len(selected), 119)
+        self.assertEqual(definitions, selected)
         self.assertEqual(manifest.get("assembled_sha256"), ASSEMBLED_SHA256)
         self.assertEqual(manifest.get("schematron_sha256"), SCHEMATRON_SHA256)
         self.assertEqual(manifest.get("validator_sha256"), VALIDATOR_SHA256)
@@ -241,8 +258,8 @@ class ReferenceClosureTests(unittest.TestCase):
         )
         self.assertTrue(manifest.get("executable"))
 
-    def test_validator_selected_document_gaps_stay_explicit_and_bounded(self) -> None:
-        """Selected-closure generation gaps deny completeness, not execution."""
+    def test_validator_selected_document_generation_is_complete(self) -> None:
+        """Only the exact, formally closed selected revisions generate rules."""
         manifest = self._load(
             self.model_dir / "conformance-validation" / "validator-manifest.json"
         )
@@ -259,7 +276,7 @@ class ReferenceClosureTests(unittest.TestCase):
             len(selected_errors), MAX_SELECTED_GENERATION_ERRORS,
         )
         self.assertEqual(len(selected_errors), MAX_SELECTED_GENERATION_ERRORS)
-        self.assertFalse(manifest.get("complete"))
+        self.assertTrue(manifest.get("complete"))
         self.assertTrue(manifest.get("executable"))
 
     def test_mapping_delta_matches_reviewed_relationship_boundary(self) -> None:
@@ -272,6 +289,7 @@ class ReferenceClosureTests(unittest.TestCase):
             "abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose",
             "abschlussdiagnosen.abschlussdiagnose.icd10",
             "administrative_aufnahmeinformationen.aufnahmezeitpunkt",
+            "administrative_verlegungsentlassungsinformationen.typ_verlegung",
             "dokumentationsinformationen.beginn_patientenbezogene_dokumentation.zeitpunkt_beginn_patientenbezogene_dokumentation",
             "masnahmen.medikamentose_therapie.medikation.dosierung.art_der_anwendung",
             "masnahmen.medikamentose_therapie.medikation.dosierung.freitext",
@@ -285,8 +303,52 @@ class ReferenceClosureTests(unittest.TestCase):
             "hauptkostentrager.versicherungsverhaltnis.identifikation",
         ])
         current_counts = current["summary"]["coverage_headline"]
-        self.assertEqual(current_counts["mapped_datapoints"], 85)
-        self.assertEqual(current_counts["no_target_datapoints"], 31)
+        self.assertEqual(current_counts["mapped_datapoints"], 84)
+        self.assertEqual(current_counts["no_target_datapoints"], 32)
+
+    def test_reviewed_recovery_overlay_matches_authoritative_mapping(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        recovery = self._load(
+            repository / "docs" / "recovery"
+            / "2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json"
+        )
+        proposal = self._load(self.model_dir / "cda-mapping.proposed.json")
+        reviewed = self._load(
+            self.workspace / "mapping" / REFERENCE_RELEASE
+            / REFERENCE_TRANSACTION / "cda-mapping.json"
+        )
+        model = self._load(self.model_dir / "model.json")
+        cda = self._load(self.model_dir / "cda.json")
+
+        proposal_null_reviewed = {
+            path: value for path, value in reviewed["fields"].items()
+            if value is not None and proposal["fields"].get(path) is None
+        }
+        reviewed_only_defaults = {
+            path: value for path, value in reviewed["target_defaults"].items()
+            if path not in proposal.get("target_defaults", {})
+        }
+        self.assertEqual(recovery["field_overrides"], proposal_null_reviewed)
+        self.assertEqual(
+            recovery["target_default_overrides"], reviewed_only_defaults,
+        )
+        self.assertEqual(
+            recovery["site_requirement_overrides"],
+            reviewed.get("site_requirements", {}),
+        )
+        self.assertEqual(
+            recovery["expected"],
+            {
+                "dataset_fields": 120,
+                "generated_mapped_fields": 84,
+                "reviewed_mapped_fields": 95,
+                "field_override_count": 11,
+                "target_default_override_count": 6,
+                "site_requirement_override_count": 6,
+            },
+        )
+        self.assertEqual(recovery["identity"]["model_sha256"], json_digest(model))
+        self.assertEqual(recovery["identity"]["cda_sha256"], json_digest(cda))
 
     def test_mapping_gaps_are_persisted_and_rendered(self) -> None:
         audit = self._load(self.model_dir / "mapping-audit.json")

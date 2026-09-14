@@ -544,7 +544,7 @@ def _site_scaffold(
         "timezone": "Europe/Berlin",
         "organization": {"name": None, "oid": None},
         "identifiers": {"document_root": None, "patient_root": None, "encounter_root": None, "roots": {}},
-        "null_flavor": {"missing_required": "NI", "unmapped_code": "OTH"},
+        "null_flavor": {"missing_required": "NI"},
         "input": {
             "join_column": join_column,
             "case_source": next(iter(sources)) if len(sources) == 1 else None,
@@ -677,6 +677,81 @@ def _copy_generated_guide(source: Path, destination: Path) -> None:
         return
     destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     _say("updated " + str(destination))
+
+
+def _mapping_decisions_differ(
+    current: Mapping[str, Any], proposed: Mapping[str, Any],
+) -> bool:
+    """Return whether reviewer-owned executable choices differ from proposal."""
+    return any(
+        current.get(key, default) != proposed.get(key, default)
+        for key, default in (
+            ("fields", {}), ("structures", {}), ("defaults", {}),
+            ("target_defaults", {}), ("site_requirements", {}),
+        )
+    )
+
+
+def _write_mapping_guides(
+    model_dir: Path,
+    destination: Path,
+    model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    mapping: Mapping[str, Any],
+    proposal: Mapping[str, Any],
+    audit: Mapping[str, Any],
+) -> None:
+    """Write guides for the actual reviewed mapping, retaining proposal evidence."""
+    if not _mapping_decisions_differ(mapping, proposal):
+        for guide_name in (
+            "cda-mapping.md", "cda-mapping-details.md",
+            "cda-mapping-trees.md",
+        ):
+            _copy_generated_guide(
+                model_dir / guide_name, destination.parent / guide_name
+            )
+        return
+
+    from .compile.reports import (
+        render_accepted_cda_mappings_markdown,
+        render_cda_mapping_markdown,
+        render_cda_mapping_trees_markdown,
+    )
+
+    rendered = {
+        "cda-mapping.md": render_cda_mapping_markdown(
+            model, cda, mapping, audit
+        ),
+        "cda-mapping-trees.md": render_cda_mapping_trees_markdown(
+            model, cda, mapping, audit
+        ),
+    }
+    generated_details = _require(
+        model_dir / "cda-mapping-details.md"
+    ).read_text(encoding="utf-8")
+    accepted_start = generated_details.find("# Accepted mappings\n")
+    analysis_start = generated_details.find("# Datapoint analysis\n")
+    if 0 <= accepted_start < analysis_start:
+        accepted = render_accepted_cda_mappings_markdown(
+            model, cda, mapping
+        ).rstrip()
+        rendered["cda-mapping-details.md"] = (
+            generated_details[:accepted_start]
+            + accepted
+            + "\n\n# Generated proposal evidence\n\n"
+            + "The following audit explains what the compiler could establish "
+              "without reviewer decisions. It may therefore show a reviewed "
+              "mapping above as unselected or non-executable in the generated "
+              "proposal.\n\n"
+            + generated_details[analysis_start:]
+        )
+    else:
+        rendered["cda-mapping-details.md"] = generated_details
+
+    for guide_name, content in rendered.items():
+        target = destination.parent / guide_name
+        target.write_text(content, encoding="utf-8")
+        _say("updated " + str(target))
 
 
 def _merge_mapping_configuration_notes(
@@ -816,11 +891,16 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         )
         for path in delta["lost"]:
             _say("review  " + str(path))
-    for guide_name in (
-        "cda-mapping.md", "cda-mapping-details.md", "cda-mapping-trees.md",
-    ):
-        _copy_generated_guide(model_dir / guide_name, destination.parent / guide_name)
     mapping = load_json(destination)
+    proposal = load_json(source)
+    audit = (
+        load_json(_require(model_dir / "mapping-audit.json"))
+        if _mapping_decisions_differ(mapping, proposal)
+        else {"fields": {}, "groups": {}}
+    )
+    _write_mapping_guides(
+        model_dir, destination, model, cda, mapping, proposal, audit
+    )
     lock = destination.parent / "mapping-lock.json"
     if reset or not lock.exists():
         write_json(lock, _mapping_lock(release, transaction, model, cda, mapping))
@@ -958,7 +1038,8 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
     site = synthetic_site(release, cda, cda_mapping)
     errors = validate.verify_compiled_cda(cda)
     errors.extend(validate.check_config(
-        model, cda, neutral_csv, cda_mapping, code_mapping_defaults(model), site
+        model, cda, neutral_csv, cda_mapping, code_mapping_defaults(model), site,
+        require_site_configuration=False,
     ))
     try:
         inputs = _compiler_inputs(root)
@@ -979,6 +1060,17 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
         errors.append("mapping-lock.json is missing beside cda-mapping.json")
     print(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
     print(f"CDA target defaults: {len(cda_mapping.get('target_defaults', {}))}")
+    site_requirements = cda_mapping.get("site_requirements", {})
+    site_requirements = (
+        site_requirements if isinstance(site_requirements, Mapping) else {}
+    )
+    print(f"CDA site requirements: {len(site_requirements)}")
+    for name, rule in sorted(site_requirements.items()):
+        channel = (
+            str(rule.get("channel") or "?")
+            if isinstance(rule, Mapping) else "?"
+        )
+        print(f"site config required: cda.{channel}[{name!r}]")
     try:
         completion_flavor = required_unmapped_null_flavor(cda_mapping)
     except ValueError:

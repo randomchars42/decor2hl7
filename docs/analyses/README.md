@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-13-target-governed-coded-values-and-null-flavor.md`](2026-09-13-target-governed-coded-values-and-null-flavor.md)
+  implements target-neutral source normalization, exact concept-member coding,
+  target-owned OTH/UNC fallback, central required-binding conformance and XSD
+  restriction semantics; records the `Typ Verlegung` downgrade and the clean
+  six-document instance validation result.
 - [`2026-09-11-art-decor-origin-relationship-prototype-semantics.md`](2026-09-11-art-decor-origin-relationship-prototype-semantics.md)
   implements the ART-DECOR owner distinction between formal concept origins,
   implicit unchecked relationships, executable template containment, and the

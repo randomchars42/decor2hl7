@@ -83,19 +83,30 @@
         "CDAconfidentialityCode.confidentialityCode": {
           "code": "N",
           "codeSystem": "2.16.840.1.113883.5.25",
-          "displayName": "Normal"
+          "displayName": "normal"
         },
-        "CDAlanguageCode.languageCode": "de-DE"
+        "CDAlanguageCode.languageCode": "de-DE",
+        "CDArecordTargetnnar.administrativeGenderCode": {
+          "code": "F",
+          "codeSystem": "2.16.840.1.113883.5.1",
+          "displayName": "Female"
+        }
       },
       "fallback_if_active": {
+        "Medikation.moodCode": "EVN",
+        "Medikation.statusCode": "completed",
         "UVSubordinateadministration.moodCode": "EVN",
         "UVSubordinateadministration.statusCode": "completed",
         "UVSubordinateadministration.effectiveTime_value_or_nullFlavor": "2026-05-02T10:12:00+02:00",
-        "CDAauthor.assignedPerson::PersonElements.name": "Dr. Eva Beispiel"
+        "CDAauthor.assignedPerson::PersonElements.name": "decor2hl7user"
       }
     }
   },
   "codes": {
+    "administrative_verlegungsentlassungsinformationen.typ_verlegung": {
+      "Intensivstation": "intern: Überwachung (ICU / IMC / Chest-Pain-Unit / Stroke)",
+      "Überwachungsstation": "intern: Überwachung (ICU / IMC / Chest-Pain-Unit / Stroke)"
+    },
     "diagnostik.wildcard_diagnostik.code": {
       "EEG": {
         "code": "EEG",
@@ -121,7 +132,13 @@
       "SCENARIO-06"
     ],
     "documents": 6,
-    "coverage": "all-mapped",
+    "coverage": {
+      "all_mapped_except": [
+        "diagnostik.wildcard_diagnostik.klinisch_relevante_zeitangaben.zeitraum",
+        "masnahmen.wildcard_therapie.klinisch_relevante_zeitangaben.zeitpunkt",
+        "masnahmen.wildcard_therapie.klinisch_relevante_zeitangaben.zeitraum"
+      ]
+    },
     "case_fields": {
       "SCENARIO-01": {
         "present": [
@@ -266,7 +283,7 @@
       "The records are curated mapping fixtures, not diagnostic or treatment guidance.",
       "The selected dataset makes both isolation answer and reason mandatory, while the CDA profile prohibits a reason for a negative answer; every fixture therefore uses a clinically plausible positive isolation indication.",
       "The wildcard concepts use explicit site-owned 2.25 code-system identities; their HTTPS definitional links identify the local definitions because the dataset publishes no formal terminology binding.",
-      "The published wildcard associations split a point and duration across mutually exclusive atomic and interval effectiveTime branches; exact CDA validation therefore remains blocked until the profile association or reviewed portable mapping is corrected."
+      "The published wildcard associations split a point and duration across mutually exclusive atomic and interval effectiveTime branches. The fixture exercises the unambiguous diagnostic point only; it excludes the diagnostic duration and both therapy timing fields until the source duration representation and target branch association are clarified."
     ]
   }
 }

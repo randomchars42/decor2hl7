@@ -195,9 +195,9 @@ headline from `build_degraded`, the subset consulted by selected formal
 terminology, validator ValueSets or CDA template compilation. A validator
 ValueSet counts only when the rule that needs it can apply to the selected
 document: a template belongs to the selected closure when at least one compiled
-target holds a document location, and a generation message whose rule context
-names only templates outside that set is scoped out of both `build_degraded` and
-the validator completeness claim (`DEC-010`, `DEC-019`).
+target holds a document location. Other fetched templates remain available to
+source audit and mapping analysis but are not publication-transform rule input
+and cannot affect validator completeness (`DEC-010`, `DEC-019`).
 
 `manifest.json` is reconstructible metadata rather than the sole index of
 deterministically named cache files. If it is deleted, `fetch` validates and
@@ -377,6 +377,10 @@ references resolve to a frozen manifest identity.
 Editable JSON stores only selections. `mapping-audit.json` stores the structured
 decision record, and all three Markdown views are produced from the same analysis:
 unresolved decisions, accepted mappings/evidence, and exhaustive coverage trees.
+The build copies proposal views into `model/`. `init-cda-mapping` rerenders the
+views against the actual portable mapping whenever reviewer-owned executable
+choices differ, while retaining the proposal audit as explicitly labelled
+generated evidence in the details appendix.
 Its summary persists the same coverage-headline counts printed by `build` and
 `init-cda-mapping`. Each unselected field/group, plus any selected field with
 unresolved formal terminology, stores one first-failing `gap` gate and the
@@ -457,6 +461,40 @@ all other values become `nullFlavor="OTH"` while retaining source wording for
 the companion text. ValueSet membership, structure and datatype roles are
 compiled evidence; the renderer has no domain- or template-specific branch.
 
+Source-code normalization itself remains target-neutral. Finite and unresolved
+formal domains reject unknown input; explicitly open domains retain raw wording
+without creating a CDA null flavor. Exact source concept-list members retain
+all of their formal terminology associations, and a required target ValueSet
+may disambiguate them only by exact code/system membership. A shared but
+unresolved ValueSet identity stays non-actionable review evidence and cannot
+produce an empty enum transform.
+
+A separately reviewed finite conversion may cross that unresolved boundary
+through `reviewed_coded_map`. The mapping records every executable source label
+and owner concept identity, every exact output and rationale, plus the exact
+required target ValueSet revision. Configuration validation requires complete
+source-option coverage and one physical target with the named binding. Runtime
+uses an in-memory authorization carried only by that transform; site/default
+JSON and ordinary transforms cannot obtain it. The authorization applies only
+while the exact binding is unresolved. A later complete expansion restores
+ordinary formal membership checks and exposes contradictions.
+
+Required target bindings are enforced through one compiled terminology policy
+for mapped values, site values, target defaults and final rendered values. A
+missing code system may be completed only when the required ValueSet proves one
+unique identity. The concrete pinned CDA XSD still controls serialization:
+extension adds inherited content, restriction replaces restricted content and
+removes prohibited attributes. Binding validation may therefore use the formal
+system identity for `CS` while serialization correctly omits its prohibited
+`@codeSystem` attribute.
+
+The generated ART-DECOR vocabulary rule admits a datatype-legal
+`@nullFlavor` as the alternative to a member code. No-information flavors such
+as `NI` therefore do not extend the bound ValueSet. Payload-bearing `OTH` and
+`UNC` are stricter because they represent an alternate value in
+`originalText`; they require an explicit binding exception or one exact
+reviewed finite-map authorization.
+
 Formal `<inherit>` and `<contains>` chains resolve one terminal original.
 Following ART-DECOR `getFullConcept`, that original supplies semantic
 properties while the current stored concept supplies descendants and the
@@ -506,7 +544,11 @@ cardinality, terminology, and template evidence:
   `nullFlavor="UNK"` for the required diagnosis onset that this transaction does
   not provide. Required complex elements may receive a null flavor only when
   their compiled datatype surface exposes an optional writable `@nullFlavor`.
-  A real mapped value wins in its own occurrence.
+  A real mapped value wins in its own occurrence;
+- `site_requirements` delegates a required writable target to exactly one
+  deployment channel, `values` or `fallback_if_active`, and records why the
+  value is site-owned without embedding it in the portable mapping. Invalid
+  declarations never satisfy construction completeness.
 
 Every referenced mapping target also records its exact and revision-independent
 ART-DECOR owner identity. Human-readable target labels can change between
@@ -547,21 +589,22 @@ called a native compiled ART-DECOR project; that unavailable form remains an
 explicit `not-run` stage. Upstream generation errors make the validator
 degraded and are preserved rather than hidden.
 
-The transform runs over the whole assembled closure, so it also reports rules
-skipped for templates the selected document never instantiates.
-`validator-manifest.json` therefore classifies each generation message in
-`generation_message_scopes` — its value sets, the template OIDs in its rule
-context, and whether any of them holds a document location — and reports
-`complete` as a claim about the selected document only. The raw message list is
-kept and `generation_messages_outside_selected_closure` counts the rest, so
-nothing is dropped; an unparseable context is treated as in-closure.
+The publication transform receives exactly the effective-dated template
+revisions selected at physical compiled document locations. Before generation,
+assembly checks that every selected definition is present and that every formal
+`include` or `contains` reference in those definitions resolves within the same
+selected revision set. A missing, revision-inconsistent, or ambiguous formal
+reference fails assembly instead of being hidden by filtering. This prevents
+unselected project branches and superseded revisions from producing rules or
+generation errors for the exact transaction validator.
 
-For every template OID with a physical compiled document location, assembly
-selects its exact effective-dated revision set. Other fetched template OIDs are
-kept as dependency input for dynamic and generic template resolution. This
-prevents historical rules for one physical template identity from being active
-at the same time without starving the publication transform of dependency-only
-templates.
+Non-selected fetched templates are deliberately retained in the source cache,
+project-quality audit, and the separate `mapping_evidence` inputs used for
+candidate analysis. Excluding them from `<rules>` therefore narrows only the
+executable validator, not the evidence available to mapping suggestions.
+`validator-manifest.json` still records and conservatively scopes every message
+emitted for the selected rules; an unparseable context is treated as
+in-closure.
 
 Mapping analysis follows that generation step. `compile/schematron.py` extracts
 required and maximum occurrences, fixed values, ValueSet references, required
@@ -668,7 +711,10 @@ without datatype- or path-specific renderer behavior.
 
 `check-cda-mapping` validates the compiled CDA, structural bindings, target
 compatibility, and `mapping-lock.json` without requiring site CSV mappings.
-This is the review gate for the shareable specification product.
+This is the review gate for the shareable specification product. Explicit
+`site_requirements` are validated as construction contracts and printed as
+configuration notes; a concrete value is required and binding-checked only
+when an actual site is validated or rendered.
 
 `setup-test` supports two fixture sources. Its synthetic mode derives
 deterministic CSV columns from `model.json`: scalar fields go to `cases.csv` and

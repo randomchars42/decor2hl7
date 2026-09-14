@@ -185,7 +185,8 @@ unavailable.
 
 `cda-mapping.json` version 8 accepts direct target names, small declarative
 rules, and explicit structural bindings. The built-in scalar transform vocabulary is deliberately limited to `identity`,
-`enum`, `ordinal`, `not`, `code_system`, and `coded_fallback`. The generated proposal uses it for the currently
+`enum`, `ordinal`, `not`, `code_system`, `coded_fallback`, and
+`reviewed_coded_map`. The generated proposal uses it for the currently
 proven AKTIN semantics for Tetanusschutz, Isolation, modified Rankin, and
 diagnosis certainty, to carry a normalized source code into one explicitly
 declared open target CodeSystem, and to constrain an explicitly open source
@@ -364,38 +365,47 @@ validation pass. The exact ten-member ActStatus revision is already embedded
 in a selected frozen dataset artifact and is now supplied to validator assembly
 as well as the model compiler, so no duplicate builtin is introduced.
 
-In the refreshed workspace the template validator remains executable and has no
-compilation errors, but reports 88 upstream generation messages, 57 outside the
-119-template selected document closure; it therefore records `complete: false`.
-The separate source-project DECOR Schematron fails on the broad live evidence
-extract with 381 errors, 1,780 warnings, and 536 information messages. These are
-reported conformance boundaries and do not restore prototype constraints or
+In the refreshed workspace, exact validator assembly now admits only the 119
+selected effective-dated template revisions. It first verifies that all 119
+definitions exist and that their formal `include`/`contains` references remain
+inside that exact revision set. The generated validator is executable and
+complete with zero generation messages. Non-selected fetched templates remain
+available to the broad source-project audit and mapping-evidence compiler input;
+they can no longer create unrelated validator-generation failures. The separate
+source-project DECOR Schematron still fails on the broad live evidence extract
+with 381 errors, 1,780 warnings, and 536 information messages. These are
+reported source-quality boundaries and do not restore prototype constraints or
 relationship-derived mappings.
 
-The source-controlled recovery overlay would select 98/120 fields; the
-authoritative workspace is currently reset to the generated proposal, which
-does not treat review relationships as formal origins and selects 85/120.
-Because generated reference-workspace directories may be Git-ignored, deleting
-and recreating `mapping/` would otherwise lose 13 proposal-null reviewed field
-choices and seven reviewed target defaults. DEC-038 preserves those decisions
-in a compact source-controlled overlay pinned to the current model and CDA
-hashes. Applying the overlay is currently a documented manual shallow merge;
-there is no general CLI command that imports arbitrary decision overlays.
+The source-controlled recovery overlay selects 95/120 fields over the
+owner-rule proposal's 84/120. Because generated reference-workspace directories
+may be Git-ignored, deleting and recreating `mapping/` would otherwise lose
+eleven proposal-null reviewed field choices—the ten relationship-era choices
+plus DEC-042's finite map—six reviewed target-default overrides, and six
+reviewed site-requirement associations.
+DEC-038 preserves those decisions in a compact source-controlled overlay pinned
+to the current model and CDA hashes. Applying the overlay is currently a
+documented manual shallow merge; there is no general CLI command that imports
+arbitrary decision overlays.
 
-The reset proposal is deliberately not production-complete. Static mapping
-validation currently reports twelve distinct mandatory construction gaps:
-confidentiality and language codes, author name, encounter start, four
-act/observation status or start values, two medication `moodCode` attributes,
-the subordinate medication status, and one observation code. These were
-previously masked by reviewed target defaults or discovered only during
-rendering. They require explicit evidence/review; the compiler does not infer
-their clinical or administrative values. Document ID, set ID, version, creation
-time, custodian identity/name, and narrative links are separately named
-document-production roles and are not counted as mapping gaps.
+Portable mapping alone is deliberately not a complete document-production
+configuration. The authored reference site supplies confidentiality `N`,
+language `de-DE`, author name `decor2hl7user`, and activation-scoped medication
+`moodCode=EVN` and `statusCode=completed` values. These remain site-owned rather
+than hard-coded compiler defaults. Encounter start and the reviewed clinical
+status/start/observation defaults remain mapping-owned. Document ID, set ID,
+version, creation time, custodian identity/name, and narrative links are
+separately named document-production roles. Static validation reports a missing
+site requirement when such deployment values are absent; the compiler does not
+manufacture them. DEC-041 now lets the reviewed mapping declare each required
+site target, channel, and rationale without copying its value. The portable
+`check-cda-mapping` gate reports those declarations as configuration notes,
+while validation of an actual site still rejects an absent, misplaced, or
+binding-invalid value.
 The fetch closure is build-ready with 498 resolved/cached, 21 optional missing,
-one waived, and no unavailable, partial, or error resources. Its three degraded
-dependencies are the dynamic and dated AKTIN ValueSet
-`1.2.276.0.76.11.53` plus its waived intension CodeSystem
+one waived, and no unavailable, partial, or error resources. Build impact
+currently identifies two degraded terminology artifacts around AKTIN ValueSet
+`1.2.276.0.76.11.53` and its waived intension CodeSystem
 `1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00`.
 
 The assembler restores the QName-string namespace declarations omitted by the
@@ -504,9 +514,9 @@ The exact IHE Medicine Entry analysis artifact
 `DEC-004`; its optional source sidecar remains unavailable. It is not an
 external-artifact blocker and must not be duplicated as a builtin. In the
 selected AKTIN document its 49 named constraints are registry evidence only:
-none has a CDA location or is renderable. The effective medication branch uses
-the reviewed `UV Medication Information (detail)` choice instead, so forcing the IHE constraints
-onto that branch would invent a template relationship.
+none has a CDA location or is renderable. The effective baseline medication
+branch is the directly selected `UV Medication Information (simple)` choice;
+forcing the IHE constraints onto it would invent a template relationship.
 
 The exact AKTIN/DIVI CodeSystem
 `1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00` remains unresolved and now
@@ -517,8 +527,13 @@ the dated extract answers 404 in all eight candidate projects recorded in
 ("Referral actions") includes it intensionally and therefore expands to no
 members: the dateless `$expand` returns the include unresolved with
 `valueSetExpansionAssociation count="0"`, and the dated `$expand` answers 500.
-The field bound to that value set keeps a non-executable enumeration; it is not
-filled from logical labels (`DEC-003`, `DEC-016`). Neither the DIVI
+The generated proposal keeps the field non-executable; the shared ValueSet
+identity remains review evidence only and does not fill the target from logical
+labels (`DEC-003`, `DEC-016`, `DEC-040`). The portable reference mapping now
+adds the finite, source-concept-identity-pinned `reviewed_coded_map` accepted by
+DEC-042. That mapping explicitly covers all six source options and one exact
+target binding, but it does not satisfy or hide this terminology closure gap.
+Neither the DIVI
 Notfalldokumentation publication nor the HL7 Germany Notaufnahmeregister
 implementation guide publishes the code list for this OID, so a builtin would
 have to invent the identity. A fragment must not be promoted to a complete
@@ -526,7 +541,8 @@ formal terminology dependency. Future `download`, `fhir`, `mediawiki`, or
 licensed local-file modes must be added only for a concrete required artifact
 and reviewed separately.
 
-Reopening evidence: a DIVI or HL7 Germany publication of
+The reviewed rule deliberately fails if a later exact expansion contradicts
+one of its values. Reopening evidence: a DIVI or HL7 Germany publication of
 `1.2.276.0.76.3.1.195.5.53` at exactly `2019-12-30T00:00:00`, or the code system
 appearing in an ART-DECOR project.
 
@@ -609,16 +625,8 @@ and active-branch site fallbacks. Exact validator assembly no longer activates
 superseded revisions of a physically selected template OID. The authored local
 wildcard concepts now carry explicit site-owned code-system identities.
 
-The same audit now reports 8 errors: two XSD order errors and six Schematron
-errors, all caused by two instances of one unresolved specification/mapping
-contradiction. For Wildcard Therapie the transaction makes both the clinically
-relevant point and duration required; for the exercised Wildcard Diagnostik
-instance both are supplied. The reviewed ART-DECOR associations map the point
-to an atomic `effectiveTime` (`TS`) and the duration to a different interval
-`effectiveTime/width` (`IVL_TS`), while the template permits at most one of
-those siblings. The XSD consequently sees the second `effectiveTime` out of
-sequence, and Schematron reports the duplicate choice plus children below the
-atomic TS. Combining the point into `IVL_TS/low` would be clinically plausible,
-but it would contradict the published direct association and is therefore not
-performed silently. Resolution requires a corrected ART-DECOR association or
-an explicit reviewed mapping change for both wildcard templates.
+After compiling and preserving the owner-defined choice bounds, the current
+six authored documents pass the complete CDA/SDTC XSD and exact generated
+template/datatype Schematron with zero errors and zero warnings. The earlier
+eight-error wildcard result is therefore retained only as historical diagnosis,
+not a current conformance boundary.

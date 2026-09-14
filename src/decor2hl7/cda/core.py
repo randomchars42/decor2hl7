@@ -35,6 +35,7 @@ class ModelAttribute:
     optional: bool = True
     fixed: str | None = None
     default: str | None = None
+    prohibited: bool = False
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class ModelDefinition:
     mixed: bool = False
     category: str = "datatype"
     source: str = ""
+    derivation: str | None = None
 
 
 class DefinitionIndex(dict[str, ModelDefinition]):
@@ -215,7 +217,7 @@ def index_definitions(paths: Iterable[Path]) -> DefinitionIndex:
                     ModelAttribute(
                         str(item.get("name")), _attribute_type(item.get("type")),
                         item.get("use") != "required", item.get("fixed"),
-                        item.get("default"),
+                        item.get("default"), item.get("use") == "prohibited",
                     )
                     for item in content.findall(f".//{XSD}attribute")
                     if item.get("name") and item.get("type")
@@ -228,6 +230,10 @@ def index_definitions(paths: Iterable[Path]) -> DefinitionIndex:
                     else "datatype"
                 ),
                 source=path.name,
+                derivation=(
+                    derivation.tag.rsplit("}", 1)[-1]
+                    if derivation is not None else None
+                ),
             )
             if (
                 derivation is not None
@@ -265,21 +271,34 @@ def resolve_definition(
     if name in stack:
         raise ValueError("recursive CDA model inheritance: " + " -> ".join(stack + (name,)))
     base = resolve_definition(definitions, definition.base, stack + (name,))
-    parts = {part.name: part for part in base.parts}
+    parts = (
+        {}
+        if definition.derivation == "restriction"
+        else {part.name: part for part in base.parts}
+    )
     parts.update({part.name: part for part in definition.parts})
     attributes = {item.name: item for item in base.attributes}
-    attributes.update({item.name: item for item in definition.attributes})
+    for item in definition.attributes:
+        if item.prohibited:
+            attributes.pop(item.name, None)
+        else:
+            attributes[item.name] = item
     return ModelDefinition(
         name=definition.name,
         base=definition.base,
         parts=tuple(parts.values()),
         attributes=tuple(attributes.values()),
-        required_choices=tuple(dict.fromkeys(
-            (*base.required_choices, *definition.required_choices)
-        )),
+        required_choices=(
+            definition.required_choices
+            if definition.derivation == "restriction"
+            else tuple(dict.fromkeys(
+                (*base.required_choices, *definition.required_choices)
+            ))
+        ),
         mixed=definition.mixed or base.mixed,
         category=definition.category,
         source=definition.source,
+        derivation=definition.derivation,
     )
 
 
