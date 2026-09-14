@@ -505,7 +505,7 @@ Mapping values can be direct target strings or declarative rule objects. A field
 may control more than one target (for example Tetanusschutz `negationInd` and
 `nullFlavor`) without introducing target-specific renderer code.
 
-`cda-mapping.json` version 8 separates scalar transforms, structural bindings,
+`cda-mapping.json` version 9 separates scalar transforms, structural bindings,
 and CDA completion policy. The compiler emits only rules supported by explicit
 cardinality, terminology, and template evidence:
 
@@ -526,7 +526,12 @@ cardinality, terminology, and template evidence:
   already supplies an equal discriminator, the occurrences are coalesced by
   exact code and code system;
 - `coalesce` lets equivalent singleton fields share a target, using
-  `equal_or_error` unless a different policy is explicitly configured;
+  `equal_or_error` unless a different policy is explicitly configured. A
+  reviewed `prefer_first_warn_if_different` policy preserves deterministic
+  output while reporting a semantic conflict;
+- `concatenate` transforms present same-occurrence sources independently,
+  skips omitted values, joins them with an explicit separator, and writes one
+  textual target;
 - `mode: "fallback"` remains available for an explicitly configured
   source-dependent fallback and fills each occurrence independently;
 - `mode: "fallback_if_active"` is a reviewed fallback for a required target
@@ -562,6 +567,12 @@ element or a descendant is mapped; configuration validation rejects an
 incomplete reviewed selection, and rendering checks companion presence for each
 populated occurrence after runtime completion. This is compiled datatype
 policy, not a medication/template/path special case.
+
+Version 9 also adds `field_reviews`. It records why an existing model field is
+deliberately selected as `null`; validation requires
+`status: intentionally_unmapped`, a non-empty reason, and an actual null field
+selection. This metadata affects review documentation, not runtime payloads or
+coverage arithmetic.
 
 Required CDA entry narrative references use the same compiled-role boundary. If
 an effective entry `text` constraint requires an unfixed
@@ -699,7 +710,10 @@ sequence number `1` for true and be omitted for false.
 Quantity fields normalize to a target-neutral object rather than a bare number:
 `{"value": 2.5, "unit": "mg"}` for a scalar, or
 `{"low": {"value": 1, "unit": "mg"}, "high": {"value": 2,
-"unit": "mg"}}` for a range. A fixed unit declared by the dataset is supplied
+"unit": "mg"}}` for a range. Multiple dataset unit properties are retained as
+an admitted `units` domain rather than collapsed to the final property. The
+site-owned `input.unit_aliases` table normalizes local spellings to UCUM before
+domain validation. A fixed unit declared by the dataset is supplied
 when absent and conflicts are rejected. Numeric bounds are validated on both
 ends of a range. CDA compilation attaches exact low/high child target names to
 an interval quantity's value representation, so assignment can split a range

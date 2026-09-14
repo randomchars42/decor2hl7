@@ -279,6 +279,36 @@ def transformed_compatibility(
             reasons.append(
                 "coded_fallback null flavor is not admitted by the target's required binding"
             )
+    elif kind == "coded_only":
+        if (
+            str(field.get("type") or "") != "code"
+            or kind_value != ValueRepresentationKind.CODED.value
+        ):
+            reasons.append(
+                "coded_only requires a coded dataset field and coded CDA target"
+            )
+    elif kind == "coded_or_original_text":
+        null_flavor = str(transform.get("null_flavor") or "")
+        if kind_value != ValueRepresentationKind.CODED.value:
+            reasons.append("coded_or_original_text requires a coded CDA target")
+        if null_flavor not in NULL_FLAVORS_WITH_ORIGINAL_TEXT:
+            reasons.append(
+                "coded_or_original_text null flavor cannot retain originalText"
+            )
+        elif not target.get("permits_null_flavor"):
+            reasons.append(
+                "coded_or_original_text target does not permit nullFlavor"
+            )
+        elif required_value_set_ids(target) and not required_binding_allows_null_flavor(
+            target, null_flavor
+        ):
+            reasons.append(
+                "coded_or_original_text null flavor is not admitted by the "
+                "target's required binding"
+            )
+    elif kind == "narrative":
+        if "text" not in logical_types:
+            reasons.append("narrative transform requires a textual CDA target")
     elif kind == "reviewed_coded_map":
         cases = transform.get("map", {})
         outputs = [

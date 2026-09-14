@@ -1285,6 +1285,7 @@ class CoreTests(unittest.TestCase):
             "datapoints": 3,
             "mapped_datapoints": 2,
             "mapped_leaves": 2,
+            "reviewed_datapoints": 0,
             "suggested_datapoints": 1,
             "suggested_leaves": 1,
             "no_target_datapoints": 0,
@@ -1293,11 +1294,13 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(
             format_coverage_headline(counts, markdown=False),
             "Model: 3 datapoints · ✓ mapped 2 dp → 2 leaves · "
+            "= reviewed null 0 dp · "
             "! suggested 1 dp → 1 leaf · × no target 0 dp · "
             "○ no source 1 leaf",
         )
         self.assertIn(
             "Model: **3 datapoints** · ✓ mapped **2 dp → 2 leaves** · "
+            "= reviewed null **0 dp** · "
             "! suggested **1 dp → 1 leaf** · × no target **0 dp** · "
             "○ no source **1 leaf**",
             report,
@@ -4123,7 +4126,7 @@ class CoreTests(unittest.TestCase):
         )
 
         self.assertEqual(changed, 1)
-        self.assertEqual(current["version"], 8)
+        self.assertEqual(current["version"], 9)
         self.assertEqual(current["fields"]["finding"], {
             "target": "NewFinding.value", "cda_target": "NewFinding.value",
         })
@@ -6995,6 +6998,145 @@ class CoreTests(unittest.TestCase):
                 "low": {"value": 1.5, "unit": "mg"},
                 "high": {"value": 2.5, "unit": "mg"},
             },
+        )
+        self.assertEqual(
+            data.normalize_value(
+                "2 g / h",
+                {"type": "quantity", "units": ["ml/h", "g/h"]},
+                {},
+                {"input": {"unit_aliases": {"g / h": "g/h"}}},
+            ),
+            {"value": 2, "unit": "g/h"},
+        )
+
+    def test_compiler_preserves_multiple_quantity_units_as_a_domain(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transaction = Path(tmp) / "transaction.xml"
+            transaction.write_text('''<dataset>
+              <concept type="item" shortName="rate" id="rate"><name>Rate</name>
+                <valueDomain type="quantity">
+                  <property unit="ml/h"/><property unit="l/h"/>
+                  <property unit="µg/h"/><property unit="mg/h"/>
+                  <property unit="g/h"/>
+                </valueDomain>
+              </concept>
+            </dataset>''', encoding="utf-8")
+            model = compile_model(transaction)
+        self.assertEqual(
+            model["fields"]["rate"]["units"],
+            ["ml/h", "l/h", "µg/h", "mg/h", "g/h"],
+        )
+        self.assertNotIn("unit", model["fields"]["rate"])
+
+    def test_reviewed_medication_merge_and_narrative_rules(self) -> None:
+        self.assertEqual(
+            apply_transform(
+                {"code": "PUFF", "codeSystem": "2.16.840.1.113883.5.85"},
+                {"type": "coded_only"},
+            ),
+            {"code": "PUFF", "codeSystem": "2.16.840.1.113883.5.85"},
+        )
+        self.assertIs(
+            apply_transform({"raw": "Dosieraerosol"}, {"type": "coded_only"}),
+            OMIT,
+        )
+        model = {"fields": {
+            "art": {"type": "code", "repeat_chain": []},
+            "methode": {"type": "text", "repeat_chain": []},
+            "freitext": {"type": "text", "repeat_chain": []},
+            "prn": {"type": "boolean", "repeat_chain": []},
+        }}
+        cda_model = {"targets": {
+            "Medication.route": {
+                "writable": True, "renderable": True, "locations": ["0"],
+                "repeat_ancestors": [], "logical_types": ["code"],
+                "permits_null_flavor": True,
+                "value_representation": {"kind": "coded"},
+            },
+            "Medication.text": {
+                "writable": True, "renderable": True, "locations": ["1"],
+                "repeat_ancestors": [], "logical_types": ["text"],
+                "value_representation": {"kind": "text"},
+            },
+        }}
+        route_transform = {
+            "type": "coded_or_original_text", "null_flavor": "OTH",
+        }
+        mapping = {
+            "fields": {
+                "art": {"target": "Medication.route", "structure": "route", "transform": route_transform},
+                "methode": {"target": "Medication.route", "structure": "route", "transform": route_transform},
+                "freitext": {"target": "Medication.text", "structure": "text", "transform": {"type": "narrative"}},
+                "prn": {"target": "Medication.text", "structure": "text", "transform": {"type": "enum", "map": {"true": "Einnahme bei Bedarf", "false": None}}},
+            },
+            "structures": {
+                "route": {
+                    "type": "coalesce", "target": "Medication.route",
+                    "sources": ["art", "methode"],
+                    "policy": "prefer_first_warn_if_different",
+                    "transform": route_transform,
+                },
+                "text": {
+                    "type": "concatenate", "target": "Medication.text",
+                    "separator": "; ",
+                    "sources": [
+                        {"source": "freitext", "transform": {"type": "narrative"}},
+                        {"source": "prn", "transform": {"type": "enum", "map": {"true": "Einnahme bei Bedarf", "false": None}}},
+                    ],
+                },
+            },
+        }
+        assignments, problems = build_assignments(
+            {"values": {"art": {"raw": "oral"}, "methode": "oral", "freitext": "2 Tabletten", "prn": True}},
+            model, cda_model, mapping, {},
+        )
+        self.assertEqual(problems, [])
+        self.assertEqual(
+            assignments["Medication.route"],
+            {"nullFlavor": "OTH", "raw": "oral"},
+        )
+        self.assertEqual(
+            assignments["Medication.text"],
+            "2 Tabletten; Einnahme bei Bedarf",
+        )
+
+        assignments, problems = build_assignments(
+            {"values": {"art": {"raw": "oral"}, "methode": "intravenös"}},
+            model, cda_model, mapping, {},
+        )
+        self.assertEqual(assignments["Medication.route"]["raw"], "oral")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("used the first source", problems[0])
+
+    def test_intentional_unmapped_review_requires_a_null_and_reason(self) -> None:
+        model = {"fields": {"a": {"type": "text"}}, "groups": {}}
+        cda_model = {"targets": {}, "document": []}
+        csv_mapping = {"fields": {"a": None}}
+        valid_mapping = {
+            "version": 9,
+            "fields": {"a": None},
+            "field_reviews": {"a": {
+                "status": "intentionally_unmapped",
+                "reason": "Reviewed source scope excludes this field.",
+            }},
+        }
+        self.assertEqual(
+            validate.check_config(
+                model, cda_model, csv_mapping, valid_mapping,
+                require_site_configuration=False,
+            ),
+            [],
+        )
+        invalid_mapping = {
+            **valid_mapping,
+            "field_reviews": {"a": {"status": "intentionally_unmapped"}},
+        }
+        self.assertIn(
+            "cda-mapping: field_reviews['a'] requires a reason",
+            validate.check_config(
+                model, cda_model, csv_mapping, invalid_mapping,
+                require_site_configuration=False,
+            ),
         )
 
     def test_quantity_normalization_rejects_ambiguous_or_invalid_shapes(self) -> None:

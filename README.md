@@ -709,6 +709,14 @@ value must not exceed the high value. CDA interval quantities use their
 compiler-recorded `low`/`high` targets; this input support does not by itself
 select a clinical dose, rate, or timing mapping.
 
+When ART-DECOR publishes several unit properties, the model retains all of them
+as an admitted domain and explicit input must identify one member. Local source
+spellings can be normalized to UCUM in site configuration:
+
+```json
+{"input": {"unit_aliases": {"g / h": "g/h", "ml/h": "mL/h", "µg/h": "ug/h"}}}
+```
+
 ### Raw code → dataset value
 
 ```json
@@ -734,7 +742,7 @@ mapping whose exact target binding admits `OTH` and whose datatype exposes
 
 ```json
 {
-  "version": 8,
+  "version": 9,
   "fields": {
     "patient.identifikatoren.patienten_id": "PatientIdentifier.id",
     "administrative_aufnahmeinformationen.aufnahmezeitpunkt": [
@@ -752,6 +760,13 @@ mapping whose exact target binding admits `OTH` and whose datatype exposes
       "transform": {"type": "ordinal", "map": {"keine Symptome": 0, "Tod": 6}}
     },
     "masnahmen.wildcard_therapie.code": null
+  },
+  "field_reviews": {
+    "dokumentationsinformationen.beginn_patientenbezogene_dokumentation.zeitpunkt_beginn_patientenbezogene_dokumentation": {
+      "status": "intentionally_unmapped",
+      "reason": "The retained source concept is not used by a current target template.",
+      "decision": "DEC-043"
+    }
   },
   "defaults": {
     "required_unmapped": {"nullFlavor": "NI"}
@@ -858,7 +873,7 @@ the terminology closure. The authorization is limited to that transform and
 target; ordinary mappings, site values, and defaults still fail closed. Once
 the exact ValueSet resolves, its formal membership takes precedence.
 
-`cda-mapping.json` version 8 may also contain declarative scalar, structural,
+`cda-mapping.json` version 9 may also contain declarative scalar, structural,
 and completion rules. The generated proposal currently derives only semantics
 supported by the specification itself:
 Tetanusschutz drives `negationInd` plus `nullFlavor=NI` for unknown status,
@@ -879,8 +894,16 @@ disorder codes are never written as allergen codes. A `for_each` names the exact
 CDA repeat node driven by its source group, so additional repeat-capable target
 ancestors are not populated positionally. The transform vocabulary is
 intentionally small (`identity`, `enum`, `ordinal`, `not`, `code_system`,
-`coded_fallback`, `reviewed_coded_map`) and remains data
+`coded_fallback`, `reviewed_coded_map`, `coded_only`,
+`coded_or_original_text`, `narrative`) and remains data
 rather than clinical Python code.
+
+Reviewed structures can additionally concatenate several source wordings into
+one text target or coalesce them with
+`prefer_first_warn_if_different`. The latter emits a visible warning whenever
+the preferred and fallback values disagree. `field_reviews` distinguishes a
+deliberate null selection from one that has not yet been reviewed; it never
+supplies a runtime value.
 
 Generated ordinal evidence is conservative. A bare leading integer counts only
 when it appears in the option's primary label and is not part of a hyphenated

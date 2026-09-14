@@ -330,7 +330,20 @@ def _value_domain(domain: ET.Element, node: dict[str, Any]) -> None:
                 ("maxLength", "max_length"),
             ):
                 if child.get(source) is not None:
-                    node[target] = child.get(source) if target == "unit" else _number(child.get(source))
+                    if target == "unit":
+                        unit = str(child.get(source) or "").strip()
+                        units = node.setdefault("units", [])
+                        if unit and unit not in units:
+                            units.append(unit)
+                        if len(units) == 1:
+                            node["unit"] = units[0]
+                        else:
+                            # Several property rows describe an admitted unit
+                            # set.  Treating the final row as one fixed unit
+                            # silently rejects every other published member.
+                            node.pop("unit", None)
+                    else:
+                        node[target] = _number(child.get(source))
             if child.get("timeStampPrecision"):
                 node["precision"] = child.get("timeStampPrecision")
         elif kind == "conceptList":
@@ -915,7 +928,7 @@ def _apply_terminal_original_semantics(
         "max_value", "min_length", "max_length",
     )
     list_keys = (
-        "value_sets", "value_set_refs", "codes", "options",
+        "value_sets", "value_set_refs", "codes", "options", "units",
         "terminology_associations",
     )
     changed = 0
@@ -1440,7 +1453,10 @@ def compile_model(
         }
         if node.get("coded_domain"):
             field["coded_domain"] = node["coded_domain"]
-        for name in ("unit", "precision", "min_value", "max_value", "min_length", "max_length"):
+        for name in (
+            "unit", "units", "precision", "min_value", "max_value",
+            "min_length", "max_length",
+        ):
             if name in node:
                 field[name] = node[name]
         formal_values = _formal_values(node, value_sets)

@@ -101,27 +101,32 @@ dosage free text receives minimal narrative wording from its other mapped values
 Ingredient strength remains deliberately unmapped: the active simple branch
 has no ingredient model. The unselected detail sibling would require structured
 `RTO_PQ_PQ` numerator and denominator semantics, while the source is
-unconstrained text and publishes no grammar, unit normalization or denominator
-policy. The active UV Subordinate administration template
-`2.16.840.1.113883.10.21.4.6` exposes alternatives for timing plus
-`doseQuantity` and `rateQuantity`. Quantity normalization now preserves scalar
-magnitudes, ranges and units, and compiled interval quantities expose exact
-low/high assignment targets. This closes the representation/mechanics part of
-the dose/rate issue, but the current source evidence still does not uniquely
-bridge start/stop, dose, rate, body site, PRN and medication-reason fields to
-those alternatives. The three timing meanings also lack a reviewed rule for
-the materialized `IVL_TS`/`PIVL_TS` branches and their compound occurrence
-constraints. They remain unmapped instead of being resolved by German/English
-path vocabulary or positional guessing. See
-[`analyses/2026-09-02-residual-mapping-boundaries.md`](analyses/2026-09-02-residual-mapping-boundaries.md).
+unconstrained text and publishes no denominator policy. DEC-043 now supplies
+the reviewed mappings that source evidence alone could not select: dose and
+continuous rate use the subordinate `doseQuantity` and `rateQuantity`, body
+site uses `approachSiteCode`, and application start uses the atomic subordinate
+`TS`. A scalar dose is legal in `IVL_PQ`; ranges remain supported through the
+compiled low/high representation. The rate's five published property units are
+now retained as an admitted domain instead of incorrectly treating the final
+`g/h` property as fixed. Deployment configuration normalizes local spellings to
+UCUM through `input.unit_aliases`.
 
-The event-related timing `offset` remains a strong structural candidate, but is
-not executable by itself: non-null `EIVL_TS` requires `event`, and source
-concept 528 has no proven correspondence to a target TimingEvent code. The
-outer Medikation `effectiveTime` is `NP`; start/stop therefore cannot be placed
-there as `low`/`high`. Subordinate interval leaves do not become start/stop
-semantics until an explicit association or reviewed rule selects one exact
-timing branch and its compound occurrence behavior.
+Form and route remain terminology-sensitive. An exact site code can populate
+required-bound `administrationUnitCode`; otherwise form wording is retained in
+`Medikation.text`. Body site and route have example bindings, so uncoded values
+use `OTH` with `originalText`. The route structure prefers `Art der Anwendung`,
+falls back to `Methode der Anwendung`, and warns when both differ. Dosage free
+text, event-offset wording, true PRN, both medication reasons, and uncoded form
+wording share `Medikation.text` through a reviewed semicolon concatenation.
+
+Structured dosage `Zeitpunkt`, TimingEvent and event-relative repetition remain
+deferred under the current medication-given scope. Event offset is narrative
+only; no standalone EIVL branch is activated. `CM`, `CD`, `CV`, and `HS` remain
+documented future TimingEvent candidates. Application stop is intentionally
+unmapped because the atomic subordinate branch has no distinct stop slot. The
+outer Medikation `effectiveTime` remains `NP`. These intentional nulls are now
+explicit `field_reviews`, not undocumented omissions. See
+[`analyses/2026-09-14-reviewed-medication-administration-rules.md`](analyses/2026-09-14-reviewed-medication-administration-rules.md).
 
 DEC-029 supplies reviewed scalar construction defaults for the two independent
 mandatory structural values that previously blocked synthetic rendering. The
@@ -187,10 +192,11 @@ unavailable.
 
 ## Transform vocabulary
 
-`cda-mapping.json` version 8 accepts direct target names, small declarative
+`cda-mapping.json` version 9 accepts direct target names, small declarative
 rules, and explicit structural bindings. The built-in scalar transform vocabulary is deliberately limited to `identity`,
 `enum`, `ordinal`, `not`, `code_system`, `coded_fallback`, and
-`reviewed_coded_map`. The generated proposal uses it for the currently
+`reviewed_coded_map`, plus reviewed conditional `coded_only`,
+`coded_or_original_text`, and `narrative` output. The generated proposal uses it for the currently
 proven AKTIN semantics for Tetanusschutz, Isolation, modified Rankin, and
 diagnosis certainty, to carry a normalized source code into one explicitly
 declared open target CodeSystem, and to constrain an explicitly open source
@@ -201,7 +207,9 @@ allowed only for a boolean source and a unique renderable fixed statement.
 target inside an optional branch; unlike ordinary `fallback`, it cannot activate
 the branch or create a repeated occurrence and requires a review reason.
 Structural `for_each`, `repeat_by_discriminator`, and
-`coalesce` behavior is implemented in the generic binding layer and is generated
+`coalesce` behavior is implemented in the generic binding layer; reviewed
+configuration may also use `concatenate` to join several same-occurrence
+wordings into one text target. Generated structures are emitted
 only from formal repeat/discriminator evidence. Legacy reviewed `fan_out`
 configuration remains executable for compatibility.
 
@@ -381,11 +389,11 @@ with 381 errors, 1,780 warnings, and 536 information messages. These are
 reported source-quality boundaries and do not restore prototype constraints or
 relationship-derived mappings.
 
-The source-controlled recovery overlay selects 95/120 fields over the
+The source-controlled recovery overlay selects 106/120 fields over the
 owner-rule proposal's 84/120. Because generated reference-workspace directories
 may be Git-ignored, deleting and recreating `mapping/` would otherwise lose
-eleven proposal-null reviewed field choices—ten manually reviewed choices plus
-DEC-042's finite map—six reviewed target-default overrides, and six
+22 proposal-null reviewed field choices, two medication structures, five
+intentional-null reviews, six reviewed target-default overrides, and six
 reviewed site-requirement associations.
 DEC-038 preserves those decisions in a compact source-controlled overlay pinned
 to the current model and CDA hashes. Applying the overlay is currently a

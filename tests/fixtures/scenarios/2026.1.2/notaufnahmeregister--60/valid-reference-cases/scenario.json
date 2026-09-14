@@ -28,6 +28,12 @@
       "NA",
       "N/A"
     ],
+    "unit_aliases": {
+      "ml/h": "mL/h",
+      "l/h": "L/h",
+      "µg/h": "ug/h",
+      "g / h": "g/h"
+    },
     "sources": {
       "cases": {
         "file": "cases.csv",

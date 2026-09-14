@@ -65,6 +65,16 @@ def check_site(site: Mapping[str, Any], cda: Mapping[str, Any] | None = None) ->
             errors.append(f"site: organization.oid is not a valid OID: {organization.get('oid')!r}")
     input_cfg = site.get("input", {})
     if isinstance(input_cfg, Mapping):
+        unit_aliases = input_cfg.get("unit_aliases", {})
+        if unit_aliases is not None and not isinstance(unit_aliases, Mapping):
+            errors.append("site: input.unit_aliases must be an object")
+        elif isinstance(unit_aliases, Mapping):
+            for source, target in unit_aliases.items():
+                if not str(source).strip() or not str(target).strip():
+                    errors.append(
+                        "site: input.unit_aliases must map non-empty unit "
+                        "spellings to non-empty UCUM units"
+                    )
         sources = input_cfg.get("sources", {})
         if sources is not None and not isinstance(sources, Mapping):
             errors.append("site: input.sources must be an object")
@@ -147,6 +157,46 @@ def check_config(
             errors.append(f"{name}: missing model field {missing}")
         for extra in sorted(mapped - fields):
             errors.append(f"{name}: unknown model field {extra}")
+    field_reviews = cda_mapping.get("field_reviews", {})
+    if not isinstance(field_reviews, Mapping):
+        errors.append("cda-mapping: field_reviews must be an object")
+    else:
+        allowed_review_keys = {
+            "status", "reason", "decision", "reviewed_at", "evidence",
+        }
+        for path, review in field_reviews.items():
+            if path not in fields:
+                errors.append(
+                    f"cda-mapping: field_reviews references unknown model field {path}"
+                )
+                continue
+            if not isinstance(review, Mapping):
+                errors.append(
+                    f"cda-mapping: field_reviews[{path!r}] must be an object"
+                )
+                continue
+            if review.get("status") != "intentionally_unmapped":
+                errors.append(
+                    f"cda-mapping: field_reviews[{path!r}] has unsupported "
+                    f"status {review.get('status')!r}"
+                )
+            if not isinstance(review.get("reason"), str) or not str(
+                review.get("reason") or ""
+            ).strip():
+                errors.append(
+                    f"cda-mapping: field_reviews[{path!r}] requires a reason"
+                )
+            extra = set(review) - allowed_review_keys
+            if extra:
+                errors.append(
+                    f"cda-mapping: field_reviews[{path!r}] has unknown keys "
+                    + ", ".join(sorted(map(str, extra)))
+                )
+            if cda_mapping.get("fields", {}).get(path) is not None:
+                errors.append(
+                    f"cda-mapping: field_reviews[{path!r}] is intentionally "
+                    "unmapped but fields contains a mapping"
+                )
     targets = cda.get("targets", {})
     datapoints = cda.get("datapoints", {})
     structures_by_id = {

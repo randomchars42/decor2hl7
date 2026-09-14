@@ -169,6 +169,17 @@ def structure_rules(mapping: Mapping[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _structure_sources(rule: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Normalize legacy string and transform-bearing structure sources."""
+    result: list[dict[str, Any]] = []
+    for item in rule.get("sources", []):
+        if isinstance(item, str):
+            result.append({"source": item})
+        elif isinstance(item, Mapping) and item.get("source"):
+            result.append(dict(item))
+    return result
+
+
 def construction_supplied_targets(
     cda: Mapping[str, Any], mapping: Mapping[str, Any],
     site: Mapping[str, Any] | None = None,
@@ -1377,7 +1388,15 @@ def _merge_discriminator_occurrences(
     return payloads, discriminators
 
 
-def _coalesce(values: list[Any], policy: str, label: str) -> Any:
+def _comparable_wording(value: Any) -> str:
+    transformed = apply_transform(value, {"type": "narrative"})
+    return "" if transformed is OMIT else str(transformed).strip()
+
+
+def _coalesce(
+    values: list[Any], policy: str, label: str,
+    problems: list[str] | None = None,
+) -> Any:
     if any(isinstance(value, list) for value in values if value is not None):
         count = max(len(value) if isinstance(value, list) else 1 for value in values if value is not None)
         return [
@@ -1390,6 +1409,7 @@ def _coalesce(values: list[Any], policy: str, label: str) -> Any:
                 ],
                 policy,
                 f"{label}[{index}]",
+                problems,
             )
             for index in range(count)
         ]
@@ -1402,11 +1422,40 @@ def _coalesce(values: list[Any], policy: str, label: str) -> Any:
         return present[0]
     if policy == "prefer_first":
         return present[0]
+    if policy == "prefer_first_warn_if_different":
+        comparable = [_comparable_wording(value) for value in present]
+        if any(value != comparable[0] for value in comparable[1:]):
+            if problems is not None:
+                problems.append(
+                    f"coalesce rule {label!r} received differing values "
+                    f"{comparable!r}; used the first source"
+                )
+        return present[0]
     if policy == "earliest":
         return min(present)
     if policy == "latest":
         return max(present)
     raise ValueError(f"coalesce rule {label!r} has unknown policy {policy!r}")
+
+
+def _concatenate(values: list[Any], separator: str) -> Any:
+    if any(isinstance(value, list) for value in values if value is not None):
+        count = max(
+            len(value) if isinstance(value, list) else 1
+            for value in values if value is not None
+        )
+        return [
+            _concatenate([
+                value[index]
+                if isinstance(value, list) and index < len(value)
+                else value if not isinstance(value, list) and index == 0
+                else None
+                for value in values
+            ], separator)
+            for index in range(count)
+        ]
+    present = [str(value) for value in values if _present(value)]
+    return separator.join(present) if present else None
 
 
 def build_assignments(
@@ -1422,25 +1471,18 @@ def build_assignments(
     active_fallback_assignments: list[tuple[str, Any]] = []
     problems: list[str] = []
     structures = structure_rules(mapping)
-    structural_sources: set[str] = set()
-    for structure in structures:
-        kind = str(structure.get("type") or "")
-        if kind in {"fan_out", "repeat_by_discriminator"}:
-            structural_sources.update(
-                str(branch.get("source")) for branch in structure.get("branches", [])
-                if isinstance(branch, Mapping) and branch.get("source")
-            )
-        elif kind == "coalesce":
-            structural_sources.update(str(path) for path in structure.get("sources", []))
-
     for path, selected in mapping.get("fields", {}).items():
-        if selected is None or path in structural_sources:
+        if selected is None:
             continue
         field = model.get("fields", {}).get(path, {})
         value = field_value(record, path, field)
         if not _present(value):
             continue
         for rule in mapping_rules(selected):
+            # A field may have both a structure-owned narrative rule and an
+            # independent conditional coded rule. Skip only the former here.
+            if rule.get("structure"):
+                continue
             logical_name = str(rule["target"])
             name = _physical_target_name(cda, rule)
             target = targets.get(name)
@@ -1486,14 +1528,32 @@ def build_assignments(
         rule_id = str(structure.get("id") or kind)
         if kind == "for_each":
             continue
-        if kind == "coalesce":
-            sources = [str(path) for path in structure.get("sources", [])]
+        if kind in {"coalesce", "concatenate"}:
+            source_specs = _structure_sources(structure)
+            sources = [str(spec["source"]) for spec in source_specs]
             target_name = str(structure.get("target") or "")
-            values = [
-                field_value(record, path, model.get("fields", {}).get(path, {}))
-                for path in sources
-            ]
-            value = _coalesce(values, str(structure.get("policy") or "equal_or_error"), rule_id)
+            values = []
+            for spec in source_specs:
+                transformed = apply_transform(
+                    field_value(
+                        record, str(spec["source"]),
+                        model.get("fields", {}).get(str(spec["source"]), {}),
+                    ),
+                    spec.get("transform"),
+                )
+                values.append(None if transformed is OMIT else transformed)
+            if kind == "coalesce":
+                value = _coalesce(
+                    values,
+                    str(structure.get("policy") or "equal_or_error"),
+                    rule_id,
+                    problems,
+                )
+            else:
+                value = _concatenate(
+                    values, str(structure.get("separator") or "; ")
+                )
+            value = apply_transform(value, structure.get("transform"))
             target = targets.get(target_name, {})
             _assign(assignments, target_name, _prepare_identifier(target_name, target, value, site))
             continue
@@ -1567,8 +1627,10 @@ def covered_shared_claims(mapping: Mapping[str, Any]) -> dict[str, set[str]]:
     covered: dict[str, set[str]] = {}
     for rule in structure_rules(mapping):
         kind = str(rule.get("type") or "")
-        if kind == "coalesce" and rule.get("target"):
-            covered[str(rule["target"])] = {str(path) for path in rule.get("sources", [])}
+        if kind in {"coalesce", "concatenate"} and rule.get("target"):
+            covered[str(rule["target"])] = {
+                str(spec["source"]) for spec in _structure_sources(rule)
+            }
         elif kind in {"fan_out", "repeat_by_discriminator"}:
             for branch in rule.get("branches", []):
                 if isinstance(branch, Mapping) and branch.get("target") and branch.get("source"):
@@ -1592,7 +1654,10 @@ def validate_structures(
         if rule_id in seen_ids:
             errors.append(f"{prefix} is duplicated")
         seen_ids.add(rule_id)
-        if kind not in {"for_each", "fan_out", "repeat_by_discriminator", "coalesce"}:
+        if kind not in {
+            "for_each", "fan_out", "repeat_by_discriminator", "coalesce",
+            "concatenate",
+        }:
             errors.append(f"{prefix} has unknown type {kind!r}")
             continue
         if kind == "for_each":
@@ -1632,18 +1697,33 @@ def validate_structures(
                 )
             for_each_targets[location] = rule_id
             continue
-        if kind == "coalesce":
-            sources = [str(path) for path in rule.get("sources", [])]
+        if kind in {"coalesce", "concatenate"}:
+            source_specs = _structure_sources(rule)
+            sources = [str(spec["source"]) for spec in source_specs]
             target_name = str(rule.get("target") or "")
             if len(sources) < 2:
                 errors.append(f"{prefix} requires at least two sources")
-            if str(rule.get("policy") or "equal_or_error") not in {
-                "equal_or_error", "prefer_first", "earliest", "latest",
+            if kind == "coalesce" and str(
+                rule.get("policy") or "equal_or_error"
+            ) not in {
+                "equal_or_error", "prefer_first",
+                "prefer_first_warn_if_different", "earliest", "latest",
             }:
                 errors.append(f"{prefix} has an invalid policy")
+            if kind == "concatenate" and not isinstance(
+                rule.get("separator", "; "), str
+            ):
+                errors.append(f"{prefix} separator must be a string")
             for path in sources:
                 if path not in fields:
                     errors.append(f"{prefix} references unknown source field {path!r}")
+            for spec in source_specs:
+                for reason in validate_transform(spec.get("transform")):
+                    errors.append(
+                        f"{prefix} source {spec.get('source')!r}: {reason}"
+                    )
+            for reason in validate_transform(rule.get("transform")):
+                errors.append(f"{prefix}: {reason}")
             target = targets.get(target_name)
             if not target or not target.get("writable") or len(target.get("locations", [])) != 1:
                 errors.append(f"{prefix} references non-renderable target {target_name!r}")

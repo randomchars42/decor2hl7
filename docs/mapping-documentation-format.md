@@ -179,12 +179,20 @@ Use execution-oriented status labels:
 
 - **Mapped** — direct executable assignment;
 - **Transform** — executable after a declarative transformation;
-- **Structural rule** — repetition, repeat-by-discriminator or coalescing
+- **Structural rule** — repetition, repeat-by-discriminator, coalescing, or
+  reviewed concatenation
   controls assignment;
 - **Presence rule** — a boolean activates an optional statement whose payload
   is fixed by the target template; false omits the statement;
 - **Rule** — another executable multi-target or fallback rule;
 - **Review required** — no executable mapping has been approved.
+
+An explicit `field_reviews[path]` entry with
+`status: intentionally_unmapped` changes the wording to **Intentionally
+unmapped** and prints its reason and decision reference. It does not turn the
+field into a mapping and does not hide candidate evidence. Coverage headlines
+count these separately as `= reviewed null`, so they are not simultaneously
+reported as unresolved suggestions or unreviewed no-target gaps.
 
 Review-required candidates must distinguish an ordinary unselected leaf from a
 compound-datatype component whose normative companion is absent. For the latter,
