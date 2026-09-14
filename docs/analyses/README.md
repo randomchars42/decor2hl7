@@ -10,6 +10,11 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-14-reviewed-medication-administration-rules.md`](2026-09-14-reviewed-medication-administration-rules.md)
+  records the accepted dose, rate, start, body-site, conditional form, route
+  merge, narrative aggregation and provisional CEDIS-onset rules; keeps dosage
+  timing and named non-transmitted fields as explicit reviewed nulls; and
+  records successful six-document XSD/Schematron validation.
 - [`2026-09-14-aktin-medication-reviewed-mappings.md`](2026-09-14-aktin-medication-reviewed-mappings.md)
   compares the reviewed medication mappings with the exact published
   transaction instance, removes the CDA/RIM-only material-name selection, and

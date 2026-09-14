@@ -908,6 +908,9 @@ def _parse_element(
     inherited_closed: bool = False,
 ) -> dict[str, Any]:
     name = element.get("name") or "hl7:element"
+    xsi_type_match = re.search(
+        r"\[@xsi:type\s*=\s*(['\"])([^'\"]+)\1\]", name
+    )
     namespace_prefix, namespace_uri = _namespace_identity(name, template)
     current = path + (name,)
     current_path = "/".join(current)
@@ -949,6 +952,10 @@ def _parse_element(
         "template_description": _description(template),
         "id": element.get("id"),
         "datatype": element.get("datatype"),
+        **(
+            {"xsi_type": xsi_type_match.group(2)}
+            if xsi_type_match else {}
+        ),
         "min": _int(element.get("minimumMultiplicity")),
         "max": _maximum(element.get("maximumMultiplicity")),
         "mandatory": (

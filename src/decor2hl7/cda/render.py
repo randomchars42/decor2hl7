@@ -1219,6 +1219,8 @@ def _render_node_once(
             str(node.get("namespace_uri") or "") or None,
         ))
     )
+    if node.get("xsi_type"):
+        element.set(f"{{{XSI}}}type", str(node["xsi_type"]))
 
     validation_rules = list(
         node.get("validation_rules", node.get("asserts", []))

@@ -553,6 +553,7 @@ def _site_scaffold(
             "decimal_separator": ".",
             "empty_is_null": True,
             "null_values": ["NULL", "NA", "N/A"],
+            "unit_aliases": {},
             "sources": sources,
             "source_note": (
                 "Source file names are relative to the external input root. "
@@ -688,6 +689,7 @@ def _mapping_decisions_differ(
         for key, default in (
             ("fields", {}), ("structures", {}), ("defaults", {}),
             ("target_defaults", {}), ("site_requirements", {}),
+            ("field_reviews", {}),
         )
     )
 

@@ -329,6 +329,17 @@ class ReferenceClosureTests(unittest.TestCase):
             if path not in proposal.get("target_defaults", {})
         }
         self.assertEqual(recovery["field_overrides"], proposal_null_reviewed)
+        reviewed_only_structures = {
+            name: value for name, value in reviewed["structures"].items()
+            if proposal.get("structures", {}).get(name) != value
+        }
+        self.assertEqual(
+            recovery["structure_overrides"], reviewed_only_structures,
+        )
+        self.assertEqual(
+            recovery["field_review_overrides"],
+            reviewed.get("field_reviews", {}),
+        )
         self.assertEqual(
             recovery["target_default_overrides"], reviewed_only_defaults,
         )
@@ -341,8 +352,10 @@ class ReferenceClosureTests(unittest.TestCase):
             {
                 "dataset_fields": 120,
                 "generated_mapped_fields": 84,
-                "reviewed_mapped_fields": 95,
-                "field_override_count": 11,
+                "reviewed_mapped_fields": 106,
+                "field_override_count": 22,
+                "structure_override_count": 2,
+                "field_review_override_count": 5,
                 "target_default_override_count": 6,
                 "site_requirement_override_count": 6,
             },

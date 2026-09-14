@@ -106,20 +106,53 @@ def _quantity_number(raw: Any, site: Mapping[str, Any], label: str) -> int | flo
     return number
 
 
-def _quantity_unit(raw: Any, fixed: Any) -> str | None:
-    unit = str(raw).strip() if raw not in (None, "") else None
-    fixed_unit = str(fixed).strip() if fixed not in (None, "") else None
+def _normalize_unit(raw: Any, site: Mapping[str, Any]) -> str | None:
+    if raw in (None, ""):
+        return None
+    unit = str(raw).strip()
+    aliases = site.get("input", {}).get("unit_aliases", {})
+    if isinstance(aliases, Mapping):
+        replacement = aliases.get(unit)
+        if replacement not in (None, ""):
+            return str(replacement).strip()
+    return unit
+
+
+def _quantity_unit(
+    raw: Any,
+    fixed: Any,
+    allowed: Any,
+    site: Mapping[str, Any],
+) -> str | None:
+    unit = _normalize_unit(raw, site)
+    fixed_unit = _normalize_unit(fixed, site)
     if unit and fixed_unit and unit != fixed_unit:
         raise ValueError(
             f"quantity unit {unit!r} conflicts with fixed dataset unit {fixed_unit!r}"
         )
-    return unit or fixed_unit
+    result = unit or fixed_unit
+    allowed_units = (
+        [_normalize_unit(item, site) for item in allowed]
+        if isinstance(allowed, list) else []
+    )
+    admitted = {item for item in allowed_units if item}
+    if result and admitted and result not in admitted:
+        raise ValueError(
+            f"quantity unit {result!r} is outside the dataset units "
+            f"{sorted(admitted)!r}"
+        )
+    if not result and len(admitted) > 1:
+        raise ValueError(
+            "quantity unit is required because the dataset admits several units"
+        )
+    return result or (next(iter(admitted)) if len(admitted) == 1 else None)
 
 
 def _quantity_bound(
     raw: Any,
     shared_unit: str | None,
     fixed_unit: Any,
+    allowed_units: Any,
     site: Mapping[str, Any],
     label: str,
 ) -> dict[str, Any]:
@@ -130,10 +163,12 @@ def _quantity_bound(
                 f"quantity {label} must contain only value and optional unit"
             )
         value = _quantity_number(raw["value"], site, label)
-        unit = _quantity_unit(raw.get("unit") or shared_unit, fixed_unit)
+        unit = _quantity_unit(
+            raw.get("unit") or shared_unit, fixed_unit, allowed_units, site
+        )
     else:
         value = _quantity_number(raw, site, label)
-        unit = _quantity_unit(shared_unit, fixed_unit)
+        unit = _quantity_unit(shared_unit, fixed_unit, allowed_units, site)
     return {"value": value, **({"unit": unit} if unit else {})}
 
 
@@ -142,6 +177,7 @@ def _parse_quantity(
 ) -> dict[str, Any]:
     """Return the target-neutral scalar/range quantity representation."""
     fixed_unit = field.get("unit")
+    allowed_units = field.get("units")
     if isinstance(raw, Mapping):
         if raw.get("nullFlavor"):
             return dict(raw)
@@ -151,9 +187,15 @@ def _parse_quantity(
                 raise ValueError(
                     "quantity range must contain low, high, and optional unit"
                 )
-            shared = _quantity_unit(raw.get("unit"), fixed_unit)
-            low = _quantity_bound(raw["low"], shared, fixed_unit, site, "low")
-            high = _quantity_bound(raw["high"], shared, fixed_unit, site, "high")
+            shared = _quantity_unit(
+                raw.get("unit"), fixed_unit, allowed_units, site
+            )
+            low = _quantity_bound(
+                raw["low"], shared, fixed_unit, allowed_units, site, "low"
+            )
+            high = _quantity_bound(
+                raw["high"], shared, fixed_unit, allowed_units, site, "high"
+            )
             low_unit = low.get("unit")
             high_unit = high.get("unit")
             if low_unit and high_unit and low_unit != high_unit:
@@ -172,23 +214,34 @@ def _parse_quantity(
             raise ValueError(
                 "quantity must contain value and optional unit, or low and high"
             )
-        return _quantity_bound(raw, None, fixed_unit, site, "value")
+        return _quantity_bound(
+            raw, None, fixed_unit, allowed_units, site, "value"
+        )
     if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-        return _quantity_bound(raw, None, fixed_unit, site, "value")
+        return _quantity_bound(
+            raw, None, fixed_unit, allowed_units, site, "value"
+        )
 
     text = str(raw).strip()
     match = _QUANTITY_RANGE.fullmatch(text)
     if match:
-        unit = _quantity_unit(match.group(3), fixed_unit)
-        low = _quantity_bound(match.group(1), unit, fixed_unit, site, "low")
-        high = _quantity_bound(match.group(2), unit, fixed_unit, site, "high")
+        unit = _quantity_unit(
+            match.group(3), fixed_unit, allowed_units, site
+        )
+        low = _quantity_bound(
+            match.group(1), unit, fixed_unit, allowed_units, site, "low"
+        )
+        high = _quantity_bound(
+            match.group(2), unit, fixed_unit, allowed_units, site, "high"
+        )
         if low["value"] > high["value"]:
             raise ValueError("quantity range low exceeds high")
         return {"low": low, "high": high}
     match = _QUANTITY_SCALAR.fullmatch(text)
     if match:
         return _quantity_bound(
-            match.group(1), match.group(2), fixed_unit, site, "value"
+            match.group(1), match.group(2), fixed_unit, allowed_units, site,
+            "value",
         )
     raise ValueError(
         f"quantity value {raw!r} is neither a scalar nor a low-high range"

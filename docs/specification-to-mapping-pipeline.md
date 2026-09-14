@@ -578,6 +578,10 @@ resolved explicitly:
   exact discriminator and source/member correspondence are proven;
 - `coalesce` allows equivalent singleton fields to share one target and uses
   `equal_or_error` unless another policy is reviewed;
+- reviewed `prefer_first_warn_if_different` keeps deterministic precedence but
+  reports a difference, while `concatenate` applies per-source transforms,
+  skips absent values, and joins same-occurrence text with an explicit
+  separator;
 - `for_each` binds each source repeat dimension to one explicit CDA repeat
   node;
 - unresolved shared targets are blocked rather than populated positionally.
@@ -612,11 +616,12 @@ The final part of `build` writes:
 | `cda-expanded-readable.xml` / `.md` | Human-readable effective CDA hierarchy |
 | final `cda.json` | Physical target registry plus mapping-derived logical datapoints |
 
-The proposal uses mapping version 8 and separates:
+The proposal uses mapping version 9 and separates:
 
 - `fields`: source field to logical target selections and scalar transforms;
-- `structures`: named occurrence, repetition, discriminator, and coalescing
-  rules;
+- `structures`: named occurrence, repetition, discriminator, coalescing, and
+  reviewed text-concatenation rules;
+- `field_reviews`: reviewer-owned reasons for intentional null selections;
 - `defaults.required_unmapped`: generic completion policy for active required
   target leaves;
 - `target_defaults`: reviewed exact target-specific completion values and

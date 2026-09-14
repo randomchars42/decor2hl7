@@ -109,6 +109,37 @@ def _table_value(table: Mapping[Any, Any], key: Any) -> tuple[bool, Any]:
     return False, None
 
 
+def _wording(value: Any) -> Any:
+    """Return the portable human wording of one normalized scalar value."""
+    if isinstance(value, Mapping):
+        if "low" in value or "high" in value:
+            low = value.get("low", {})
+            high = value.get("high", {})
+            if isinstance(low, Mapping) and isinstance(high, Mapping):
+                low_value = low.get("value")
+                high_value = high.get("value")
+                unit = low.get("unit") or high.get("unit")
+                if low_value is not None and high_value is not None:
+                    return (
+                        f"{low_value}-{high_value}"
+                        + (f" {unit}" if unit else "")
+                    )
+        if "value" in value:
+            scalar = value.get("value")
+            if scalar is not None:
+                unit = value.get("unit")
+                return f"{scalar}" + (f" {unit}" if unit else "")
+        return next((
+            value.get(key) for key in (
+                "raw", "canonical", "displayName", "display_name", "code",
+            )
+            if value.get(key) not in (None, "")
+        ), None)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return value
+
+
 def _reviewed_coded_map(value: Any, transform: Mapping[str, Any]) -> Any:
     """Apply one finite, concept-identity-pinned reviewed code mapping.
 
@@ -281,6 +312,52 @@ def _scalar(value: Any, transform: Mapping[str, Any]) -> Any:
         if raw not in (None, ""):
             result["raw"] = raw
         return result
+    if kind == "coded_only":
+        if not isinstance(value, Mapping):
+            return OMIT
+        code = value.get("code")
+        system = value.get("codeSystem") or value.get("code_system")
+        if code in (None, "") or system in (None, ""):
+            return OMIT
+        result = {"code": str(code), "codeSystem": str(system)}
+        display = value.get("displayName") or value.get("display_name")
+        if display not in (None, ""):
+            result["displayName"] = display
+        if value.get("raw") not in (None, ""):
+            result["raw"] = value["raw"]
+        return result
+    if kind == "coded_or_original_text":
+        if isinstance(value, Mapping):
+            code = value.get("code")
+            system = value.get("codeSystem") or value.get("code_system")
+            if code not in (None, "") and system not in (None, ""):
+                result = {
+                    "code": str(code), "codeSystem": str(system),
+                }
+                display = value.get("displayName") or value.get("display_name")
+                if display not in (None, ""):
+                    result["displayName"] = display
+                raw = _wording(value)
+                if raw not in (None, ""):
+                    result["raw"] = raw
+                return result
+        raw = _wording(value)
+        if raw in (None, ""):
+            return OMIT
+        return {
+            "nullFlavor": str(transform.get("null_flavor") or "OTH"),
+            "raw": str(raw),
+        }
+    if kind == "narrative":
+        if transform.get("only_if_uncoded") and isinstance(value, Mapping):
+            if value.get("code") and (
+                value.get("codeSystem") or value.get("code_system")
+            ):
+                return OMIT
+        wording = _wording(value)
+        if wording in (None, ""):
+            return OMIT
+        return str(transform.get("prefix") or "") + str(wording)
     if kind == "reviewed_coded_map":
         return _reviewed_coded_map(value, transform)
     raise ValueError(f"unknown mapping transform {kind!r}")
@@ -309,7 +386,8 @@ def validate_transform(transform: Any) -> list[str]:
     kind = str(transform.get("type") or "")
     if kind not in {
         "identity", "enum", "ordinal", "not", "code_system",
-        "coded_fallback", "reviewed_coded_map",
+        "coded_fallback", "coded_only", "coded_or_original_text",
+        "narrative", "reviewed_coded_map",
     }:
         return [f"unknown transform type {kind!r}"]
     if kind in {"enum", "ordinal"} and not isinstance(transform.get("map"), Mapping):
@@ -327,6 +405,10 @@ def validate_transform(transform: Any) -> list[str]:
             return ["coded_fallback transform requires coded allowed members"]
         if not str(transform.get("null_flavor") or ""):
             return ["coded_fallback transform requires null_flavor"]
+    if kind == "coded_or_original_text" and not str(
+        transform.get("null_flavor") or ""
+    ):
+        return ["coded_or_original_text transform requires null_flavor"]
     if kind == "reviewed_coded_map":
         binding = transform.get("value_set")
         if (

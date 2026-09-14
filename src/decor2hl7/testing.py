@@ -560,7 +560,7 @@ def _copy_scenario_input(
     site_input = site["input"]
     for key in (
         "encoding", "delimiter", "decimal_separator", "empty_is_null",
-        "null_values",
+        "null_values", "unit_aliases",
     ):
         if key in input_cfg:
             site_input[key] = input_cfg[key]
@@ -644,6 +644,7 @@ def synthetic_site(
             "decimal_separator": ".",
             "empty_is_null": True,
             "null_values": ["NULL", "NA", "N/A"],
+            "unit_aliases": {},
             "sources": {},
         },
         "cda": {"values": {}, "fallback_if_active": {}},

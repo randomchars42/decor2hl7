@@ -3295,7 +3295,7 @@ def _cda_mapping_analysis(
             detail.pop("gap", None)
 
     proposal: dict[str, Any] = {
-        "version": 8,
+        "version": 9,
         "model": {
             "dataset_id": model.get("meta", {}).get("dataset_id"),
             "transaction_id": model.get("meta", {}).get("transaction_id"),
@@ -3306,6 +3306,7 @@ def _cda_mapping_analysis(
             "template": cda.get("document_template", {}).get("name"),
         },
         "fields": fields,
+        "field_reviews": {},
         "structures": structures,
         "defaults": {
             "required_unmapped": {"nullFlavor": "NI"},
@@ -4627,7 +4628,7 @@ def migrate_mapping_target_identities(
             # losing the evidence would make a later unique migration harder.
             refreshed[str(name)] = dict(identity)
     current["target_identities"] = dict(sorted(refreshed.items()))
-    current["version"] = max(int(current.get("version") or 0), 8)
+    current["version"] = max(int(current.get("version") or 0), 9)
     return changed
 
 

@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "decision": "DEC-038",
+  "version": 2,
+  "decision": "DEC-038, DEC-043",
   "release": {
     "key": "2026.1.2",
     "date": "2026-04-27T18:50:33"
@@ -11,18 +11,20 @@
     "effective_date": "2026-03-25T00:00:00"
   },
   "base": "model/<release>/<transaction>/cda-mapping.proposed.json",
-  "merge_semantics": "Shallow-merge field_overrides into fields, target_default_overrides into target_defaults, and site_requirement_overrides into site_requirements; preserve all other generated keys.",
+  "merge_semantics": "Shallow-merge field_overrides into fields, structure_overrides into structures, field_review_overrides into field_reviews, target_default_overrides into target_defaults, and site_requirement_overrides into site_requirements; preserve all other generated keys.",
   "expected": {
     "dataset_fields": 120,
     "generated_mapped_fields": 84,
-    "reviewed_mapped_fields": 95,
-    "field_override_count": 11,
+    "reviewed_mapped_fields": 106,
+    "field_override_count": 22,
+    "structure_override_count": 2,
+    "field_review_override_count": 5,
     "target_default_override_count": 6,
     "site_requirement_override_count": 6
   },
   "identity": {
-    "model_sha256": "ce199532643b1bfb28f38e45dafe9862de92631c4a4e54962942805cfc8fae9d",
-    "cda_sha256": "8610fd06ab1221d3aeec90a445456ba6c772f18ebec7b03cdca7018fb7ca84f1"
+    "model_sha256": "f7c0553265727af0d3b7951e143ecbff9f58a699f17fc0b61e5e4c367c7d7ac2",
+    "cda_sha256": "0212923014977a40fc40d131be3c1ea9b2d480d36f15ce567c240a20bd96b0e8"
   },
   "target_alias_migrations": {
     "CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.low@20160601": "CDAEncompassingEncounter.low",
@@ -119,6 +121,7 @@
       }
     },
     "notfallanamnese.zeitpunkt_erster_arztkontakt": "CDADocumentationOf.documentationOf.serviceEvent.performer.time.low",
+    "notfallanamnese.beschwerden_bei_vorstellung.ereigniseintritt": "Problemconcernactcedis.low",
     "abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose": "Problemobservationeddiagnosis.originalText",
     "abschlussdiagnosen.abschlussdiagnose.icd10": "Problemobservationeddiagnosis.observation.value",
     "masnahmen.medikamentose_therapie.medikation.medikament.chargennummer": "UVMedicationInformationsimple.lotNumberText",
@@ -129,8 +132,192 @@
         "code_system": "1.2.276.0.76.4.6"
       }
     },
-    "masnahmen.medikamentose_therapie.medikation.dosierung.freitext": "Medikation.text",
-    "masnahmen.medikamentose_therapie.medikation.dosierung.art_der_anwendung": "Medikation.routeCode"
+    "masnahmen.medikamentose_therapie.medikation.medikament.darreichungsform": [
+      {
+        "target": "UVSubordinateadministration.administrationUnitCode",
+        "transform": {
+          "type": "coded_only"
+        }
+      },
+      {
+        "target": "Medikation.text",
+        "structure": "concatenate-medication-narrative",
+        "transform": {
+          "type": "narrative",
+          "only_if_uncoded": true,
+          "prefix": "Darreichungsform: "
+        }
+      }
+    ],
+    "masnahmen.medikamentose_therapie.medikation.anwendungszeiten.startzeitpunkt_der_anwendung": "UVSubordinateadministration.effectiveTime_value_or_nullFlavor",
+    "masnahmen.medikamentose_therapie.medikation.dosierung.freitext": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative"
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.zeitangabe.ereignisbezogene_wiederholung.offset": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Ereignisoffset: "
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.einnahme_bei_bedarf": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "enum",
+        "map": {
+          "true": "Einnahme bei Bedarf",
+          "false": null
+        }
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.korperstelle": {
+      "target": "Medikation.approachSiteCode",
+      "transform": {
+        "type": "coded_or_original_text",
+        "null_flavor": "OTH"
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.art_der_anwendung": {
+      "target": "Medikation.routeCode",
+      "structure": "coalesce-medication-route",
+      "transform": {
+        "type": "coded_or_original_text",
+        "null_flavor": "OTH"
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.methode_der_anwendung": {
+      "target": "Medikation.routeCode",
+      "structure": "coalesce-medication-route",
+      "transform": {
+        "type": "coded_or_original_text",
+        "null_flavor": "OTH"
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.dosismenge_und_einheit": "UVSubordinateadministration.doseQuantity",
+    "masnahmen.medikamentose_therapie.medikation.dosierung.kontinuierliche_gabe_rate": "UVSubordinateadministration.rateQuantity",
+    "masnahmen.medikamentose_therapie.medikation.grund_der_medikation.begrundungstext": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Begründung: "
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.grund_der_medikation.kodierte_begrundung": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Kodierte Begründung: "
+      }
+    }
+  },
+  "structure_overrides": {
+    "concatenate-medication-narrative": {
+      "type": "concatenate",
+      "target": "Medikation.text",
+      "separator": "; ",
+      "reason": "Preserve reviewed medication dosage, PRN, reason and uncoded administration-form wording in the one available medication narrative slot.",
+      "sources": [
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.dosierung.freitext",
+          "transform": {
+            "type": "narrative"
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.dosierung.zeitangabe.ereignisbezogene_wiederholung.offset",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Ereignisoffset: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.dosierung.einnahme_bei_bedarf",
+          "transform": {
+            "type": "enum",
+            "map": {
+              "true": "Einnahme bei Bedarf",
+              "false": null
+            }
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.grund_der_medikation.begrundungstext",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Begründung: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.grund_der_medikation.kodierte_begrundung",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Kodierte Begründung: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.darreichungsform",
+          "transform": {
+            "type": "narrative",
+            "only_if_uncoded": true,
+            "prefix": "Darreichungsform: "
+          }
+        }
+      ]
+    },
+    "coalesce-medication-route": {
+      "type": "coalesce",
+      "target": "Medikation.routeCode",
+      "sources": [
+        "masnahmen.medikamentose_therapie.medikation.dosierung.art_der_anwendung",
+        "masnahmen.medikamentose_therapie.medikation.dosierung.methode_der_anwendung"
+      ],
+      "policy": "prefer_first_warn_if_different",
+      "transform": {
+        "type": "coded_or_original_text",
+        "null_flavor": "OTH"
+      },
+      "reason": "Use Art der Anwendung when present, otherwise Methode der Anwendung; warn when both present wordings differ. Preserve uncoded wording as originalText."
+    }
+  },
+  "field_review_overrides": {
+    "abschlussdiagnosen.abschlussdiagnose.icd10_sekundardiagnose": {
+      "status": "intentionally_unmapped",
+      "reason": "AKTIN explicitly states that secondary ICD-10 is not transmitted in the current transaction.",
+      "decision": "DEC-043",
+      "reviewed_at": "2026-09-14"
+    },
+    "dokumentationsinformationen.beginn_patientenbezogene_dokumentation.zeitpunkt_beginn_patientenbezogene_dokumentation": {
+      "status": "intentionally_unmapped",
+      "reason": "AKTIN states that this retained dataset concept is not used by any current template and is not transmitted separately.",
+      "decision": "DEC-043",
+      "reviewed_at": "2026-09-14"
+    },
+    "masnahmen.medikamentose_therapie.medikation.anwendungszeiten.stoppzeitpunkt_der_anwendung": {
+      "status": "intentionally_unmapped",
+      "reason": "The reviewed rule maps only the application start to the atomic subordinate TS; the active target offers no separate stop slot.",
+      "decision": "DEC-043",
+      "reviewed_at": "2026-09-14"
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.zeitangabe.zeitpunkt": {
+      "status": "intentionally_unmapped",
+      "reason": "Current AKTIN scope documents medication given via the application start; structured dosage timing is deferred.",
+      "decision": "DEC-043",
+      "reviewed_at": "2026-09-14"
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.zeitangabe.ereignisbezogene_wiederholung.ereignis": {
+      "status": "intentionally_unmapped",
+      "reason": "Event-relative repeat timing is outside the current AKTIN medication-given scope and is retained for later review.",
+      "decision": "DEC-043",
+      "reviewed_at": "2026-09-14"
+    }
   },
   "target_default_overrides": {
     "Allergyintoleranceobservation.effectiveTime": {

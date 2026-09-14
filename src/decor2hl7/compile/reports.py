@@ -213,12 +213,21 @@ def _coverage_index(
     mapping: Mapping[str, Any], audit: Mapping[str, Any],
 ) -> dict[str, Any]:
     configured = mapping.get("fields", {})
+    reviews = mapping.get("field_reviews", {})
     audited = audit.get("fields", {})
     selected: dict[str, list[str]] = {}
     suggested: dict[str, list[str]] = {}
     missing: list[str] = []
+    reviewed: dict[str, Mapping[str, Any]] = {}
     for path in _ordered_model_paths(model):
         selection = configured.get(path) if isinstance(configured, Mapping) else None
+        review = reviews.get(path) if isinstance(reviews, Mapping) else None
+        if (
+            selection is None and isinstance(review, Mapping)
+            and review.get("status") == "intentionally_unmapped"
+        ):
+            reviewed[path] = review
+            continue
         targets = _selected_targets(selection)
         if targets:
             selected[path] = targets
@@ -231,7 +240,10 @@ def _coverage_index(
             suggested[path] = candidates
         else:
             missing.append(path)
-    return {"selected": selected, "suggested": suggested, "missing": missing}
+    return {
+        "selected": selected, "suggested": suggested, "missing": missing,
+        "reviewed": reviewed,
+    }
 
 
 def _dataset_coverage_tree(
@@ -251,6 +263,7 @@ def _dataset_coverage_tree(
 
     selected = coverage.get("selected", {})
     suggested = coverage.get("suggested", {})
+    reviewed = coverage.get("reviewed", {})
     lines = ["```text", "   Dataset model"]
 
     def render(parent: str | None, stem: str = "") -> None:
@@ -269,6 +282,15 @@ def _dataset_coverage_tree(
                 status = "✓"
                 targets = selected[path]
                 consequence = " → " + ", ".join(f"{{{target}}}" for target in targets)
+            elif path in reviewed:
+                status = "="
+                review = reviewed[path]
+                decision = (
+                    f" [{review.get('decision')}]"
+                    if isinstance(review, Mapping) and review.get("decision")
+                    else ""
+                )
+                consequence = " → — intentionally unmapped" + decision
             elif path in suggested:
                 status = "!"
                 targets = suggested[path]
@@ -459,6 +481,7 @@ def coverage_headline_counts(
         "mapped_leaves": sum(
             len(targets) for targets in coverage["selected"].values()
         ),
+        "reviewed_datapoints": len(coverage.get("reviewed", {})),
         "suggested_datapoints": len(coverage["suggested"]),
         "suggested_leaves": sum(
             len(targets) for targets in coverage["suggested"].values()
@@ -488,6 +511,7 @@ def format_coverage_headline(
     return (
         f"Model: {emphasized(_counted(counts['datapoints'], 'datapoint'))} · "
         f"✓ mapped {emphasized(mapped)} · "
+        f"= reviewed null {emphasized(str(counts.get('reviewed_datapoints', 0)) + ' dp')} · "
         f"! suggested {emphasized(suggested)} · "
         f"× no target {emphasized(str(counts['no_target_datapoints']) + ' dp')} · "
         f"○ no source {emphasized(_counted(counts['no_source_leaves'], 'leaf'))}"
@@ -586,6 +610,7 @@ def _review_required(
 ) -> list[dict[str, Any]]:
     model_fields = model.get("fields", {})
     configured = mapping.get("fields", {})
+    reviews = mapping.get("field_reviews", {})
     audited = audit.get("fields", {})
     order = [path for path in model.get("order", []) if path in model_fields]
     order.extend(sorted(path for path in model_fields if path not in order))
@@ -623,6 +648,12 @@ def _review_required(
             )
         else:
             action = "Find a representation manually, or retain `null`."
+        review = (
+            reviews.get(path, {}) if isinstance(reviews, Mapping) else {}
+        )
+        review = review if isinstance(review, Mapping) else {}
+        if review.get("status") == "intentionally_unmapped":
+            action = "Retain the explicit `null` unless the reviewed scope changes."
         rows.append({
             "path": str(path),
             "name": str(model_fields.get(path, {}).get("name") or path),
@@ -630,6 +661,7 @@ def _review_required(
             "detail": detail,
             "action": action,
             "reason": _review_reason(detail, candidates),
+            "review": review,
         })
     return rows
 
@@ -952,7 +984,8 @@ def _configuration_excerpt(
             structure = mapping.get("structures", {}).get(name, {})
             compact_structure = {
                 key: structure[key] for key in (
-                    "type", "source_group", "target_repeat", "target", "policy", "sources"
+                    "type", "source_group", "target_repeat", "target", "policy",
+                    "sources", "separator", "transform", "reason",
                 ) if structure.get(key) is not None
             }
             if structure.get("branches"):
@@ -1012,7 +1045,12 @@ def _review_dataset_tree(
             detail = detail if isinstance(detail, Mapping) else {}
             gap = detail.get("gap", {})
             gap = gap if isinstance(gap, Mapping) else {}
-            status = "!" if (
+            review = row.get("review", {})
+            reviewed_null = bool(
+                isinstance(review, Mapping)
+                and review.get("status") == "intentionally_unmapped"
+            )
+            status = "=" if reviewed_null else "!" if (
                 row.get("candidates") or detail.get("primary")
                 or detail.get("runtime_blocked")
             ) else "×"
@@ -1023,6 +1061,7 @@ def _review_dataset_tree(
                 str(gap.get(key) or "") for key in ("gate", "kind")
             ).strip(":")
             notes = [value for value in (
+                "intentionally unmapped" if reviewed_null else "",
                 gate,
                 f"{possible_count} possible target{'s' if possible_count != 1 else ''}"
                 if possible_count else "no generated target inventory",
@@ -1597,9 +1636,40 @@ def _structural_and_completion_lines(
                     f"Assign `{rule.get('target')}` from the configured sources using "
                     f"`{rule.get('policy')}`."
                 )
+            elif kind == "concatenate":
+                sources = [
+                    str(item.get("source") or "")
+                    if isinstance(item, Mapping) else str(item)
+                    for item in rule.get("sources", [])
+                ]
+                explanation = (
+                    f"Join present values from {', '.join(f'`{item}`' for item in sources)} "
+                    f"with `{rule.get('separator', '; ')}` and assign "
+                    f"`{rule.get('target')}`."
+                )
             else:
                 explanation = "Review this structural rule in `cda-mapping.json`."
             lines += [f"- `{name}`: {explanation}", ""]
+
+    field_reviews = mapping.get("field_reviews", {})
+    if isinstance(field_reviews, Mapping) and field_reviews:
+        lines += [
+            "## Reviewed intentional non-mappings",
+            "",
+            "These dataset fields remain explicit `null` selections by review, "
+            "not because the proposal engine forgot them.",
+            "",
+        ]
+        for path, review in field_reviews.items():
+            if not isinstance(review, Mapping):
+                continue
+            decision = (
+                f" ({review.get('decision')})" if review.get("decision") else ""
+            )
+            lines.append(
+                f"- `{path}` — {review.get('reason') or 'No reason recorded'}{decision}"
+            )
+        lines.append("")
 
     target_defaults = mapping.get("target_defaults", {})
     lines += [
@@ -1847,6 +1917,7 @@ def render_cda_mapping_markdown(
         "- ! **Evidence candidate** — related evidence exists, but no executable mapping is selected.",
         "- ? **Possible target (unproven)** — type-compatible and reachable, but not semantic evidence.",
         "- × **No generated target** — manual template review has not yet produced a candidate.",
+        "- = **Intentionally unmapped** — an explicit reviewed-null reason is recorded.",
         "",
         "Nothing in a candidate list is selected automatically. Edit `cda-mapping.json`. "
         "Do not edit the XML-like template skeletons in this report; all trees, tables, "
@@ -1878,12 +1949,24 @@ def render_cda_mapping_markdown(
         detail = detail if isinstance(detail, Mapping) else {}
         gap = detail.get("gap", {})
         gap = gap if isinstance(gap, Mapping) else {}
+        review = row.get("review", {})
+        review = review if isinstance(review, Mapping) else {}
+        reviewed_null = review.get("status") == "intentionally_unmapped"
         lines += [
             f"### {row['name']}",
             "",
             f"Dataset datapoint: `{row['path']}`",
             "",
-            f"**Why review is required:** {row['reason']}",
+            (
+                "**Reviewed decision:** Intentionally unmapped — "
+                + str(review.get("reason") or "no reason recorded")
+                + (
+                    f" ({review.get('decision')})"
+                    if review.get("decision") else ""
+                )
+                if reviewed_null else
+                f"**Why review is required:** {row['reason']}"
+            ),
             "",
         ]
         if gap:
@@ -1989,6 +2072,8 @@ def render_cda_mapping_trees_markdown(
         "- ✓ **Mapped** — selected executable mapping.",
         "- ! **Suggested** — a writable CDA leaf exists, but no executable mapping is selected.",
         "- × **No target** — no suitable writable CDA leaf was found.",
+        "- = **Intentionally unmapped** — the field remains `null` by an "
+        "explicit reviewed decision.",
         "- ○ **No source** — a reportable writable CDA leaf has no dataset counterpart.",
         "- ▲ **Required gap** — an active owner-required CDA value has no "
         "portable configured source; this combines with its coverage symbol "

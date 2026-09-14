@@ -403,7 +403,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 "name": "Offset", "concept": "offset", "type": "quantity",
                 "repeat_chain": [], "value_sets": [], "codes": [],
             }
-            model = {
+            model: dict[str, Any] = {
                 "meta": {"template_id": "doc", "template_effective_date": "2026"},
                 "groups": {}, "fields": {"timing.offset": offset_field},
             }
@@ -417,6 +417,30 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(
                 offset["non_null_requirement_owners"],
                 {event_name: [owner_name]},
+            )
+
+            payload, problems = cda.emit(
+                {"key": "P1", "values": {"timing.event": {
+                    "code": "CM", "codeSystem": "2.16.840.1.113883.5.139",
+                }}, "instances": {}},
+                {**model, "fields": {
+                    **model["fields"],
+                    "timing.event": {
+                        "name": "Event", "type": "code",
+                        "repeat_chain": [], "value_sets": [], "codes": [],
+                    },
+                }},
+                compiled, {"fields": {"timing.event": event_name}}, {},
+            )
+            self.assertEqual(problems, [])
+            effective_time = find_required(
+                ET.fromstring(payload), f".//{{{HL7}}}effectiveTime",
+            )
+            self.assertEqual(
+                effective_time.get(
+                    "{http://www.w3.org/2001/XMLSchema-instance}type"
+                ),
+                "EIVL_TS",
             )
 
             proposal, audit, _, details = cda_mapping_audit(
