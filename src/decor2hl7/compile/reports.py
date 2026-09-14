@@ -13,6 +13,7 @@ from ..bindings import (
     required_construction_gaps,
     required_construction_gap_targets,
     required_unmapped_null_flavor,
+    site_requirement_targets,
 )
 from ..transforms import cda_target_name, mapping_rules
 
@@ -313,6 +314,7 @@ def _cda_coverage_tree(
         for target in targets:
             suggested_sources[str(target)].append(str(path))
     required_gap_targets = required_construction_gap_targets(cda, mapping)
+    site_owned_targets = site_requirement_targets(cda, mapping)
 
     included = {
         str(name) for name, target in cda.get("targets", {}).items()
@@ -321,6 +323,7 @@ def _cda_coverage_tree(
     included.update(selected_sources)
     included.update(suggested_sources)
     included.update(str(name) for name in mapping.get("target_defaults", {}))
+    included.update(site_owned_targets)
 
     nodes, parents = view["nodes"], view["parents"]
     rows_by_section: dict[tuple[int, ...] | None, list[dict[str, Any]]] = defaultdict(list)
@@ -402,6 +405,8 @@ def _cda_coverage_tree(
                         )
                 if row["name"] in required_gap_targets:
                     status += "▲"
+                elif row["name"] in site_owned_targets:
+                    status += "◆"
                 leaf = _leaf(row["target"].get("path") or row["target"].get("element_name"))
                 lines.append(
                     f"{status:<3}{area_stem}{entity_stem[len(area_stem):]}{branch} "
@@ -1988,12 +1993,16 @@ def render_cda_mapping_trees_markdown(
         "- ▲ **Required gap** — an active owner-required CDA value has no "
         "portable configured source; this combines with its coverage symbol "
         "(for example `○▲`).",
+        "- ◆ **Site-owned requirement** — an active owner-required CDA value is "
+        "explicitly delegated to site configuration; this combines with its "
+        "coverage symbol (for example `○◆`).",
         "- ✓! **Mapped and suggested** — one datapoint is selected and another remains under review.",
         "",
         "The CDA tree excludes generic datatype-expansion plumbing and fixed, "
         "conditional-fixed, or system-supplied values. Those remain available in `cda.json`.",
-        "The required-gap marker evaluates the portable mapping proposal; site "
-        "values can satisfy the marked slots at deployment or test setup.",
+        "The required-gap and site-ownership markers evaluate the mapping rendered "
+        "for this report. `◆` records a portable ownership declaration; it does not "
+        "claim that a concrete site value was checked.",
         "",
         "## Complete dataset tree",
         "",

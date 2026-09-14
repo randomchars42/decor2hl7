@@ -10,6 +10,10 @@ external boundaries are maintained in `../known-issues.md`.
 
 Current focused implementation plans:
 
+- [`2026-09-14-aktin-medication-reviewed-mappings.md`](2026-09-14-aktin-medication-reviewed-mappings.md)
+  compares the reviewed medication mappings with the exact published
+  transaction instance, removes the CDA/RIM-only material-name selection, and
+  selects the transaction-declared lot-number leaf for Chargennummer.
 - [`2026-09-13-target-governed-coded-values-and-null-flavor.md`](2026-09-13-target-governed-coded-values-and-null-flavor.md)
   implements target-neutral source normalization, exact concept-member coding,
   target-owned OTH/UNC fallback, central required-binding conformance and XSD

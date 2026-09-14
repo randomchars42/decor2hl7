@@ -349,6 +349,34 @@ class ReferenceClosureTests(unittest.TestCase):
         )
         self.assertEqual(recovery["identity"]["model_sha256"], json_digest(model))
         self.assertEqual(recovery["identity"]["cda_sha256"], json_digest(cda))
+        product_name = (
+            "masnahmen.medikamentose_therapie.medikation.medikament."
+            "arzneimittel.arzneimittelname"
+        )
+        lot_number = (
+            "masnahmen.medikamentose_therapie.medikation.medikament."
+            "chargennummer"
+        )
+        material_name = (
+            "UVMedicationInformationsimple.manufacturedProduct."
+            "manufacturedMaterial.name"
+        )
+        self.assertIsNone(reviewed["fields"][product_name])
+        self.assertEqual(
+            reviewed["fields"][lot_number],
+            "UVMedicationInformationsimple.lotNumberText",
+        )
+        self.assertTrue(cda["targets"][material_name]["datatype_derived"])
+        self.assertIsNone(cda["targets"][material_name]["element_id"])
+        self.assertEqual(
+            {item["source"] for item in cda["targets"][material_name]["provenance"]},
+            {"cda-rim"},
+        )
+        self.assertFalse(
+            cda["targets"]["UVMedicationInformationsimple.lotNumberText"].get(
+                "datatype_derived", False,
+            )
+        )
 
     def test_mapping_gaps_are_persisted_and_rendered(self) -> None:
         audit = self._load(self.model_dir / "mapping-audit.json")

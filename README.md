@@ -655,7 +655,9 @@ and structural group context. `cda-mapping-trees.md` owns the two exhaustive
 status-gutter trees. Generic datatype plumbing and fixed/system values are
 excluded from the inverse coverage surface; stable identifiers remain on one
 physical line. In the inverse tree, `▲` marks active owner-required values that
-still need a portable or site-configured source. The reusable, target-neutral
+still lack a configured construction source, while `◆` marks those explicitly
+delegated to site configuration. The site marker is an ownership declaration,
+not proof that a concrete site value was checked. The reusable, target-neutral
 format is specified in
 [`docs/mapping-documentation-format.md`](docs/mapping-documentation-format.md).
 When selected mappings use reviewed attachment or source-resolution

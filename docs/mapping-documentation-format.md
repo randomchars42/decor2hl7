@@ -83,6 +83,11 @@ The categories mean:
   required, but the portable mapping proposal has no configured source for it.
   The marker combines with the coverage symbol, for example `○▲`; a site value
   may satisfy that slot during deployment or test setup.
+- **Site-owned requirement** (`◆`) — the owner rules make the CDA value active
+  and required, and the reviewed mapping explicitly delegates it through a
+  valid `site_requirements` declaration. The marker combines with the coverage
+  symbol, for example `○◆`; it records portable ownership and does not prove
+  that a concrete site value has been checked.
 
 The first three categories partition the dataset model. Counts distinguish
 dataset datapoints (`dp`) from logical CDA leaf assignments because one rule may
@@ -153,9 +158,9 @@ be completed by site configuration.
 For a reviewed mapping, `check-cda-mapping` lists every valid
 `site_requirements` declaration with its exact
 `cda.values`/`cda.fallback_if_active` channel. Such a declaration removes `▲`
-only when a tree is rendered from that reviewed mapping, because it establishes
-explicit construction ownership; it does not claim that a concrete site value
-was checked. Invalid declarations remain errors and retain the
+and adds `◆` only when a tree is rendered from that reviewed mapping, because it
+establishes explicit construction ownership; it does not claim that a concrete
+site value was checked. Invalid declarations remain errors and retain the
 missing-required marker.
 
 The trees are coverage overviews. They omit candidate scores, rejected

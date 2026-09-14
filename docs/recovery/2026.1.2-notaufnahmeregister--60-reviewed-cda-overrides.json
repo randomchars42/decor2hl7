@@ -121,7 +121,7 @@
     "notfallanamnese.zeitpunkt_erster_arztkontakt": "CDADocumentationOf.documentationOf.serviceEvent.performer.time.low",
     "abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose": "Problemobservationeddiagnosis.originalText",
     "abschlussdiagnosen.abschlussdiagnose.icd10": "Problemobservationeddiagnosis.observation.value",
-    "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname": "UVMedicationInformationsimple.manufacturedProduct.manufacturedMaterial.name",
+    "masnahmen.medikamentose_therapie.medikation.medikament.chargennummer": "UVMedicationInformationsimple.lotNumberText",
     "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelcode": {
       "target": "UVMedicationInformationsimple.code",
       "transform": {

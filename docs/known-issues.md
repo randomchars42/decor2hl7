@@ -78,13 +78,17 @@ DEC-028's medication `select_spec_branch` overlay.
 
 Under DEC-037, a generic `relationship` path cannot make a mapping executable.
 The generated `mapping-audit.json` is authoritative for which medication
-mappings remain; product name, product code, dosage narrative, and route must
+mappings are proposed; product name, product code, dosage narrative, and route must
 not be retained solely because an `ADAPT`, `SPEC`, `EQUIV`, `COPY`, `VERSION`,
-or other relationship connects their concepts. The simple branch does expose
-CDA `lotNumberText`, but no current formal association proves that source
-Chargennummer selects it; it remains unmapped rather than being promoted from
-physical compatibility alone. See
-[`analyses/2026-09-11-aktin-medication-simple-branch.md`](analyses/2026-09-11-aktin-medication-simple-branch.md).
+or other relationship connects their concepts. The exact transaction does not
+list CDA `manufacturedMaterial/name`; that target is only an open-template
+CDA/RIM expansion and the reviewed product-name mapping has therefore been
+removed. It does explicitly list `lotNumberText`, and direct human review of the
+source definition has selected it for Chargennummer without changing the
+automatic proposal rule. See
+[`analyses/2026-09-11-aktin-medication-simple-branch.md`](analyses/2026-09-11-aktin-medication-simple-branch.md)
+and
+[`analyses/2026-09-14-aktin-medication-reviewed-mappings.md`](analyses/2026-09-14-aktin-medication-reviewed-mappings.md).
 
 DEC-030 closes the medication entry's required narrative-link construction.
 The compiled `Medikation.text` mapping now supplies human-readable section
@@ -380,8 +384,8 @@ relationship-derived mappings.
 The source-controlled recovery overlay selects 95/120 fields over the
 owner-rule proposal's 84/120. Because generated reference-workspace directories
 may be Git-ignored, deleting and recreating `mapping/` would otherwise lose
-eleven proposal-null reviewed field choices—the ten relationship-era choices
-plus DEC-042's finite map—six reviewed target-default overrides, and six
+eleven proposal-null reviewed field choices—ten manually reviewed choices plus
+DEC-042's finite map—six reviewed target-default overrides, and six
 reviewed site-requirement associations.
 DEC-038 preserves those decisions in a compact source-controlled overlay pinned
 to the current model and CDA hashes. Applying the overlay is currently a

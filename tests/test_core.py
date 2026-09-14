@@ -1211,7 +1211,7 @@ class CoreTests(unittest.TestCase):
         )
         unused["min"] = 1
         unused["mandatory"] = True
-        cda_model = {
+        cda_model: dict[str, Any] = {
             "document_template": {
                 "id": "doc", "effective_date": "2026-01-01",
                 "name": "Document", "display_name": "Test document",
@@ -1249,6 +1249,7 @@ class CoreTests(unittest.TestCase):
                     "datatype": "ST", "kind": "element", "description": "Unused text",
                     "template_name": "Referral", "template_display_name": "Referral",
                     "writable": True, "fixed": {}, "system_value": None,
+                    "min": 1, "mandatory": True,
                 },
             },
         }
@@ -1261,7 +1262,7 @@ class CoreTests(unittest.TestCase):
                 "case.referral": {"name": "Referral source", "parent": "case"},
             },
         }
-        mapping_cfg = {"fields": {
+        mapping_cfg: dict[str, Any] = {"fields": {
             "case.start": "Encounter.low", "case.end": "Encounter.high",
             "case.referral": None,
         }}
@@ -1307,6 +1308,25 @@ class CoreTests(unittest.TestCase):
             "○▲         └── text {Referral.unused} ← no dataset counterpart",
             trees,
         )
+        cda_model["targets"]["Referral.unused"]["datatype_derived"] = True
+        mapping_cfg["site_requirements"] = {"Referral.unused": {
+            "channel": "values",
+            "reason": "The deployment owns this required value.",
+        }}
+        site_owned_trees = render_cda_mapping_trees_markdown(
+            model, cda_model, mapping_cfg, audit
+        )
+        self.assertIn(
+            "○◆         └── text {Referral.unused} ← no dataset counterpart",
+            site_owned_trees,
+        )
+        self.assertIn("◆ **Site-owned requirement**", site_owned_trees)
+        self.assertIn(
+            "it does not claim that a concrete site value was checked",
+            site_owned_trees,
+        )
+        mapping_cfg.pop("site_requirements")
+        cda_model["targets"]["Referral.unused"].pop("datatype_derived")
         section["min"] = 0
         document["children"][1]["min"] = 0
         optional_trees = render_cda_mapping_trees_markdown(

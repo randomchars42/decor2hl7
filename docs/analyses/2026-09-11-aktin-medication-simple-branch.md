@@ -2,6 +2,11 @@
 
 Date: 2026-09-11
 
+Status: the branch-selection conclusion remains current. The mapping-specific
+product-name and lot-number conclusions were superseded by the direct
+transaction-instance review on 2026-09-14; see
+[`2026-09-14-aktin-medication-reviewed-mappings.md`](2026-09-14-aktin-medication-reviewed-mappings.md).
+
 ## Question
 
 Does the refreshed authoritative workspace justify replacing the medication
