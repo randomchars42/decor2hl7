@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from .data import field_value
-from .semantics import identifier_root_for_target, transformed_compatibility
+from .cda.semantics import identifier_root_for_target, transformed_compatibility
 from .cda.model import ValueRepresentationKind
 from .cda.terminology import (
     NULL_FLAVORS,
@@ -193,13 +193,11 @@ def structure_rules(mapping: Mapping[str, Any]) -> list[dict[str, Any]]:
             {"id": str(name), **dict(rule)}
             for name, rule in raw.items() if isinstance(rule, Mapping)
         ]
-    if isinstance(raw, list):
-        return [dict(rule) for rule in raw if isinstance(rule, Mapping)]
     return []
 
 
 def _structure_sources(rule: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Normalize legacy string and transform-bearing structure sources."""
+    """Normalize concise and transform-bearing structure sources."""
     result: list[dict[str, Any]] = []
     for item in rule.get("sources", []):
         if isinstance(item, str):
@@ -1191,7 +1189,7 @@ def for_each_target_positions(
     """Map each source repeat dimension to an explicit CDA repeat ancestor.
 
     ``None`` means that no complete explicit alignment exists and callers must
-    retain positional compatibility.  A returned list contains, for each source
+    retain positional behavior. A returned list contains, for each source
     repeat level, the index of its bound CDA repeat ancestor.
     """
     chain = list(
@@ -1284,7 +1282,7 @@ def _fallback(primary: Any, fallback: Any) -> Any:
     return primary if _present(primary) else fallback
 
 
-def _fan_out(
+def _distribute_branch_values(
     values: list[tuple[Any, Mapping[str, Any]]], depth: int
 ) -> tuple[Any, dict[str, Any]]:
     """Add one branch occurrence below ``depth`` existing source repeats."""
@@ -1314,7 +1312,9 @@ def _fan_out(
             else:
                 child = value if index == 0 else None
             nested.append((child, constants))
-        child_payload, child_constants = _fan_out(nested, depth - 1)
+        child_payload, child_constants = _distribute_branch_values(
+            nested, depth - 1
+        )
         nested_payload.append(child_payload)
         for name in set(constants_by_name) | set(child_constants):
             constants_by_name.setdefault(name, []).append(child_constants.get(name))
@@ -1677,7 +1677,7 @@ def build_assignments(
                 _prepare_identifier(target_name, target, value, site),
             )
             continue
-        if kind in {"fan_out", "repeat_by_discriminator"}:
+        if kind == "repeat_by_discriminator":
             branches = [branch for branch in structure.get("branches", []) if isinstance(branch, Mapping)]
             if not branches:
                 continue
@@ -1701,7 +1701,9 @@ def build_assignments(
                 raise ValueError(
                     f"repeat_by_discriminator rule {rule_id!r} sources have different repeat depths"
                 )
-            payload, constants = _fan_out(branch_values, next(iter(depths)))
+            payload, constants = _distribute_branch_values(
+                branch_values, next(iter(depths))
+            )
             if structure.get("coalesce_existing_discriminator"):
                 discriminator = structure.get("discriminator", {})
                 discriminator_name = str(
@@ -1751,7 +1753,7 @@ def covered_shared_claims(mapping: Mapping[str, Any]) -> dict[str, set[str]]:
             covered[str(rule["target"])] = {
                 str(spec["source"]) for spec in _structure_sources(rule)
             }
-        elif kind in {"fan_out", "repeat_by_discriminator"}:
+        elif kind == "repeat_by_discriminator":
             for branch in rule.get("branches", []):
                 if isinstance(branch, Mapping) and branch.get("target") and branch.get("source"):
                     covered.setdefault(cda_target_name(branch), set()).add(str(branch["source"]))
@@ -1775,7 +1777,7 @@ def validate_structures(
             errors.append(f"{prefix} is duplicated")
         seen_ids.add(rule_id)
         if kind not in {
-            "for_each", "fan_out", "repeat_by_discriminator", "coalesce",
+            "for_each", "repeat_by_discriminator", "coalesce",
             "concatenate", "compose_coded",
         }:
             errors.append(f"{prefix} has unknown type {kind!r}")

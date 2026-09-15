@@ -4,7 +4,7 @@ import json
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from decor2hl7.cda.parity import declared_endpoint_parity
 from decor2hl7.compile import mapping as mapping_compiler
@@ -197,7 +197,7 @@ class ReferenceClosureTests(unittest.TestCase):
     @staticmethod
     def _load(path: Path) -> dict[str, Any]:
         with path.open(encoding="utf-8") as handle:
-            return json.load(handle)
+            return cast(dict[str, Any], json.load(handle))
 
     def test_build_degradation_stays_inside_reviewed_boundary(self) -> None:
         """The allowed set may shrink only through a deliberate fixture edit."""

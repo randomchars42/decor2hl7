@@ -275,7 +275,7 @@ def closure_records(
     role: str = "build",
 ) -> list[ArtifactRecord]:
     closure = load_json(transaction_dir / "closure.json")
-    crawl_complete = closure.get("crawl_complete", closure.get("complete"))
+    crawl_complete = closure.get("crawl_complete")
     if not crawl_complete or closure.get("interrupted") or closure.get("truncated"):
         raise ValueError("transaction crawl is incomplete; rerun `decor2hl7 fetch`")
     manifest = load_json(release_dir / "manifest.json")

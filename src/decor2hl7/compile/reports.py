@@ -159,20 +159,6 @@ def _entity_groups(rows: list[Mapping[str, Any]]) -> list[tuple[str, list[Mappin
     return list(grouped.items())
 
 
-def _outline_datapoint_lines(
-    stem: str,
-    row: Mapping[str, Any],
-    *,
-    last: bool,
-    status: str = "",
-) -> list[str]:
-    """Render one status-gutter leaf on one physical line."""
-    branch = "└──" if last else "├──"
-    name = str(row["dataset_name"])
-    target = f"{{{row['target']}}}"
-    return [f"{status:<3}{stem}{branch} {name} → {target}"]
-
-
 def _ordered_model_paths(model: Mapping[str, Any]) -> list[str]:
     fields = model.get("fields", {})
     order = [str(path) for path in model.get("order", []) if path in fields]
@@ -361,10 +347,6 @@ def _binding_trace(target: Mapping[str, Any]) -> str:
             identity += f" @ {revision}"
         if identity not in bindings:
             bindings.append(identity)
-    if not bindings:
-        bindings.extend(
-            str(value) for value in target.get("value_sets", []) if value
-        )
     return ", ".join(f"ValueSet {value}" for value in bindings)
 
 
@@ -1194,7 +1176,8 @@ def _review_reason(
     if blocked:
         return (
             "The best-supported CDA target is shared with another dataset field. "
-            "A repetition, fan-out, or merge rule is required before it is executable."
+            "An occurrence-alignment, repeat-by-discriminator, or coalescing rule "
+            "is required before it is executable."
         )
     if any(row.get("result") == "transform required" for row in candidates):
         return (
@@ -1414,26 +1397,6 @@ def _contextual_xml(
     for root in tree["children"].values():
         lines.extend(_render_preview_node(root))
     return lines
-
-
-def _candidate_sections(
-    review_rows: Sequence[Mapping[str, Any]],
-    view: Mapping[str, Any],
-    cda: Mapping[str, Any],
-) -> dict[tuple[int, ...] | None, set[str]]:
-    result: dict[tuple[int, ...] | None, set[str]] = defaultdict(set)
-    for review in review_rows:
-        for candidate in review.get("candidates", []):
-            target = cda.get("targets", {}).get(str(candidate.get("target") or ""), {})
-            locations = target.get("locations", [])
-            if len(locations) != 1 or _location(locations[0]) is None:
-                continue
-            location = _location(locations[0])
-            assert location is not None
-            result[_section_of(location, view["nodes"], view["parents"])].add(
-                str(review["path"])
-            )
-    return result
 
 
 def _configuration_excerpt(
@@ -2124,7 +2087,7 @@ def _structural_and_completion_lines(
             if not isinstance(rule, Mapping):
                 continue
             kind = str(rule.get("type") or "unknown")
-            if kind in {"fan_out", "repeat_by_discriminator"}:
+            if kind == "repeat_by_discriminator":
                 branches = [
                     f"`{branch.get('source')}` → `{{{branch.get('target')}}}`"
                     for branch in rule.get("branches", []) if isinstance(branch, Mapping)

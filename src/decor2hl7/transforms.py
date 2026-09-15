@@ -26,7 +26,7 @@ _REVIEWED_CODED_MAP_MARKER = "__decor2hl7_reviewed_coded_map__"
 def mapping_rules(value: Any) -> list[dict[str, Any]]:
     """Normalize a mapping value to rule dictionaries.
 
-    Backward-compatible direct strings and lists of strings are accepted.
+    Direct strings are the concise form; objects carry transforms and structure.
     """
     if value is None:
         return []
@@ -38,10 +38,6 @@ def mapping_rules(value: Any) -> list[dict[str, Any]]:
         elif isinstance(item, Mapping) and item.get("target"):
             out.append(dict(item))
     return out
-
-
-def selected_targets(value: Any) -> list[str]:
-    return [str(rule["target"]) for rule in mapping_rules(value)]
 
 
 def cda_target_name(rule: Mapping[str, Any]) -> str:
@@ -65,8 +61,7 @@ def _selected_value(value: Any, transform: Mapping[str, Any]) -> Any:
 
     The old implicit order is retained when ``select`` is absent.  If a known
     logical choice has no formal terminology code, normalization preserves its
-    canonical/raw label; use that label as the final implicit key so reviewed
-    legacy enum/ordinal transforms remain executable. An explicit selector is
+    canonical/raw label; use that label as the final implicit key. An explicit selector is
     important for terminology transforms:
     a user-facing canonical label may change while the formal code (for example
     ``A`` or ``Z``) does not.

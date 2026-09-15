@@ -250,15 +250,8 @@ def _tolerant_source_key(source: Mapping[str, Any]) -> str:
 
 def collect_templates(
     xml_paths: Iterable[Path],
-    fallback_paths: Iterable[Path] = (),
-    cutoff: str | None = None,
 ) -> dict[str, list[ET.Element]]:
     """Collect fetched template definitions; live evidence is never build input."""
-    fallback_paths = list(fallback_paths)
-    if fallback_paths:
-        raise ValueError(
-            "fallback template inputs are not allowed; fetch exact build artifacts"
-        )
     templates: dict[str, list[ET.Element]] = defaultdict(list)
     seen: set[TemplateKey] = set()
 
@@ -307,7 +300,7 @@ def _is_executable_template_revision(template: ET.Element) -> bool:
     )
 
 
-def select_template_revision(
+def select_template(
     templates: dict[str, list[ET.Element]], template_id: str, flexibility: str | None = None
 ) -> ET.Element | None:
     rows = [
@@ -320,12 +313,6 @@ def select_template_revision(
         exact = [row for row in rows if (row.get("effectiveDate") or "") == flexibility]
         return exact[-1] if exact else None
     return rows[-1]
-
-
-# Compatibility name for callers outside the CDA compiler. The implementation
-# name mirrors the ART-DECOR operation and makes its place in the rule pipeline
-# explicit.
-select_template = select_template_revision
 
 
 def _template_relations(template: ET.Element, kinds: set[str] | None = None) -> Iterable[ET.Element]:
@@ -1005,9 +992,6 @@ def _parse_element(
         }],
         "targets": [],
         "validation_rules": validation_rules,
-        # Compatibility for existing cda.json consumers; canonical code uses
-        # validation_rules because both assert and report are executable.
-        "asserts": validation_rules,
         "lets": lets,
         "variable_definitions": variable_definitions,
         "textual_constraints": textual_constraints,
@@ -1043,7 +1027,6 @@ def _parse_include(
         "is_closed": inherited_closed or _xml_true(include.get("isClosed")),
         "children": [],
         "validation_rules": validation_rules,
-        "asserts": validation_rules,
         "lets": lets,
         "variable_definitions": variable_definitions,
         "textual_constraints": textual_constraints,
@@ -1095,7 +1078,6 @@ def _parse_choice(
         "provenance": [{"source": "template-choice", **source}],
         "targets": [],
         "validation_rules": validation_rules,
-        "asserts": validation_rules,
         "lets": lets,
         "variable_definitions": variable_definitions,
         "textual_constraints": textual_constraints,
@@ -1138,11 +1120,6 @@ def _direct_template_rules(template: ET.Element) -> list[dict[str, Any]]:
         elif kind == "include" and child.get("ref"):
             result.append(_parse_include(child, template, (), template_closed))
     return result
-
-
-def _direct_template(template: ET.Element) -> list[dict[str, Any]]:
-    """Compatibility wrapper for tests and extension validation."""
-    return _direct_template_rules(template)
 
 
 def _merge_context_attribute(
@@ -1212,7 +1189,6 @@ def _apply_document_template_context(
         _merge_context_attribute(roots[0], attribute)
     roots[0].setdefault("lets", {}).update(lets)
     roots[0].setdefault("validation_rules", []).extend(rules)
-    roots[0]["asserts"] = roots[0]["validation_rules"]
     roots[0].setdefault("variable_definitions", []).extend(definitions)
     roots[0].setdefault("textual_constraints", []).extend(constraints)
 
@@ -1368,7 +1344,7 @@ def _owner_rule_diagnostics(
     diagnostics: list[dict[str, Any]] = []
     parent_rules = list(inherited_rules)
     for node in nodes:
-        rules = list(node.get("validation_rules", node.get("asserts", [])))
+        rules = list(node.get("validation_rules", []))
         textual = list(node.get("textual_constraints", []))
         for constraint in textual:
             normative = list(constraint.get("normative_terms", []))
@@ -1834,7 +1810,6 @@ def _expand_nodes(
                 node["attributes"] = _template_context_attributes(target)
                 node.setdefault("lets", {}).update(target_lets)
                 node.setdefault("validation_rules", []).extend(target_rules)
-                node["asserts"] = node["validation_rules"]
                 node.setdefault("variable_definitions", []).extend(target_variables)
                 node.setdefault("textual_constraints", []).extend(target_constraints)
                 node["children"] = _expand_nodes(
@@ -1884,7 +1859,6 @@ def _expand_nodes(
                     "attributes": _template_context_attributes(target),
                     "children": contained,
                     "validation_rules": target_rules,
-                    "asserts": target_rules,
                     "lets": target_lets,
                     "variable_definitions": target_variables,
                     "textual_constraints": target_constraints,
@@ -1966,7 +1940,7 @@ def _datatype_child(
             list(parent.get("provenance", [])) if parent.get("model_derived") else []
         ),
         "targets": [],
-        "asserts": [],
+        "validation_rules": [],
         "lets": {},
         "datatype_derived": True,
         "datatype_expansion_depth": int(parent.get("datatype_expansion_depth") or 0) + 1,
@@ -2229,7 +2203,7 @@ def _materialize_polymorphic_structure(
                     "sources": [branch_source],
                     "provenance": [branch_source],
                     "targets": [],
-                    "asserts": [],
+                    "validation_rules": [],
                     "lets": {},
                     "requirement_owner": branch_path,
                     "non_null_required_parts": list(
@@ -3485,24 +3459,18 @@ def _annotate_linked_narrative_targets(
 def compile_cda(
     xml_paths: Iterable[Path],
     model: dict[str, Any],
-    fallback_paths: Iterable[Path] = (),
-    cutoff: str | None = None,
     *,
     strict: bool = True,
     strict_specializations: bool = False,
     core_definition_paths: Iterable[Path] = (),
-    value_set_paths: Iterable[Path] = (),
     cda_extensions: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    # Retained for API compatibility. ValueSet resources no longer turn
-    # ART-DECOR example members into executable construction defaults.
-    del value_set_paths
     template_id = str(model.get("meta", {}).get("template_id") or "")
     if not template_id:
         raise ValueError("model has no representing CDA template")
     template_effective = str(model.get("meta", {}).get("template_effective_date") or "") or None
     xml_paths = list(xml_paths)
-    templates = collect_templates(xml_paths, fallback_paths, cutoff)
+    templates = collect_templates(xml_paths)
     extensions = normalize_extensions(cda_extensions)
     for extension in extensions:
         if (
@@ -3594,7 +3562,7 @@ def compile_cda(
     ) -> None:
         for index, node in enumerate(nodes):
             here = prefix + (index,)
-            for rule in node.get("validation_rules", node.get("asserts", [])):
+            for rule in node.get("validation_rules", []):
                 validation_rules.append({
                     **dict(rule),
                     "location": ".".join(map(str, here)),
@@ -3655,9 +3623,6 @@ def compile_cda(
         "datapoints": {},
         "source_index": source_index,
         "validation_rules": validation_rules,
-        # Backwards-compatible field name retained for older readers. Entries
-        # carry an explicit kind and may therefore be assert or report.
-        "assertions": validation_rules,
         "textual_constraints": textual_constraints,
         "variable_definitions": variable_definitions,
         "terminology_constraints": terminology_constraints,
@@ -3698,39 +3663,9 @@ def compile_cda(
     }
 
 
-def write_cda(
-    xml_paths: Iterable[Path],
-    model_dir: Path,
-    model: dict[str, Any],
-    fallback_paths: Iterable[Path] = (),
-    cutoff: str | None = None,
-    *,
-    strict_specializations: bool = False,
-) -> dict[str, Any]:
-    cda = compile_cda(
-        xml_paths, model, fallback_paths, cutoff,
-        strict_specializations=strict_specializations,
-    )
-    write_json(model_dir / "cda.json", cda)
-    (model_dir / "cda-assertions.sch").write_text(schematron(cda), encoding="utf-8")
-    return cda
-
-
-def compile_cda_model(
-    templates: Iterable[Path], model: dict[str, Any], *,
-    strict_specializations: bool = False,
-) -> dict[str, Any]:
-    """Compile all available exact templates and report closure gaps."""
-    return compile_cda(
-        templates, model, strict=False,
-        strict_specializations=strict_specializations,
-    )
-
-
 def write_cda_model(
     templates: Iterable[Path], model_dir: Path, model: dict[str, Any],
     core_definition_paths: Iterable[Path] = (),
-    value_set_paths: Iterable[Path] = (),
     cda_extensions: Iterable[Mapping[str, Any]] = (),
     strict_specializations: bool = False,
 ) -> dict[str, Any]:
@@ -3739,7 +3674,6 @@ def write_cda_model(
         templates, model, strict=False,
         strict_specializations=strict_specializations,
         core_definition_paths=core_definition_paths,
-        value_set_paths=value_set_paths,
         cda_extensions=cda_extensions,
     )
     write_json(model_dir / "cda.json", cda)

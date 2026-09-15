@@ -209,11 +209,17 @@ The complete sequence and authority boundaries are described in
 The portable mapping separates:
 
 - `fields`: scalar selections and transforms;
-- `structures`: occurrence, discriminator, coalescing, and concatenation rules;
+- `structures`: the exact rule types `for_each`,
+  `repeat_by_discriminator`, `coalesce`, `concatenate`, and `compose_coded`;
 - `field_reviews`: intentional null selections;
 - `defaults` and `target_defaults`: generic and exact reviewed completion;
 - `site_requirements`: required values delegated to a named site channel;
 - target identities and configuration provenance.
+
+`for_each` aligns an existing repeated source group with a repeated CDA
+ancestor. `repeat_by_discriminator` instead creates separately labelled CDA
+occurrences for distinct source fields that share one physical value target.
+Structure type names are exact; `check-cda-mapping` rejects unknown names.
 
 Generated Markdown explains the JSON but is never itself configuration. The
 format contract is
@@ -239,9 +245,13 @@ After regenerating the companion reference workspace for its selected release
 and transaction, run:
 
 ```bash
+python3 -m pip install -e '.[dev]'
 make baseline
 make check
 ```
+
+`make check` validates documentation, runs mypy in strict mode, and executes the
+unit-test suite.
 
 Review the baseline diff before accepting it. Generated coverage counts and
 conformance diagnostics belong in the reference artifacts and fixtures rather

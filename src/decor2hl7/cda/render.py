@@ -27,7 +27,7 @@ from ..bindings import (
 from ..cooccurrence import (
     cooccurrence_problem_message, datatype_cooccurrence_problems,
 )
-from ..semantics import units_equivalent
+from .semantics import units_equivalent
 from .model import ValueRepresentationKind
 from .terminology import (
     NULL_FLAVOR_CODE_SYSTEM,
@@ -1016,9 +1016,7 @@ def _render_transparent(
                     f"{current!r} != {value!r}"
                 )
             parent.set(qname, str(value))
-    validation_rules = list(
-        node.get("validation_rules", node.get("asserts", []))
-    )
+    validation_rules = list(node.get("validation_rules", []))
     if validation_rules:
         if parent is None:
             raise ValueError(
@@ -1228,9 +1226,7 @@ def _render_node_once(
     if node.get("xsi_type"):
         element.set(f"{{{XSI}}}type", str(node["xsi_type"]))
 
-    validation_rules = list(
-        node.get("validation_rules", node.get("asserts", []))
-    )
+    validation_rules = list(node.get("validation_rules", []))
     if validation_rules:
         assertion_contexts.append((
             element, validation_rules, dict(node.get("lets", {}))

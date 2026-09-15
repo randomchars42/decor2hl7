@@ -7,17 +7,17 @@ import unittest
 import xml.etree.ElementTree as ET
 from email.message import Message
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-from decor2hl7 import assertions, cda, data, state, validate
-from decor2hl7.bindings import build_assignments, target_default_values
-from decor2hl7.build import mapping
-from decor2hl7.build.mapping import cda_mapping_proposal
-from decor2hl7.build.model import compile_model
-from decor2hl7.build.target import collect_templates, compile_cda, select_template
+from decor2hl7 import assertions, data, state, validate
+from decor2hl7.bindings import (
+    build_assignments, target_default_values, validate_structures,
+)
 from decor2hl7.compile import mapping as mapping_compiler
+from decor2hl7.compile import site as site_compiler
+from decor2hl7.compile.transaction import compile_model
 from decor2hl7.compile.artifacts import (
     compiler_inputs,
     selected_closure_template_revisions,
@@ -25,31 +25,40 @@ from decor2hl7.compile.artifacts import (
     write_build_diagnostics,
 )
 from decor2hl7.compile.structural import (
-    boolean_example_discriminator_rules, value_set_members,
+    boolean_example_discriminator_rules, coalesce_rule, for_each_rules,
+    repeat_by_discriminator_rule, value_set_members,
 )
-from decor2hl7.cda.compile import compile_cda_model
+from decor2hl7.cda.compile import (
+    collect_templates, compile_cda, select_template,
+)
+from decor2hl7.cda import render as cda
 from decor2hl7.cda.datatypes import value_representation
 from decor2hl7.cda.extensions import load_extensions
 from decor2hl7.cda.parity import declared_endpoint_parity
 from decor2hl7.compile.reports import (
-    _outline_datapoint_lines, coverage_headline_counts,
-    format_coverage_headline, render_accepted_cda_mappings_markdown,
+    coverage_headline_counts, format_coverage_headline,
+    render_accepted_cda_mappings_markdown,
     render_cda_mapping_extended_trees_markdown,
     render_cda_mapping_markdown, render_cda_mapping_trees_markdown,
 )
-from decor2hl7.compile.terminology import domain_difference
 from decor2hl7.retrieval.artifacts import artifact_problems, artifact_record, closure_records
 from decor2hl7.retrieval.catalog import parse_releases, parse_transactions, transactions
 from decor2hl7.retrieval.fetch import (
-    RequestBudgetExceeded, _candidate_projects, _evidence_references, _fetch_want,
+    RequestBudgetExceeded, _evidence_references, _fetch_want,
     _inventory, _payload_matches_request, _resolved_effective_date,
-    _satisfied, display_references, fetch_spec, hard_references,
-    original_references,
-    soft_references,
+    _satisfied, fetch_spec,
+)
+from decor2hl7.retrieval.references import (
+    display_references, hard_references, original_references, soft_references,
+)
+from decor2hl7.retrieval.resolution import (
+    candidate_projects as _candidate_projects,
+    load_artifact_owners as _load_artifact_owners,
 )
 from decor2hl7.retrieval.api import REQUIRED_PATHS, artifact_representations
 from decor2hl7.retrieval.sources import apply_source_hint, load_source_hints
-from decor2hl7.semantics import accepted_values, direct_compatibility
+from decor2hl7.cda.semantics import direct_compatibility
+from decor2hl7.domain import accepted_values
 from decor2hl7.transforms import OMIT, apply_transform
 from decor2hl7.workspace import (
     init_workspace, input_dir, load_json, release_spec_dir, set_release, set_transaction,
@@ -119,6 +128,17 @@ def complete_fixture_value_targets(cda_model: Mapping[str, Any]) -> None:
 
 def api_path(url: str) -> str:
     return urlsplit(url).path
+
+
+def mapping_proposal(
+    model: Mapping[str, Any],
+    cda_model: Mapping[str, Any],
+    xml_paths: Iterable[Path],
+) -> tuple[dict[str, Any], str]:
+    proposal, _, report, _ = mapping_compiler.cda_mapping_audit(
+        model, cda_model, xml_paths
+    )
+    return proposal, report
 
 
 class CoreTests(unittest.TestCase):
@@ -600,7 +620,9 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(set(field["accepted_values"]), {"Alpha"})
             self.assertEqual(set(field["logical_domain"]["options"]), {"Logical only"})
             self.assertEqual(
-                domain_difference(field)["logical_only"], ["Logical only"]
+                set(field["logical_domain"]["options"])
+                - set(accepted_values(field)),
+                {"Logical only"},
             )
             self.assertEqual(len(field["terminology_associations"]), 2)
             self.assertEqual(
@@ -611,7 +633,7 @@ class CoreTests(unittest.TestCase):
                 [(row["code"], row["scope"]) for row in field["codes"]],
                 [("B", "original-concept")],
             )
-            defaults = mapping.code_mapping_defaults(model)["fields"]["status"]
+            defaults = site_compiler.code_mapping_defaults(model)["fields"]["status"]
             self.assertEqual(defaults["A"], "Alpha")
             self.assertNotIn("Logical only", defaults)
             self.assertNotIn("values", field)
@@ -686,7 +708,7 @@ class CoreTests(unittest.TestCase):
                     "admitted_canonical_values": [],
                 }],
             )
-            defaults = mapping.code_mapping_defaults(model)["fields"]["status"]
+            defaults = site_compiler.code_mapping_defaults(model)["fields"]["status"]
             self.assertEqual(defaults["Lokaler Wert"], "Formal A")
             self.assertEqual(defaults["Lokales Synonym"], "Formal A")
             self.assertEqual(defaults["Andere"], "Other (qualifier value)")
@@ -868,8 +890,10 @@ class CoreTests(unittest.TestCase):
                 target["targets"]["ExampleDocument.value"]["template_description"],
                 "Example document description",
             )
-            proposal, report = cda_mapping_proposal(model, target, [project])
-            _, _, details = mapping.cda_mapping_reports(model, target, [project])
+            proposal, report = mapping_proposal(model, target, [project])
+            _, _, _, details = mapping_compiler.cda_mapping_audit(
+                model, target, [project]
+            )
             self.assertEqual(proposal["fields"]["foo"], "ExampleDocument.value")
             self.assertIn("TA", report)
             self.assertIn("Reason", report)
@@ -879,7 +903,7 @@ class CoreTests(unittest.TestCase):
             self.assertIn("Dataset concept: `c`", details)
             output = Path(tmp) / "model"
             output.mkdir()
-            mapping.write_cda_mapping([project], output, model, target)
+            mapping_compiler.write_cda_mapping([project], output, model, target)
             audit = load_json(output / "mapping-audit.json")
             self.assertEqual(audit["fields"]["foo"]["selected"], "ExampleDocument.value")
             readable = (output / "cda-expanded-readable.xml").read_text(encoding="utf-8")
@@ -974,7 +998,7 @@ class CoreTests(unittest.TestCase):
                 direct_compatibility(field, target["targets"][target_name]),
                 (True, []),
             )
-            proposal, _ = cda_mapping_proposal(model, target, [project])
+            proposal, _ = mapping_proposal(model, target, [project])
             self.assertEqual(proposal["fields"]["referral"], target_name)
 
             section_code = {
@@ -987,37 +1011,6 @@ class CoreTests(unittest.TestCase):
             compatible, reasons = direct_compatibility(field, section_code)
             self.assertFalse(compatible)
             self.assertIn("structural, fixed, prohibited, or ambiguous", reasons[0])
-
-    def test_mapping_outline_keeps_status_gutter_and_never_wraps_leaves(self) -> None:
-        short = _outline_datapoint_lines(
-            "│   │   ",
-            {"dataset_name": "Patienten ID", "target": "PatientIdentifier.id"},
-            last=True, status="✓",
-        )
-        self.assertEqual(
-            short,
-            ["✓  │   │   └── Patienten ID → {PatientIdentifier.id}"],
-        )
-
-        long = _outline_datapoint_lines(
-            "│   │   ",
-            {
-                "dataset_name": "Aufnahmezeitpunkt",
-                "target": (
-                    "CDAEncompassingEncounter.componentOf.encompassingEncounter."
-                    "effectiveTime.low@20160601"
-                ),
-            },
-            last=False, status="!",
-        )
-        self.assertEqual(
-            long,
-            [
-                "!  │   │   ├── Aufnahmezeitpunkt → "
-                "{CDAEncompassingEncounter.componentOf.encompassingEncounter."
-                "effectiveTime.low@20160601}",
-            ],
-        )
 
     def test_explicit_leaf_role_inside_mapped_context_is_actionable(self) -> None:
         field = {"name": "Name", "short_name": "name", "type": "text"}
@@ -1187,7 +1180,11 @@ class CoreTests(unittest.TestCase):
         self.assertFalse(any(row[0] == "related" for row in evidence))
 
     def test_cda_guide_merges_xml_context_and_explains_candidates(self) -> None:
-        def element(name: str, children: list[dict] | None = None, **values: object) -> dict:
+        def element(
+            name: str,
+            children: list[dict[str, Any]] | None = None,
+            **values: object,
+        ) -> dict[str, Any]:
             return {
                 "kind": "element", "name": name, "attributes": [],
                 "children": children or [], "fixed": {}, "targets": [], **values,
@@ -1379,7 +1376,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("selectable after review", report)
 
     def test_code_normalization_rejects_unmapped_finite_domain_code(self) -> None:
-        field = {"type": "code", "values": {"rot": {"code": "R", "code_system": "1.2.3", "display_name": "rot"}}}
+        field = {"type": "code", "accepted_values": {"rot": {"code": "R", "code_system": "1.2.3", "display_name": "rot"}}}
         site = {"null_flavor": {"unmapped_code": "OTH"}, "input": {}}
         self.assertEqual(data.normalize_value("1", field, {"1": "rot"}, site)["code"], "R")
         with self.assertRaisesRegex(ValueError, "not admitted"):
@@ -1840,15 +1837,14 @@ class CoreTests(unittest.TestCase):
                     )
 
             closure = load_json(tx_dir / "closure.json")
-            self.assertFalse(closure["complete"])
+            self.assertFalse(closure["crawl_complete"])
             self.assertTrue(closure["interrupted"])
             self.assertIn("build-interrupted", closure["phase"])
             self.assertIn("dataset:9.9.1@2020-01-01", closure["pending"]["build"])
             self.assertTrue((release_dir / "manifest.json").exists())
             self.assertTrue(any("checkpoint saved" in line for line in progress))
             with self.assertRaisesRegex(ValueError, "crawl is incomplete"):
-                from decor2hl7.retrieval.fetch import closure_paths
-                closure_paths(release_dir, tx_dir)
+                closure_records(release_dir, tx_dir)
 
             # A cache-only rerun settles the pending closure without touching
             # the unavailable server. Uncached dependencies remain explicit
@@ -2122,11 +2118,11 @@ class CoreTests(unittest.TestCase):
                     "id": "eye-sides", "effective_date": "2015-11-17",
                 }],
             },
-        }, "assertions": [
+        }, "validation_rules": [
             {"test": "count(hl7:targetSiteCode[@code='R']) &lt;= 1"},
             {"test": "count(hl7:targetSiteCode[@code='L']) &lt;= 1"},
         ]}
-        inferred = mapping_compiler._fanout_rule(
+        inferred = repeat_by_discriminator_rule(
             ["vitals.pupil_right", "vitals.pupil_left"], "Pupil.value",
             pupil_model, pupil_cda,
             {("eye-sides", "2015-11-17"): [
@@ -2136,18 +2132,21 @@ class CoreTests(unittest.TestCase):
         )
         self.assertIsNotNone(inferred)
         assert inferred is not None
-        _, fanout = inferred
-        self.assertEqual(fanout["type"], "repeat_by_discriminator")
+        _, repetition = inferred
+        self.assertEqual(repetition["type"], "repeat_by_discriminator")
         self.assertEqual(
-            [branch["target"] for branch in fanout["branches"]],
+            [branch["target"] for branch in repetition["branches"]],
             ["Pupil_right.value", "Pupil_left.value"],
         )
         self.assertEqual(
-            {branch["cda_target"] for branch in fanout["branches"]},
+            {branch["cda_target"] for branch in repetition["branches"]},
             {"Pupil.value"},
         )
         self.assertEqual(
-            [branch["constants"]["Pupil.targetSiteCode"]["code"] for branch in fanout["branches"]],
+            [
+                branch["constants"]["Pupil.targetSiteCode"]["code"]
+                for branch in repetition["branches"]
+            ],
             ["R", "L"],
         )
 
@@ -2165,6 +2164,9 @@ class CoreTests(unittest.TestCase):
                 "path": "hl7:qualifier/hl7:value", "renderable": True,
                 "locations": ["0.0"], "repeat_ancestors": ["0"],
                 "value_sets": ["certainty-vs"],
+                "value_set_bindings": [{
+                    "id": "certainty-vs", "strength": "required",
+                }],
             },
             "Diagnosis.negationInd": {
                 "path": "hl7:observation/@negationInd", "renderable": True,
@@ -2206,7 +2208,7 @@ class CoreTests(unittest.TestCase):
         )
         self.assertEqual(certainty_datapoints["Diagnosis.low"]["dataset_fields"], [])
 
-        coalesced = mapping_compiler._coalesce_rule(
+        coalesced = coalesce_rule(
             ["encounter.admission", "encounter.documentation"], "Encounter.low",
             {"fields": {
                 "encounter.admission": {"type": "datetime", "repeat_chain": []},
@@ -2242,8 +2244,13 @@ class CoreTests(unittest.TestCase):
                 "logical_types": ["code", "ordinal"],
                 "value_representation": {"kind": "coded"},
                 "value_sets": ["angiography"],
+                "value_set_bindings": [{
+                    "id": "angiography",
+                    "effective_date": "2024-07-22",
+                    "strength": "required",
+                }],
             }
-            proposal, _ = mapping_compiler.cda_mapping_proposal(
+            proposal, _ = mapping_proposal(
                 model, {"targets": {"Observation.value": target}}, [evidence]
             )
             rule = proposal["fields"]["diagnostics.angiography"]
@@ -2722,7 +2729,7 @@ class CoreTests(unittest.TestCase):
             "logical_types": ["boolean"],
             "value_representation": {"kind": "boolean", "attribute": "value"},
         }
-        proposal, _ = mapping_compiler.cda_mapping_proposal(
+        proposal, _ = mapping_proposal(
             model, {"targets": {"Radiographyofspine.negationInd": target}}, []
         )
         self.assertEqual(proposal["fields"]["diagnostics.spine_xray"], {
@@ -2803,7 +2810,7 @@ class CoreTests(unittest.TestCase):
                 "value": "Example content", "source": "template-example",
             },
         })
-        incomplete, _ = mapping_compiler.cda_mapping_proposal(
+        incomplete, _ = mapping_proposal(
             model, cda_model, []
         )
         self.assertIsNone(incomplete["fields"]["triage.direct_contact"])
@@ -2876,17 +2883,17 @@ class CoreTests(unittest.TestCase):
             "document": [{
                 "kind": "element", "name": "hl7:ClinicalDocument", "min": 1,
                 "max": 1, "mandatory": True, "attributes": [], "codes": [],
-                "fixed": {"classCode": "DOCCLIN"}, "targets": [], "asserts": [], "lets": {},
+                "fixed": {"classCode": "DOCCLIN"}, "targets": [], "validation_rules": [], "lets": {},
                 "children": [{
                     "kind": "element", "name": "hl7:observation", "min": 0,
                     "max": 1, "mandatory": False, "attributes": [], "codes": [],
                     "fixed": {}, "targets": ["Contact.observation"],
-                    "asserts": [], "lets": {}, "children": [{
+                    "validation_rules": [], "lets": {}, "children": [{
                         "kind": "element", "name": "hl7:code", "min": 1,
                         "max": 1, "mandatory": True, "attributes": [],
                         "codes": [{"code": "FLN-13", "code_system": "1.2.3"}],
                         "fixed": {}, "targets": ["Contact.code"], "children": [],
-                        "asserts": [], "lets": {},
+                        "validation_rules": [], "lets": {},
                     }],
                 }],
             }],
@@ -2952,7 +2959,7 @@ class CoreTests(unittest.TestCase):
                 "primary": {"target": "MedicationStatement.substanceAdministration"},
             },
         }
-        rules = mapping_compiler._for_each_rules(
+        rules = for_each_rules(
             model, cda_model,
             {"therapy.medication.code": "Medication.code"}, group_results,
         )
@@ -2983,7 +2990,7 @@ class CoreTests(unittest.TestCase):
             (True, []),
         )
         self.assertEqual(
-            mapping_compiler._for_each_rules(
+            for_each_rules(
                 {
                     "groups": {"rows": {"repeating": True}},
                     "fields": {"rows.value": {"repeat_chain": ["rows"]}},
@@ -3182,7 +3189,7 @@ class CoreTests(unittest.TestCase):
             compiled = {
                 "document_template": {"name": "ActiveDocument"},
                 "source_index": {},
-                "assertions": [],
+                "validation_rules": [],
                 "targets": {
                     "Active.material": {
                         "template_id": "active", "template_effective_date": "2026",
@@ -3243,25 +3250,25 @@ class CoreTests(unittest.TestCase):
                     "min": 1, "max": 1, "mandatory": True,
                     "attributes": [], "codes": [], "fixed": {},
                     "targets": ["Active.material"], "target": "Active.material",
-                    "asserts": [], "lets": {}, "children": [
+                    "validation_rules": [], "lets": {}, "children": [
                         {
                             "kind": "element", "name": "hl7:code", "datatype": "CD",
                             "min": 0, "max": 1, "mandatory": False,
                             "attributes": [], "codes": [], "fixed": {},
                             "targets": ["Active.code"], "target": "Active.code",
-                            "asserts": [], "lets": {}, "children": [],
+                            "validation_rules": [], "lets": {}, "children": [],
                         },
                         {
                             "kind": "element", "name": "hl7:name", "datatype": "EN",
                             "min": 0, "max": 1, "mandatory": False,
                             "attributes": [], "codes": [], "fixed": {},
                             "targets": ["Active.name"], "target": "Active.name",
-                            "asserts": [], "lets": {}, "children": [],
+                            "validation_rules": [], "lets": {}, "children": [],
                         },
                     ],
                 }],
             }
-            proposal, report = cda_mapping_proposal(
+            proposal, report = mapping_proposal(
                 model, compiled, [evidence]
             )
             self.assertEqual(proposal["fields"]["drug.name"], "Active.name")
@@ -3348,7 +3355,7 @@ class CoreTests(unittest.TestCase):
             }
             cda_model = {
                 "document_template": {"name": "Document"},
-                "assertions": [], "unresolved_templates": [],
+                "validation_rules": [], "unresolved_templates": [],
                 "source_index": {
                     "active|ID:active-root": ["Active.root"],
                     "legacy|ID:legacy-container": ["Legacy.container"],
@@ -5070,9 +5077,6 @@ class CoreTests(unittest.TestCase):
             self.assertIsNotNone(selected)
             assert selected is not None
             self.assertEqual(selected.get("effectiveDate"), "2007-01-01")
-            with self.assertRaisesRegex(ValueError, "fallback template inputs"):
-                collect_templates([], [source])
-
     def test_artifact_identity_mismatch_is_fatal_but_missing_dependency_is_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             release = Path(tmp)
@@ -5098,7 +5102,6 @@ class CoreTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (transaction / "closure.json").write_text(json.dumps({
-                "complete": True,
                 "crawl_complete": True,
                 "build_ready": False,
                 "readiness_errors": [
@@ -5115,7 +5118,7 @@ class CoreTests(unittest.TestCase):
             ))
 
             (transaction / "closure.json").write_text(json.dumps({
-                "complete": True,
+                "crawl_complete": True,
                 "build_resources": [],
             }), encoding="utf-8")
             self.assertEqual(closure_records(release, transaction), [])
@@ -5200,11 +5203,19 @@ class CoreTests(unittest.TestCase):
               <element name="hl7:ClinicalDocument"><include ref="missing" flexibility="2020"/></element>
             </template>''', encoding="utf-8")
             model = {"meta": {"template_id": "doc", "template_effective_date": "2026"}, "fields": {}, "groups": {}}
-            compiled = compile_cda_model([document], model)
+            compiled = compile_cda([document], model, strict=False)
             self.assertEqual(len(compiled["unresolved_templates"]), 1)
             self.assertEqual(compiled["unresolved_templates"][0]["template"], "missing")
             with self.assertRaisesRegex(ValueError, "document template absent .*not fetched"):
-                compile_cda_model([], {"meta": {"template_id": "absent"}, "fields": {}, "groups": {}})
+                compile_cda(
+                    [],
+                    {
+                        "meta": {"template_id": "absent"},
+                        "fields": {},
+                        "groups": {},
+                    },
+                    strict=False,
+                )
 
     def test_build_diagnostics_describe_omissions_and_no_substitution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5848,7 +5859,7 @@ class CoreTests(unittest.TestCase):
             </project>''', encoding="utf-8")
             model = compile_model(transaction, [project], [project])
             compiled = compile_cda([project], model)
-            proposal, report = cda_mapping_proposal(model, compiled, [project])
+            proposal, report = mapping_proposal(model, compiled, [project])
             rule = proposal["fields"]["allergies.agent"]
             self.assertIsInstance(rule, dict)
             self.assertEqual(rule["transform"]["type"], "coded_fallback")
@@ -5952,7 +5963,7 @@ class CoreTests(unittest.TestCase):
             }
             ambiguous["targets"]["Alternative.code"] = duplicate
             ambiguous["targets"]["Alternative.code.originalText"] = duplicate_text
-            ambiguous_proposal, _ = cda_mapping_proposal(
+            ambiguous_proposal, _ = mapping_proposal(
                 model, ambiguous, [project]
             )
             self.assertIsNone(ambiguous_proposal["fields"]["allergies.agent"])
@@ -6281,7 +6292,7 @@ class CoreTests(unittest.TestCase):
                 ["ANTIBIOTIC", "CONTRAST"],
             )
             self.assertEqual(
-                validate.validate_structures(model, cda_model, cda_mapping), []
+                validate_structures(model, cda_model, cda_mapping), []
             )
 
     def test_dynamic_and_exact_requests_share_one_canonical_artifact(self) -> None:
@@ -6379,7 +6390,6 @@ class CoreTests(unittest.TestCase):
                 '{"format":1,"owners":{"codesystem:1.2.3":"wrong-"}}',
                 encoding="utf-8",
             )
-            from decor2hl7.retrieval.fetch import _load_artifact_owners
             self.assertEqual(_load_artifact_owners(path), {})
 
     def test_source_reference_redirects_before_wrong_project_analysis(self) -> None:
@@ -6690,7 +6700,7 @@ class CoreTests(unittest.TestCase):
 
     def test_codes_mapping_must_resolve_to_canonical_value(self) -> None:
         errors = validate.check_config(
-            {"fields": {"status": {"values": {"active": {"code": "A"}}}}},
+            {"fields": {"status": {"accepted_values": {"active": {"code": "A"}}}}},
             {"targets": {}},
             {"fields": {"status": None}},
             {"fields": {"status": None}},
@@ -6699,7 +6709,7 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(any("unknown canonical value" in error for error in errors))
 
     def test_unbound_code_accepts_explicit_site_code_identity(self) -> None:
-        field = {"type": "code", "values": {}}
+        field = {"type": "code", "accepted_values": {}}
         translation = {
             "LOCAL": {
                 "code": "LOCAL",
@@ -6873,7 +6883,9 @@ class CoreTests(unittest.TestCase):
             </project>''', encoding="utf-8")
             model = compile_model(tx)
             compiled = compile_cda([project], model)
-            proposal, report = mapping.cda_mapping_proposal(model, compiled, [tx, project])
+            proposal, report = mapping_proposal(
+                model, compiled, [tx, project]
+            )
             self.assertIsNotNone(proposal["fields"]["rank"])
             self.assertIn("XPATH(entry)", report)
 
@@ -6916,7 +6928,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn(("valueset", "1.2.3", "2020"), _inventory(root))
 
     def test_uncoded_code_option_stays_target_neutral_until_transformed(self) -> None:
-        field = {"type": "code", "values": {"Label": {"display_name": "Label"}, "Coded": {"code": "A", "code_system": "9", "display_name": "Coded"}}}
+        field = {"type": "code", "accepted_values": {"Label": {"display_name": "Label"}, "Coded": {"code": "A", "code_system": "9", "display_name": "Coded"}}}
         site = {"null_flavor": {"unmapped_code": "OTH"}}
         logical = data.normalize_value("Label", field, {}, site)
         self.assertEqual(logical, {"raw": "Label", "canonical": "Label"})
@@ -6931,7 +6943,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(coded["codeSystem"], "9")
 
     def test_textual_ordinal_uses_leading_numeric_rank(self) -> None:
-        field = {"type": "ordinal", "values": {"1 keine": {"display_name": "1 keine"}, "2 Schmerzreiz": {"display_name": "2 Schmerzreiz"}}}
+        field = {"type": "ordinal", "accepted_values": {"1 keine": {"display_name": "1 keine"}, "2 Schmerzreiz": {"display_name": "2 Schmerzreiz"}}}
         self.assertEqual(data.normalize_value("1 keine", field, {}, {}), 1)
         self.assertEqual(data.normalize_value("raw-two", field, {"raw-two": "2 Schmerzreiz"}, {}), 2)
 
@@ -7240,16 +7252,16 @@ class CoreTests(unittest.TestCase):
     def test_art_decor_assertion_failure_blocks_rendering(self) -> None:
         compiled = {"targets": {}, "document": [{
             "kind": "element", "name": "hl7:ClinicalDocument", "min": 1, "max": 1, "mandatory": True,
-            "attributes": [], "codes": [], "fixed": {}, "targets": [], "asserts": [], "lets": {},
+            "attributes": [], "codes": [], "fixed": {}, "targets": [], "validation_rules": [], "lets": {},
             "children": [{
                 "kind": "element", "name": "hl7:procedure", "min": 1, "max": 1, "mandatory": True,
                 "attributes": [{"kind": "attribute", "name": "negationInd", "optional": True, "value": "true", "targets": []}],
                 "codes": [], "fixed": {}, "targets": [], "lets": {},
-                "asserts": [{"test": "not(@negationInd='true' and hl7:entryRelationship)", "role": "error", "message": "no reason when negated", "template_id": "iso"}],
+                "validation_rules": [{"test": "not(@negationInd='true' and hl7:entryRelationship)", "role": "error", "message": "no reason when negated", "template_id": "iso"}],
                 "children": [{
                     "kind": "element", "name": "hl7:entryRelationship", "min": 1, "max": 1, "mandatory": True,
                     "attributes": [], "codes": [], "fixed": {"typeCode": "RSON"}, "targets": [], "children": [],
-                    "asserts": [], "lets": {},
+                    "validation_rules": [], "lets": {},
                 }],
             }],
         }]}
@@ -7282,7 +7294,7 @@ class CoreTests(unittest.TestCase):
         )
 
     def test_schematron_preserves_assert_and_let(self) -> None:
-        text = assertions.schematron({"assertions": [{
+        text = assertions.schematron({"validation_rules": [{
             "path": "hl7:observation", "template_id": "1.2.3", "role": "error",
             "test": "empty($seq)", "message": "unique", "lets": {"seq": "//hl7:value"},
         }]})
@@ -7290,7 +7302,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn('test="empty($seq)"', text)
 
     def test_schematron_declares_assertion_template_namespaces(self) -> None:
-        text = assertions.schematron({"assertions": [{
+        text = assertions.schematron({"validation_rules": [{
             "path": "pharmhl7:ingredientSubstance",
             "template_id": "2.16.840.1.113883.10.21.4.18",
             "role": "error", "test": "pharmhl7:code or pharmhl7:name",
@@ -7310,17 +7322,17 @@ class CoreTests(unittest.TestCase):
             },
             "document": [{
                 "kind": "element", "name": "hl7:ClinicalDocument", "min": 1, "max": 1, "mandatory": True,
-                "attributes": [], "codes": [], "fixed": {}, "targets": [], "asserts": [], "lets": {},
+                "attributes": [], "codes": [], "fixed": {}, "targets": [], "validation_rules": [], "lets": {},
                 "children": [
                     {"kind": "element", "name": "hl7:procedure", "min": 0, "max": 1, "mandatory": False,
                      "attributes": [
                          {"kind": "attribute", "name": "negationInd", "optional": True, "value": None, "targets": ["Iso.negationInd"]},
                          {"kind": "attribute", "name": "nullFlavor", "optional": True, "value": None, "targets": ["Iso.nullFlavor"]},
-                     ], "codes": [], "fixed": {}, "targets": [], "children": [], "asserts": [], "lets": {}},
+                     ], "codes": [], "fixed": {}, "targets": [], "children": [], "validation_rules": [], "lets": {}},
                     {"kind": "element", "name": "hl7:observation", "min": 0, "max": 1, "mandatory": False,
-                     "attributes": [], "codes": [], "fixed": {}, "targets": [], "asserts": [], "lets": {},
+                     "attributes": [], "codes": [], "fixed": {}, "targets": [], "validation_rules": [], "lets": {},
                      "children": [{"kind": "element", "name": "hl7:value", "datatype": "PQ", "unit": "{score}", "min": 0, "max": 1, "mandatory": False,
-                                  "attributes": [], "codes": [], "fixed": {}, "targets": ["Rank.value"], "children": [], "asserts": [], "lets": {}}]},
+                                  "attributes": [], "codes": [], "fixed": {}, "targets": ["Rank.value"], "children": [], "validation_rules": [], "lets": {}}]},
                 ],
             }],
         }
@@ -7449,72 +7461,6 @@ class CoreTests(unittest.TestCase):
             ):
                 self.assertEqual(model["fields"][path]["type"], "text")
 
-
-
-    def test_codes_mapping_prepopulates_option_identities_without_expanded_values(self) -> None:
-        model = {
-            "fields": {
-                "triage.color": {
-                    "type": "code",
-                    "options": ["rot", "orange", "gelb"],
-                }
-            }
-        }
-        csv_mapping = {"fields": {"triage.color": None}}
-        proposal, report = mapping.codes_mapping_proposal(model, csv_mapping, None)
-        self.assertEqual(
-            proposal["fields"]["triage.color"],
-            {"rot": "rot", "orange": "orange", "gelb": "gelb"},
-        )
-        self.assertIn("3 canonical values accepted directly", report)
-        self.assertIn("No aliases require configuration", report)
-
-    def test_codes_mapping_contains_model_codes_and_display_aliases_without_csv(self) -> None:
-        model = {
-            "fields": {
-                "referral": {
-                    "name": "Zuweisung",
-                    "type": "code",
-                    "values": {
-                        "ohne": {
-                            "code": "NPHYS",
-                            "code_system": "1.2.276.0.76.5.440",
-                            "display_name": "Zuweisung nicht durch Arzt",
-                        },
-                        "Vertragsarzt/Praxis": {
-                            "code": "VAP",
-                            "code_system": "1.2.276.0.76.5.440",
-                            "display_name": "Vertragsarzt/Praxis",
-                        },
-                    },
-                }
-            }
-        }
-        proposal, _ = mapping.codes_mapping_proposal(model, {"fields": {}}, None)
-        self.assertEqual(proposal["fields"]["referral"]["NPHYS"], "ohne")
-        self.assertEqual(proposal["fields"]["referral"]["Zuweisung nicht durch Arzt"], "ohne")
-        self.assertEqual(proposal["fields"]["referral"]["ohne"], "ohne")
-        self.assertEqual(proposal["fields"]["referral"]["VAP"], "Vertragsarzt/Praxis")
-
-    def test_write_code_mapping_is_build_side_and_populated(self) -> None:
-        model = {
-            "fields": {
-                "transport": {
-                    "type": "code",
-                    "values": {
-                        "KTW": {"code": "1", "code_system": "1.2.3", "display_name": "KTW"},
-                        "RTW": {"code": "2", "code_system": "1.2.3", "display_name": "RTW"},
-                    },
-                }
-            }
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            result = mapping.write_code_mapping(Path(tmp), model)
-            stored = load_json(Path(tmp) / "codes-mapping.proposed.json")
-            self.assertEqual(result, stored)
-            self.assertEqual(stored["fields"]["transport"]["1"], "KTW")
-            self.assertEqual(stored["fields"]["transport"]["2"], "RTW")
-            self.assertTrue((Path(tmp) / "codes-mapping.md").exists())
 
 
 if __name__ == "__main__":

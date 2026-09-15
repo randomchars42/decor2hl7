@@ -89,12 +89,6 @@ def init_workspace(root: Path, prefix: str = "aktin-", language: str = "de-DE") 
     return path
 
 
-def update_settings(root: Path, **updates: Any) -> None:
-    current = load_settings(root)
-    current.update(updates)
-    write_json(settings_path(root), current)
-
-
 def set_release(root: Path, release: Mapping[str, Any]) -> None:
     current = load_settings(root)
     current["release"] = dict(release)

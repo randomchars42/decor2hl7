@@ -664,7 +664,7 @@ class ConformanceTests(unittest.TestCase):
             with patch("decor2hl7.retrieval.fetch.get", return_value=b"wrong"):
                 result = _fetch_direct(
                     release_dir,
-                    manifest,  # type: ignore[arg-type]
+                    manifest,
                     key="validation-package:test",
                     relative_file="validation/packages/test.bin",
                     url="https://example.invalid/test.bin",
@@ -693,7 +693,7 @@ class ConformanceTests(unittest.TestCase):
             with patch("decor2hl7.retrieval.fetch.get") as get:
                 result = _fetch_direct(
                     release_dir,
-                    manifest,  # type: ignore[arg-type]
+                    manifest,
                     key="validation-package:test",
                     relative_file="validation/packages/test.bin",
                     url="https://example.invalid/test.bin",

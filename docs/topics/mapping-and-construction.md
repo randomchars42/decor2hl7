@@ -52,11 +52,22 @@ architectural decision.
 
 ## Structural rules
 
+`cda-mapping.json:structures` accepts exactly `for_each`,
+`repeat_by_discriminator`, `coalesce`, `concatenate`, and `compose_coded`.
+These names are part of the checked mapping format rather than interchangeable
+labels. `check-cda-mapping` rejects every other structure type.
+
 - `for_each` binds one source repeat to one explicit target repeat. Unbound
-  repeat ancestors become shared containers.
+  repeat ancestors become shared containers. It preserves the identity of each
+  existing source occurrence; it does not create occurrences for separate
+  scalar fields or align independent repeats by position.
 - `repeat_by_discriminator` creates distinct target occurrences only from an
   exact required discriminator, bound ValueSet member, unique source/member
-  correspondence, and compatible repeat structure.
+  correspondence, and compatible repeat structure. Every branch names a
+  distinct logical target over one shared physical CDA value target and
+  supplies its discriminator as a fixed coded constant. An absent branch source
+  creates no occurrence; present branch sources create their own labelled
+  occurrences without a positional join.
 - `coalesce` lets equivalent sources share a singleton target. The default is
   `equal_or_error`; a reviewed precedence policy must report differences.
 - `concatenate` maps present same-occurrence values independently and joins
@@ -65,15 +76,16 @@ architectural decision.
   in the same occurrence into one coded CDA value. The reviewed rule fixes the
   code transform and uncoded null flavor; when only the display name is
   present, its wording is preserved in the compiled `originalText` companion.
+
+The following are field-assignment modes under `fields`, not entries in
+`structures`:
+
 - `fallback` fills an absent target in the same occurrence.
 - `fallback_if_active` fills a required leaf only after another assignment has
   activated its optional branch. It never activates a branch or creates a
   repeat.
 - `presence` lets a boolean activate one optional statement only when exact
   owner evidence fixes its complete payload.
-
-Legacy reviewed `fan_out` remains executable and migrates only when a generated
-replacement proves identical source and physical target identity.
 
 ## Completion and ownership
 
@@ -113,8 +125,8 @@ The canonical generated products are:
 `init-cda-mapping` creates or refreshes the portable mapping bundle without
 overwriting reviewer choices. `--reset` explicitly replaces reviewed state with
 the current proposal. Target names may migrate only through one unique stored
-owner identity. `mapping-lock.json` pins transaction, model, CDA, and mapping
-identity.
+owner identity; structure type names are neither aliased nor translated.
+`mapping-lock.json` pins transaction, model, CDA, and mapping identity.
 
 The reference transaction's non-obvious reviewed mappings are summarized in
 [`../reference-transaction.md`](../reference-transaction.md). The generated

@@ -57,12 +57,11 @@ _OPERATIONS = {"attach", "select_spec_branch"}
 def _multiplicity(value: Any, *, maximum: bool, label: str) -> int | str:
     if maximum and value == "*":
         return "*"
-    invalid_number = (
+    if (
         isinstance(value, bool)
         or not isinstance(value, int)
         or value < (1 if maximum else 0)
-    )
-    if invalid_number:
+    ):
         expected = (
             "a positive integer or '*'" if maximum else "a non-negative integer"
         )

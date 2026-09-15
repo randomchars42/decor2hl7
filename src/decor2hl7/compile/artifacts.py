@@ -497,7 +497,7 @@ def write_build_diagnostics(
         },
         "crawl_degraded": crawl_degraded,
         "build_degraded": build_degraded,
-        # Compatibility name retained for consumers of format 1.
+        # Keep all unavailable inputs visible alongside the consulted subset.
         "unavailable_artifacts": unavailable,
         "unresolved_templates": unresolved,
         "unresolved_template_prototypes": unresolved_prototypes,

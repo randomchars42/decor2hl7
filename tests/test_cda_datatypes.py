@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any, Mapping
 import xml.etree.ElementTree as ET
 
-from decor2hl7 import cda, validate
+from decor2hl7 import validate
+from decor2hl7.cda import render as cda
 from decor2hl7.cda.datatypes import (
     base_datatype,
     classify_datatype,
@@ -15,7 +16,7 @@ from decor2hl7.cda.datatypes import (
 )
 from decor2hl7.cda.compile import compile_cda
 from decor2hl7.cda.core import index_definitions
-from decor2hl7.build.mapping import cda_mapping_audit, cda_mapping_proposal
+from decor2hl7.compile.mapping import cda_mapping_audit
 from decor2hl7.bindings import (
     non_null_requirement_problems,
     validate_target_defaults,
@@ -217,7 +218,7 @@ class CdaDatatypeTests(unittest.TestCase):
             low_name, _ = target_at(compiled, "/hl7:doseQuantity/hl7:low")
             high_name, _ = target_at(compiled, "/hl7:doseQuantity/hl7:high")
             self.assertEqual(
-                parent["value_representation"]["range_targets"],  # type: ignore[index]
+                parent["value_representation"]["range_targets"],
                 {"low": low_name, "high": high_name},
             )
             payload, problems = cda.emit(
@@ -1523,7 +1524,7 @@ class CdaDatatypeTests(unittest.TestCase):
             }
             compiled = compile_cda([source], model)
             realm = next(
-                target for target in compiled["targets"].values()  # type: ignore[union-attr]
+                target for target in compiled["targets"].values()
                 if str(target.get("path") or "") == "hl7:ClinicalDocument/hl7:realmCode/@code"
             )
             self.assertEqual(realm["fixed"], {"value": "DE"})
@@ -1616,7 +1617,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 {"meta": {"template_id": "doc", "template_effective_date": "2026"}},
             )
             template_ids = [
-                target for target in compiled["targets"].values()  # type: ignore[union-attr]
+                target for target in compiled["targets"].values()
                 if str(target.get("path") or "").endswith("/hl7:templateId")
             ]
             self.assertEqual(len(template_ids), 2)
@@ -1823,7 +1824,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 for item in dose["provenance"]
             ))
             observation_value = [
-                target for target in compiled["targets"].values()  # type: ignore[union-attr]
+                target for target in compiled["targets"].values()
                 if str(target.get("path") or "").endswith("/hl7:observation/hl7:value")
             ]
             self.assertEqual(len(observation_value), 8)
@@ -2238,16 +2239,16 @@ class CdaDatatypeTests(unittest.TestCase):
             compiled = compile_cda([source], model, core_definition_paths=[schema])
             postcode_name, postcode = target_at(compiled, "/hl7:addr/hl7:postalCode")
             given_name, given = target_at(compiled, "/hl7:name/hl7:given")
-            self.assertEqual(postcode["value_representation"]["kind"], "element_text")  # type: ignore[index]
-            self.assertEqual(given["value_representation"]["kind"], "element_text")  # type: ignore[index]
+            self.assertEqual(postcode["value_representation"]["kind"], "element_text")
+            self.assertEqual(given["value_representation"]["kind"], "element_text")
             self.assertTrue(any(
                 item.get("source") == "datatype" and item.get("datatype") == "AD"
-                for item in postcode["provenance"]  # type: ignore[union-attr]
+                for item in postcode["provenance"]
             ))
-            self.assertEqual(compiled["datatype_inventory"]["datatype"], ["AD"])  # type: ignore[index]
-            self.assertEqual(compiled["datatype_inventory"]["alias"], ["PN"])  # type: ignore[index]
+            self.assertEqual(compiled["datatype_inventory"]["datatype"], ["AD"])
+            self.assertEqual(compiled["datatype_inventory"]["alias"], ["PN"])
 
-            proposal, report = cda_mapping_proposal(model, compiled, [source])
+            proposal, _, report, _ = cda_mapping_audit(model, compiled, [source])
             self.assertEqual(
                 proposal["fields"]["patient.anschrift.postleitzahl"], postcode_name,
                 report,
@@ -2293,7 +2294,7 @@ class CdaDatatypeTests(unittest.TestCase):
             _, city = target_at(compiled, "/hl7:addr/hl7:city")
             self.assertEqual((postcode["min"], postcode["max"], postcode["conformance"]), (1, 1, "R"))
             self.assertEqual((city["min"], city["max"]), (0, None))
-            sources = {item.get("source") for item in postcode["provenance"]}  # type: ignore[union-attr]
+            sources = {item.get("source") for item in postcode["provenance"]}
             self.assertIn("template", sources)
             self.assertIn("template + datatype", sources)
 

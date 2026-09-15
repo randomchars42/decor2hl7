@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, cast
 import xml.etree.ElementTree as ET
 import re
 
@@ -75,8 +75,8 @@ def _option_ordinal(label: str, synonyms: Iterable[str]) -> int | None:
 
 
 def _dominant_code_system(entry: Mapping[str, Any]) -> str | None:
-    counts = Counter(
-        item["code_system"]
+    counts: Counter[str] = Counter(
+        cast(str, item["code_system"])
         for code, item in entry.get("codes", {}).items()
         if item.get("code_system") and item.get("code_system") != NULLFLAVOR_CS
         and code not in entry.get("exceptions", [])
@@ -1558,18 +1558,6 @@ def write_model(
     )
     write_json(model_dir / "model.json", model)
     return model
-
-
-def compile_transaction(
-    source: Path,
-    analysis: Path,
-    resources: Iterable[Path] = (),
-    terminology: Iterable[Path] = (),
-) -> dict[str, Any]:
-    """Compile the authoritative transaction source/analysis pair."""
-    return compile_model(
-        analysis, resources, terminology, transaction_source=source,
-    )
 
 
 def write_transaction_model(

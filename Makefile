@@ -2,6 +2,7 @@
 
 check:
 	python3 scripts/check_docs.py
+	python3 -m mypy src tests
 	python3 -m unittest discover -s tests
 
 baseline:

@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 
 from ..retrieval.xml import child_text, local, parse_file
 from ..retrieval.expansion import normalized_value_sets
-from ..semantics import binding_strength
+from ..cda.semantics import binding_strength
 from ..transforms import mapping_rules, selected_cda_targets
 
 
@@ -22,8 +22,8 @@ def value_set_members(
 ) -> dict[ValueSetKey, list[dict[str, Any]]]:
     """Index coded members by value-set OID *and* effective version.
 
-    The plain OID key remains as a compatibility view of the latest version;
-    specification-driven rules use the tuple key and never mix revisions.
+    The plain OID key indexes the latest version; specification-driven rules
+    use the tuple key and never mix revisions.
     """
     exact: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for path in sorted(set(xml_paths)):
@@ -140,23 +140,7 @@ def members_for_target(
         # Extensible, preferred, and example bindings are terminology hints;
         # they cannot prove a structural discriminator or closed code gate.
         return [], None
-    oids = [str(oid) for oid in target.get("value_sets", [])]
-    if not oids:
-        oids = sorted({
-            str(item.get("value_set") or "")
-            for item in target.get("schematron_constraints", [])
-            if isinstance(item, Mapping)
-            and item.get("kind") == "value_set"
-            and item.get("value_set")
-        })
-    if len(oids) != 1:
-        return [], None
-    members = [dict(item) for item in value_sets.get(oids[0], [])]
-    versions = {str(item.get("valueSetEffectiveDate") or "") for item in members}
-    return members, {
-        "id": oids[0],
-        "effective_date": versions.pop() if len(versions) == 1 else "",
-    }
+    return [], None
 
 
 def _facet_assignments(
@@ -542,7 +526,7 @@ def _schematron_unique_codes(
     leaf = str(discriminator_target.get("path") or "").rsplit("/", 1)[-1]
     leaf = leaf.split(":", 1)[-1]
     result: set[str] = set()
-    for assertion in cda.get("assertions", []):
+    for assertion in cda.get("validation_rules", []):
         if not isinstance(assertion, Mapping):
             continue
         test = str(assertion.get("test") or "")
@@ -677,15 +661,6 @@ def repeat_by_discriminator_rule(
         ],
         "branches": branches,
     }
-
-
-def fanout_rule(
-    paths: list[str], target_name: str, model: Mapping[str, Any],
-    cda: Mapping[str, Any],
-    value_sets: Mapping[ValueSetKey, list[dict[str, Any]]],
-) -> tuple[str, dict[str, Any]] | None:
-    """Compatibility alias for callers compiled before mapping format v6."""
-    return repeat_by_discriminator_rule(paths, target_name, model, cda, value_sets)
 
 
 def coalesce_rule(

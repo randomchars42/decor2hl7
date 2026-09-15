@@ -42,7 +42,7 @@ from .xml import local, parse_text
 from .references import (
     KIND_ORDER, KINDS, TEMPLATE_PROTOTYPE_RELATIONSHIP, Want,
     display_references, hard_references,
-    original_references, references, soft_references,
+    original_references, soft_references,
 )
 from .resolution import (
     candidate_projects as _candidate_projects,
@@ -1216,10 +1216,10 @@ def _fetch_want(
             return finish(external_path)
         normalized_old = dict(old)
         normalized_old["projects_considered"] = list(
-            old.get("projects_considered") or old.get("attempted_projects") or []
+            old.get("projects_considered") or []
         )
         normalized_old["resolution_attempts"] = list(
-            old.get("resolution_attempts") or old.get("attempts") or []
+            old.get("resolution_attempts") or []
         )
         manifest["resources"][key] = normalized_old
         if save_manifest is not None:
@@ -1576,9 +1576,6 @@ def _fetch_want(
         "declared_project": resolved_want.get("project") or "",
         "projects_considered": projects_considered,
         "resolution_attempts": attempts,
-        # Compatibility spellings retained for existing generated workspaces.
-        "attempted_projects": projects_considered,
-        "attempts": attempts,
         "representations": saved_representations,
         "identity": _identity(
             resolved_want,
@@ -1636,31 +1633,6 @@ def verify_manifest(release_dir: Path) -> list[str]:
             for problem in validation_package_problems(release_dir)
         )
     return errors
-
-
-def closure_paths(release_dir: Path, transaction_dir: Path, role: str = "build") -> list[Path]:
-    """Resolve resource paths recorded for a completed transaction closure."""
-    closure = load_json(transaction_dir / "closure.json")
-    crawl_complete = closure.get("crawl_complete", closure.get("complete"))
-    if not crawl_complete or closure.get("interrupted") or closure.get("truncated"):
-        raise ValueError("transaction crawl is incomplete; rerun `decor2hl7 fetch`")
-    manifest = load_json(release_dir / "manifest.json")
-    keys = closure.get(f"{role}_resources", [])
-    result: list[Path] = []
-    for key in keys:
-        entry = manifest.get("resources", {}).get(key, {})
-        seen = {str(key)}
-        while isinstance(entry, Mapping) and entry.get("status") == "alias":
-            target_key = str(entry.get("alias_of") or "")
-            if not target_key or target_key in seen:
-                break
-            seen.add(target_key)
-            entry = manifest.get("resources", {}).get(target_key, {})
-        if entry.get("status") == "ok" and entry.get("file"):
-            path = release_dir / str(entry["file"])
-            if path.exists():
-                result.append(path)
-    return result
 
 
 def fetch_spec(
@@ -1841,14 +1813,10 @@ def fetch_spec(
         resolution = {
             key: {
                 "projects_considered": list(
-                    resolved_entry(key).get("projects_considered")
-                    or resolved_entry(key).get("attempted_projects")
-                    or []
+                    resolved_entry(key).get("projects_considered") or []
                 ),
                 "resolution_attempts": list(
-                    resolved_entry(key).get("resolution_attempts")
-                    or resolved_entry(key).get("attempts")
-                    or []
+                    resolved_entry(key).get("resolution_attempts") or []
                 ),
             }
             for key in sorted(
@@ -1880,9 +1848,6 @@ def fetch_spec(
             "release": dict(release),
             "transaction": dict(transaction),
             "cda_extensions": extensions,
-            # ``complete`` remains the compatibility spelling for crawl state.
-            # It must not be interpreted as permission to compile.
-            "complete": crawl_complete,
             "crawl_complete": crawl_complete,
             "build_ready": build_ready,
             "readiness_errors": readiness_errors,
@@ -1928,8 +1893,8 @@ def fetch_spec(
             },
             "resources_considered": resources_considered,
             "recursive_http_requests": request_budget["made"],
-            # Backwards-compatible meaning: the request budget stopped the
-            # crawler.  A user interruption is recorded separately.
+            # The request budget stopped the crawler. A user interruption is
+            # recorded separately.
             "truncated": budget_exhausted,
         }
         manifest["summary"] = {

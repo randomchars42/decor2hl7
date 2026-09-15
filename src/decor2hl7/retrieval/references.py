@@ -409,8 +409,3 @@ def display_references(root: ET.Element) -> list[Want]:
         for want in collect_references(root, soft=False)
         if want.get("role") == "display-evidence"
     ]
-
-
-def references(root: ET.Element) -> list[Want]:
-    """Compatibility name for recursive/build dependencies."""
-    return hard_references(root)

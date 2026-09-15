@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .semantics import accepted_values, logical_values
+from .domain import accepted_values, logical_values
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import xml.etree.ElementTree as ET
 
@@ -29,7 +29,10 @@ from .cooccurrence import (
     unavoidable_targets_problems,
 )
 from .retrieval.xml import local, parse_file
-from .semantics import direct_compatibility, transformed_compatibility, identifier_root_for_target, valid_oid
+from .cda.semantics import (
+    direct_compatibility, identifier_root_for_target,
+    transformed_compatibility, valid_oid,
+)
 from .transforms import mapping_rules, validate_transform
 from .cda.model import ValueRepresentationKind
 from .cda.terminology import (
@@ -332,7 +335,7 @@ def check_config(
             compatibility_field = field
             structure_name = rule.get("structure")
             structure = structures_by_id.get(str(structure_name or ""), {})
-            if structure.get("type") in {"fan_out", "repeat_by_discriminator"}:
+            if structure.get("type") == "repeat_by_discriminator":
                 compatibility_field = dict(field)
                 chain = list(
                     field.get("repeat_chain")
@@ -574,7 +577,7 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
     # supported syntax from unsupported syntax; True/False is irrelevant here.
     dummy_root = ET.Element("{urn:hl7-org:v3}ClinicalDocument")
     dummy_context = ET.SubElement(dummy_root, "{urn:hl7-org:v3}observation")
-    for rule in cda.get("validation_rules", cda.get("assertions", [])):
+    for rule in cda.get("validation_rules", []):
         if str(rule.get("role") or "error").casefold() not in {"fatal", "error"}:
             continue
         result = evaluate_assertion(
@@ -724,7 +727,7 @@ def verify_compiled_against_artdecor(cda: Mapping[str, Any], xml_paths: Iterable
                 str(item.get("kind") or "assert") == rule_key[4]
                 and str(item.get("test") or "") == rule_key[5]
                 and str(item.get("role") or "error") == rule_key[6]
-                for item in node.get("validation_rules", node.get("asserts", []))
+                for item in node.get("validation_rules", [])
             )
         ), None)
         if match is None:

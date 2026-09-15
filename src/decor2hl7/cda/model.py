@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any
 
 
 class DatatypeKind(str, Enum):
@@ -86,18 +86,6 @@ class Provenance:
         }
 
 
-@dataclass
-class CdaNode:
-    xml_name: str
-    datatype: str | None
-    minimum: int
-    maximum: int | None
-    conformance: str | None = None
-    attributes: list["CdaNode"] = field(default_factory=list)
-    children: list["CdaNode"] = field(default_factory=list)
-    provenance: list[Provenance] = field(default_factory=list)
-
-
 @dataclass(frozen=True)
 class CdaValueTarget:
     name: str
@@ -114,20 +102,3 @@ class CdaValueTarget:
             "value_representation": self.representation.to_dict(),
             "provenance": [item.to_dict() for item in self.provenance],
         }
-
-
-def representation_from_mapping(value: Mapping[str, Any] | None) -> ValueRepresentation | None:
-    """Deserialize the representation embedded in generated ``cda.json``."""
-    if not isinstance(value, Mapping) or not value.get("kind"):
-        return None
-    return ValueRepresentation(
-        kind=ValueRepresentationKind(str(value["kind"])),
-        logical_types=tuple(str(item) for item in value.get("logical_types", [])),
-        attribute=str(value["attribute"]) if value.get("attribute") else None,
-        attributes=tuple(str(item) for item in value.get("attributes", [])),
-        scalar_attribute=(
-            str(value["scalar_attribute"])
-            if value.get("scalar_attribute") else None
-        ),
-        xsi_type=str(value["xsi_type"]) if value.get("xsi_type") else None,
-    )

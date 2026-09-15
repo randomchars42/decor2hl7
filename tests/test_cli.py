@@ -11,8 +11,7 @@ from unittest.mock import patch
 
 from decor2hl7.cli import (
     _merge_mapping_configuration_notes,
-    _migrate_repeat_by_discriminator, _prune_absent_pending,
-    _prune_stale_pending, main,
+    _prune_absent_pending, _prune_stale_pending, main,
 )
 from decor2hl7.workspace import (
     load_json, set_release, set_transaction, transaction_mapping_dir,
@@ -84,7 +83,7 @@ class CliTests(unittest.TestCase):
                     return_value=model,
                 ),
                 patch(
-                    "decor2hl7.compile.mapping.write_code_mapping",
+                    "decor2hl7.compile.site.write_code_mapping",
                     return_value={"fields": {}},
                 ),
                 patch(
@@ -138,39 +137,6 @@ class CliTests(unittest.TestCase):
                     "note": "Current generated note",
                 },
             ])
-
-    def test_legacy_fan_out_is_migrated_only_by_matching_generated_evidence(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            proposed = root / "proposed.json"
-            current = root / "current.json"
-            branches = [
-                {"source": "pupil.right", "target": "Pupil_right.value", "cda_target": "Pupil.value", "branch": "right", "constants": {"Pupil.side": {"code": "R"}}},
-                {"source": "pupil.left", "target": "Pupil_left.value", "cda_target": "Pupil.value", "branch": "left", "constants": {"Pupil.side": {"code": "L"}}},
-            ]
-            write_json(proposed, {"version": 6, "fields": {}, "structures": {
-                "repeat-by-discriminator-pupil-value": {
-                    "type": "repeat_by_discriminator", "branches": branches,
-                    "discriminator": {"target": "Pupil.side", "value_set": {"id": "eyes", "effective_date": "2015-11-17"}, "members": [{"code": "R"}, {"code": "L"}]},
-                },
-            }})
-            write_json(current, {"version": 5, "fields": {
-                "pupil.right": {"target": "Pupil_right.value", "cda_target": "Pupil.value", "structure": "fan-out-pupil-value", "branch": "right"},
-                "pupil.left": {"target": "Pupil_left.value", "cda_target": "Pupil.value", "structure": "fan-out-pupil-value", "branch": "left"},
-            }, "structures": {"fan-out-pupil-value": {
-                "type": "fan_out", "branches": branches,
-            }}})
-            self.assertEqual(_migrate_repeat_by_discriminator(proposed, current), 1)
-            migrated = load_json(current)
-            self.assertEqual(migrated["version"], 6)
-            self.assertEqual(
-                migrated["fields"]["pupil.right"]["structure"],
-                "repeat-by-discriminator-pupil-value",
-            )
-            self.assertEqual(
-                migrated["structures"]["repeat-by-discriminator-pupil-value"]["type"],
-                "repeat_by_discriminator",
-            )
 
     def test_build_completes_with_reported_auxiliary_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -332,7 +298,7 @@ class CliTests(unittest.TestCase):
                     "aufnahme.triage": {
                         "name": "Triage",
                         "type": "code",
-                        "values": {
+                        "accepted_values": {
                             "rot": {"code": "R", "display_name": "Rot"},
                             "orange": {"code": "O", "display_name": "Orange"},
                         },
@@ -449,7 +415,7 @@ class CliTests(unittest.TestCase):
                 "fields": {"a": {"type": "text"}}, "groups": {},
             })
             write_json(model_dir / "cda.json", {
-                "document": [], "targets": {}, "assertions": [],
+                "document": [], "targets": {}, "validation_rules": [],
                 "unresolved_templates": [],
             })
             write_json(model_dir / "mapping-audit.json", {"fields": {}})
@@ -516,9 +482,9 @@ class CliTests(unittest.TestCase):
                         "repeat_ancestors": [],
                     }
                 },
-                "assertions": [], "unresolved_templates": [],
+                "validation_rules": [], "unresolved_templates": [],
             }
-            mapping = {"version": 2, "fields": {"case.note": "Document.note"}, "structures": []}
+            mapping = {"version": 2, "fields": {"case.note": "Document.note"}, "structures": {}}
             write_json(model_dir / "model.json", model)
             write_json(model_dir / "cda.json", cda)
             write_json(model_dir / "cda-mapping.proposed.json", mapping)
@@ -635,10 +601,10 @@ class CliTests(unittest.TestCase):
                         "scalar_attribute": "code",
                     },
                 }},
-                "assertions": [], "unresolved_templates": [],
+                "validation_rules": [], "unresolved_templates": [],
             }
             mapping = {
-                "version": 8, "fields": {}, "structures": [],
+                "version": 8, "fields": {}, "structures": {},
                 "site_requirements": {"Header.confidentialityCode": {
                     "channel": "values",
                     "reason": "Confidentiality is deployment policy.",

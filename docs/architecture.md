@@ -32,6 +32,7 @@ src/decor2hl7/
 ├── cli.py                  command orchestration
 ├── workspace.py            selection and workspace paths
 ├── retrieval/              ART-DECOR acquisition and closure
+│   ├── api.py              supported operations and URL construction
 │   ├── client.py           scoped HTTP behavior
 │   ├── catalog.py          release/transaction discovery
 │   ├── references.py       typed dependencies and roles
@@ -44,10 +45,10 @@ src/decor2hl7/
 ├── compile/                model and mapping compilation
 │   ├── artifacts.py        validated compiler inputs and degradation
 │   ├── transaction.py      target-neutral dataset model
-│   ├── terminology.py      terminology accessors
 │   ├── structural.py       generated occurrence rules
 │   ├── schematron.py       bounded supporting evidence
 │   ├── mapping.py          candidates, gates, audit, proposal
+│   ├── site.py             site CSV and input-code proposals
 │   └── reports.py          readable generated products
 ├── cda/                    CDA target implementation
 │   ├── art_decor.py        owner-grammar classification
@@ -57,7 +58,10 @@ src/decor2hl7/
 │   ├── extensions.py       reviewed exact overlays
 │   ├── compile.py          effective CDA compilation
 │   ├── terminology.py      target binding enforcement
+│   ├── semantics.py        CDA value compatibility
+│   ├── parity.py           published/compiled endpoint comparison
 │   └── render.py           representation-driven XML output
+├── domain.py               target-neutral dataset value domains
 ├── data.py                 CSV ingestion and occurrence normalization
 ├── bindings.py             mappings, structures, and construction values
 ├── transforms.py           declarative scalar transforms
@@ -69,9 +73,6 @@ src/decor2hl7/
 ├── state.py                transformation fingerprints and history
 └── transport.py            bounded delivery adapters
 ```
-
-The `build/` package contains transitional import compatibility; new
-architecture belongs in the components above.
 
 ## Setup-time data flow
 
@@ -126,6 +127,10 @@ See
 bounded evidence graph. It emits a rich audit and concise proposal. Reviewed
 mapping remains outside generated `model/`, is protected by an identity lock,
 and may differ from the proposal.
+
+`compile/site.py` separately owns suggestions based on site-local CSV headers
+and observed input values. This keeps the portable dataset-to-CDA mapping
+workflow independent of site data.
 
 See [`topics/mapping-and-construction.md`](topics/mapping-and-construction.md).
 

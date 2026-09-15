@@ -17,9 +17,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .compile.mapping import code_mapping_defaults
+from .compile.site import code_mapping_defaults
 from .data import field_value, ingest
-from .semantics import accepted_values
+from .domain import accepted_values
 from .cda.model import ValueRepresentationKind
 from .workspace import load_json, write_json
 
@@ -886,7 +886,7 @@ def run_fixture(
     cda_mapping: Mapping[str, Any],
 ) -> tuple[dict[str, Any], int]:
     """Run an isolated fixture and write machine- and human-readable results."""
-    from . import cda as cda_runtime
+    from .cda.render import emit
     from . import validate
     from .bindings import build_assignments, structure_rules, target_default_values
     from .transforms import cda_target_name, mapping_rules
@@ -936,7 +936,7 @@ def run_fixture(
                     record, model, cda, cda_mapping, site
                 )
                 assigned_targets.update(assignments)
-                payload, warnings = cda_runtime.emit(
+                payload, warnings = emit(
                     record, model, cda, cda_mapping, site, document_version=1
                 )
                 errors.extend(_case_template_expectation_errors(

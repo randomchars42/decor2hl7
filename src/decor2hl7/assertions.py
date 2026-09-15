@@ -247,7 +247,7 @@ def validate_contexts(
 
 
 def schematron(cda: Mapping[str, Any]) -> str:
-    rules = list(cda.get("validation_rules", cda.get("assertions", [])))
+    rules = list(cda.get("validation_rules", []))
     namespace_uris = {"hl7": HL7}
     prefix_pattern = re.compile(
         r"(?<![:\w.-])([A-Za-z_][\w.-]*):(?=[A-Za-z_*])"

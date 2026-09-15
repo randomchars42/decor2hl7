@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from .semantics import accepted_values, logical_values
+from .domain import accepted_values, logical_values
 from .transforms import OMIT, apply_transform, validate_transform
 
 _MISSING = object()

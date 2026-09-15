@@ -200,6 +200,12 @@ from sufficient evidence. Shared or ambiguous candidates stay unselected. Each
 gap records its first failing gate and reopening evidence; type-compatible
 `possible_targets` remain explicitly non-semantic.
 
+The portable mapping uses exact structure type names. `for_each` preserves an
+existing repeated source group's occurrence identity at an explicit repeated
+CDA ancestor. `repeat_by_discriminator` creates distinct logical occurrences
+over one repeated physical CDA value target only when a required coded
+discriminator proves how each source branch is labelled.
+
 The resulting logical datapoints are written back to `cda.json`. Most logical
 and physical target names are equal; discriminated repetitions may expose
 separate logical names over one repeated physical target.
@@ -234,7 +240,8 @@ existing mapping preserves reviewer-owned selections while refreshing derived
 guides, compatible identities, and generated notes.
 
 `init-cda-mapping --reset` explicitly replaces reviewed state. Ordinary target
-renaming migrates only through one unique stored owner identity.
+renaming migrates only through one unique stored owner identity. Structure type
+names are not migrated or treated as aliases.
 
 `check-cda-mapping` validates compiled targets, structural rules, completion
 policy, intentional nulls, site requirement contracts, and the mapping lock
@@ -252,10 +259,11 @@ in [`reference-transaction.md`](reference-transaction.md).
 | reference extraction and resolution | `retrieval/references.py`, `retrieval/resolution.py` |
 | recursive fetch and cache | `retrieval/fetch.py`, `retrieval/artifacts.py` |
 | compiler input validation | `compile/artifacts.py` |
-| dataset and terminology | `compile/transaction.py`, `compile/terminology.py` |
+| dataset and terminology | `compile/transaction.py`, `domain.py` |
 | CDA structure and values | `cda/core.py`, `cda/datatypes.py`, `cda/compile.py` |
 | conformance evidence | `conformance.py`, `compile/schematron.py` |
 | mapping and reports | `compile/mapping.py`, `compile/structural.py`, `compile/reports.py` |
+| site input proposals | `compile/site.py` |
 
 Site input, runtime construction, state, and delivery are documented in
 [`topics/input-runtime-and-delivery.md`](topics/input-runtime-and-delivery.md).

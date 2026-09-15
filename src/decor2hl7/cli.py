@@ -257,7 +257,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     )
     if closure.get("truncated"):
         _say("warning: closure stopped at --max-requests; increase the limit and rerun fetch")
-    if closure.get("crawl_complete", closure.get("complete")) and not closure.get("build_ready", True):
+    if closure.get("crawl_complete") and not closure.get("build_ready", True):
         for error in closure.get("readiness_errors", []):
             _say(f"error: {error}")
     for warning in closure.get("degradation_warnings", []):
@@ -274,18 +274,6 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         _say("error: --fail-on-degraded rejected the degraded retrieval closure")
         succeeded = False
     return 0 if succeeded else 2
-
-
-def _build_inputs(root: Path) -> tuple[Path, list[Path], list[Path], list[Path], list[Path]]:
-    """Compatibility tuple backed by the typed compiler input contract."""
-    inputs = _compiler_inputs(root)
-    return (
-        inputs["transaction_analysis"],
-        inputs["model_resources"],
-        inputs["templates"],
-        [],
-        inputs["mapping_evidence"],
-    )
 
 
 def _compiler_inputs(root: Path) -> dict[str, Any]:
@@ -306,7 +294,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         selected_closure_templates,
         write_build_diagnostics,
     )
-    from .compile.mapping import write_code_mapping
+    from .compile.site import write_code_mapping
     from .cda.compile import write_cda_model
     from .cda.core import core_paths
     from .compile.mapping import write_mapping_model
@@ -492,7 +480,7 @@ def cmd_validate_cda(args: argparse.Namespace) -> int:
 
 
 def cmd_propose_input(args: argparse.Namespace) -> int:
-    from .compile.mapping import write_input_mappings
+    from .compile.site import write_input_mappings
 
     root = _root(args)
     release = selected_release(root)
@@ -597,76 +585,6 @@ def _merge_code_mapping_defaults(source: Path, destination: Path) -> int:
     if added:
         write_json(destination, current)
     return added
-
-
-def _migrate_repeat_by_discriminator(source: Path, destination: Path) -> int:
-    """Replace generated legacy fan-out rules with their bound successor.
-
-    Migration is deliberately narrow: source fields and the shared physical
-    CDA value target must match exactly.  Hand-written fan-out rules without a
-    uniquely corresponding proposal remain untouched.
-    """
-    proposed = load_json(source)
-    current = load_json(destination)
-    proposed_structures = proposed.get("structures", {})
-    current_structures = current.get("structures", {})
-    if not isinstance(proposed_structures, Mapping) or not isinstance(current_structures, dict):
-        return 0
-
-    def identity(rule: Mapping[str, Any]) -> tuple[frozenset[str], frozenset[str]]:
-        branches = [
-            branch for branch in rule.get("branches", [])
-            if isinstance(branch, Mapping)
-        ]
-        return (
-            frozenset(str(branch.get("source") or "") for branch in branches),
-            frozenset(
-                str(branch.get("cda_target") or branch.get("target") or "")
-                for branch in branches
-            ),
-        )
-
-    replacements: dict[str, tuple[str, dict[str, Any]]] = {}
-    proposed_by_identity = {
-        identity(rule): (str(name), dict(rule))
-        for name, rule in proposed_structures.items()
-        if isinstance(rule, Mapping)
-        and rule.get("type") == "repeat_by_discriminator"
-    }
-    for old_name, old_rule in list(current_structures.items()):
-        if not isinstance(old_rule, Mapping) or old_rule.get("type") != "fan_out":
-            continue
-        replacement = proposed_by_identity.get(identity(old_rule))
-        if replacement is not None:
-            replacements[str(old_name)] = replacement
-    if not replacements:
-        return 0
-
-    fields = current.get("fields", {})
-    for old_name, (new_name, new_rule) in replacements.items():
-        del current_structures[old_name]
-        current_structures[new_name] = new_rule
-        branches = {
-            str(branch.get("source") or ""): branch
-            for branch in new_rule.get("branches", [])
-            if isinstance(branch, Mapping)
-        }
-        if isinstance(fields, dict):
-            for path, selection in list(fields.items()):
-                if not isinstance(selection, Mapping) or selection.get("structure") != old_name:
-                    continue
-                branch = branches.get(str(path))
-                if branch is None:
-                    continue
-                fields[path] = {
-                    "target": str(branch.get("target") or ""),
-                    "cda_target": str(branch.get("cda_target") or ""),
-                    "structure": new_name,
-                    **({"branch": branch["branch"]} if branch.get("branch") else {}),
-                }
-    current["version"] = max(int(current.get("version") or 0), 6)
-    write_json(destination, current)
-    return len(replacements)
 
 
 def _copy_generated_guide(source: Path, destination: Path) -> None:
@@ -858,7 +776,6 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
     if created:
         _say("created " + str(destination))
     elif not reset:
-        migrated = _migrate_repeat_by_discriminator(source, destination)
         from .compile.mapping import (
             _mapping_configuration_notes, migrate_mapping_target_identities,
         )
@@ -881,8 +798,6 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
             ),
         )
         changes = []
-        if migrated:
-            changes.append(f"migrated {migrated} discriminator rule(s)")
         if target_migrations:
             changes.append(f"migrated {target_migrations} CDA target reference(s)")
         if notes:
@@ -1024,7 +939,7 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
     """Validate the shareable dataset-to-CDA bundle without site CSV input."""
     from . import validate
     from .bindings import required_unmapped_null_flavor
-    from .compile.mapping import code_mapping_defaults
+    from .compile.site import code_mapping_defaults
     from .testing import synthetic_site
 
     root = _root(args)
@@ -1257,7 +1172,7 @@ def _transform(
     cda_mapping_override: str | Path | None = None,
     site_config_override: str | Path | None = None,
 ) -> tuple[list[Path], dict[str, int]]:
-    from . import cda as cda_runtime
+    from .cda.render import emit
     from . import data, state, validate
 
     release = selected_release(root)
@@ -1295,7 +1210,7 @@ def _transform(
         if disposition == "UNCHANGED":
             skipped_unchanged += 1
             continue
-        payload, render_problems = cda_runtime.emit(
+        payload, render_problems = emit(
             record, model, cda, cda_mapping, site, document_version=document_version
         )
         stem = f"{_safe_key(raw_key)}-v{document_version}"

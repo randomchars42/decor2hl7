@@ -181,7 +181,7 @@ class ExternalSourceTests(unittest.TestCase):
                 )
             self.assertIsNotNone(path)
             self.assertTrue(all(published not in url for url in calls))
-            resources = manifest["resources"]  # type: ignore[assignment]
+            resources = manifest["resources"]
             self.assertEqual(resources[f"template:{published}"]["status"], "alias")  # type: ignore[index]
             self.assertEqual(
                 resources[f"template:{published}"]["alias_of"],  # type: ignore[index]
@@ -219,7 +219,7 @@ class ExternalSourceTests(unittest.TestCase):
             release_dir = Path(tmp)
             published = "2.16.840.1.1133883.17.3.10.1.34"
             corrected = "2.16.840.1.113883.17.3.10.1.34"
-            manifest: dict[str, object] = {"resources": {
+            manifest: dict[str, Any] = {"resources": {
                 f"template:{corrected}": {
                     "status": "missing", "settled": True,
                     "identity": {
@@ -238,8 +238,8 @@ class ExternalSourceTests(unittest.TestCase):
                 )
             self.assertIsNone(result)
             mocked_get.assert_not_called()
-            resources = manifest["resources"]  # type: ignore[assignment]
-            self.assertEqual(resources[f"template:{published}"]["status"], "alias")  # type: ignore[index]
+            resources = manifest["resources"]
+            self.assertEqual(resources[f"template:{published}"]["status"], "alias")
 
             transaction = release_dir / "transactions" / "tx"
             transaction.mkdir(parents=True)

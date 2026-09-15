@@ -1,4 +1,4 @@
-"""Shared mapping/runtime semantics.
+"""CDA mapping and runtime value compatibility.
 
 Keep the same direct-write rules in the mapper, configuration validator and
 renderer. Formal ART-DECOR evidence may exist even when a value cannot be
@@ -9,10 +9,11 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
-from .cda.datatypes import base_datatype as _catalogue_base_datatype
-from .cda.datatypes import value_representation
-from .cda.model import ValueRepresentationKind
-from .cda.terminology import (
+from ..domain import accepted_values
+from .datatypes import base_datatype as _catalogue_base_datatype
+from .datatypes import value_representation
+from .model import ValueRepresentationKind
+from .terminology import (
     NULL_FLAVORS_WITH_ORIGINAL_TEXT,
     required_binding_allows_null_flavor,
 )
@@ -33,30 +34,7 @@ def required_value_set_ids(target: Mapping[str, Any]) -> set[str]:
             for item in bindings if isinstance(item, Mapping)
             and binding_strength(item) == "required" and item.get("id")
         }
-    # Compatibility with models compiled before strength was retained. The
-    # ART-DECOR schema default is required.
-    return {str(value) for value in target.get("value_sets", []) if value}
-
-
-def accepted_values(field: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Return the executable domain, with model-v1 compatibility."""
-    values = field.get("accepted_values")
-    if isinstance(values, Mapping):
-        return values
-    formal = field.get("formal_terminology")
-    if isinstance(formal, Mapping) and isinstance(formal.get("members"), Mapping):
-        members = formal.get("members", {})
-        if members:
-            return members
-    legacy = field.get("values")
-    return legacy if isinstance(legacy, Mapping) else {}
-
-
-def logical_values(field: Mapping[str, Any]) -> Mapping[str, Any]:
-    domain = field.get("logical_domain")
-    if isinstance(domain, Mapping) and isinstance(domain.get("options"), Mapping):
-        return domain.get("options", {})
-    return accepted_values(field)
+    return set()
 
 
 def base_datatype(value: Any) -> str:

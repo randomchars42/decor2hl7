@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import csv
-import difflib
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -13,10 +11,10 @@ from typing import Any, Iterable, Mapping
 
 from ..retrieval.xml import child_text, local, parse_file
 from ..workspace import write_json
-from ..semantics import (
-    accepted_values, base_datatype, direct_compatibility,
-    logical_values, payload_match, required_value_set_ids, target_type_match,
-    transformed_compatibility, type_match,
+from ..domain import accepted_values, logical_values
+from ..cda.semantics import (
+    base_datatype, direct_compatibility, payload_match, required_value_set_ids,
+    target_type_match, transformed_compatibility, type_match,
 )
 from ..transforms import cda_target_name, mapping_rules
 from ..cda.datatypes import classify_datatype
@@ -35,10 +33,6 @@ from .structural import (
     for_each_rules as _for_each_rules,
     value_set_members as _value_set_members,
 )
-
-# Private compatibility name retained for downstream extensions while newly
-# generated structures use ``repeat_by_discriminator``.
-_fanout_rule = _repeat_by_discriminator_rule
 
 FORMAL_ORIGIN_EDGES = {"inherit", "contains", "originalId"}
 FORMAL_ORIGIN_REVERSE_EDGES = {
@@ -2142,10 +2136,6 @@ def _possible_target_inventory(
             if claimed_target != name:
                 instance_claims[claimed_target].add(field_path)
         value_set_bindings = target.get("value_set_bindings", [])
-        if not value_set_bindings:
-            value_set_bindings = [
-                {"id": str(value)} for value in target.get("value_sets", [])
-            ]
         source_repeat_depth = len(field.get("repeat_chain", []))
         target_repeats = [
             str(value) for value in target.get("repeat_ancestors", [])
@@ -3094,8 +3084,9 @@ def _cda_mapping_analysis(
     structures: dict[str, dict[str, Any]] = dict(preliminary_structures)
 
     # Shared targets become executable only when their occurrence semantics are
-    # explicit.  Repeat fan-out requires a terminology-backed discriminator;
-    # singleton coalescing uses the conservative equal-or-error policy.
+    # explicit.  ``repeat_by_discriminator`` requires a terminology-backed
+    # discriminator; singleton coalescing uses the conservative equal-or-error
+    # policy.
     for target_name, paths in field_claims.items():
         if len(paths) <= 1:
             continue
@@ -3858,27 +3849,11 @@ def _cda_mapping_analysis(
     )
 
 
-def cda_mapping_reports(
-    model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: Iterable[Path]
-) -> tuple[dict[str, Any], str, str]:
-    """Return the editable proposal and both human-readable reports."""
-    proposal, _, report, details = _cda_mapping_analysis(model, cda, xml_paths)
-    return proposal, report, details
-
-
 def cda_mapping_audit(
     model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: Iterable[Path]
 ) -> tuple[dict[str, Any], dict[str, Any], str, str]:
     """Return proposal, complete structured audit and both reports."""
     return _cda_mapping_analysis(model, cda, xml_paths)
-
-
-def cda_mapping_proposal(
-    model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: Iterable[Path]
-) -> tuple[dict[str, Any], str]:
-    """Return the editable proposal and user-facing report."""
-    proposal, report, _ = cda_mapping_reports(model, cda, xml_paths)
-    return proposal, report
 
 
 def mapping_field_delta(
@@ -3994,333 +3969,6 @@ def _mapping_configuration_notes(
             "artifact": str(rule.get("request_key") or ""),
         })
     return notes
-
-
-def _headers(input_dir: Path | None) -> dict[str, list[str]]:
-    out: dict[str, list[str]] = {}
-    if input_dir is None or not input_dir.exists():
-        return out
-    for path in sorted(input_dir.glob("*.csv")):
-        with path.open(encoding="utf-8-sig", newline="") as handle:
-            sample = handle.read(8192)
-            handle.seek(0)
-            try:
-                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-            except csv.Error:
-                dialect = csv.excel
-            reader = csv.reader(handle, dialect)
-            out[path.stem] = next(reader, [])
-    return out
-
-
-def _best_column(path: str, field: Mapping[str, Any], headers: Mapping[str, list[str]]) -> tuple[str | None, float, list[tuple[float, str]]]:
-    needles = {_norm(path.rsplit(".", 1)[-1]), _norm(str(field.get("name") or ""))}
-    scored: list[tuple[float, str]] = []
-    for source, columns in headers.items():
-        for column in columns:
-            norm = _norm(column)
-            if not norm:
-                continue
-            score = max(difflib.SequenceMatcher(None, needle, norm).ratio() for needle in needles if needle)
-            if norm in needles:
-                score = 1.0
-            scored.append((score, f"{source}:{column}"))
-    scored.sort(reverse=True)
-    if not scored:
-        return None, 0.0, []
-    best = scored[0]
-    second = scored[1][0] if len(scored) > 1 else 0.0
-    selected = best[1] if best[0] >= 0.78 and (best[0] - second >= 0.05 or best[0] == 1.0) else None
-    return selected, best[0], scored[:5]
-
-
-def csv_mapping_proposal(model: Mapping[str, Any], input_dir: Path | None, join_column: str) -> tuple[dict[str, Any], str]:
-    headers = _headers(input_dir)
-    fields: dict[str, Any] = {}
-    detail: dict[str, tuple[float, list[tuple[float, str]]]] = {}
-    for path, field in model.get("fields", {}).items():
-        selected, score, candidates = _best_column(path, field, headers)
-        value: Any = selected
-        semantic_text = " ".join(str(field.get(key) or "") for key in (
-            "name", "short_name", "description", "comment", "implementation",
-        )).casefold()
-        boolean_rank = (
-            selected is not None
-            and str(field.get("type") or "") == "integer"
-            and (field.get("min_value") is None or float(field.get("min_value")) >= 1)
-            and ("führende" in semantic_text or "fuehrende" in semantic_text or "hauptdiagnose" in semantic_text)
-            and ("sequenz" in semantic_text or "rank" in semantic_text or "führende" in semantic_text)
-        )
-        if boolean_rank and selected:
-            observed = {item.casefold() for item in _read_column_values(input_dir, selected) if item.strip()}
-            boolean_literals = {"0", "1", "true", "false", "yes", "no", "ja", "nein", "j", "n"}
-            if observed and observed <= boolean_literals:
-                source, column = selected.split(":", 1)
-                value = {
-                    "source": source,
-                    "column": column,
-                    "parse_as": "boolean",
-                    "transform": {
-                        "type": "enum",
-                        "select": "value",
-                        "map": {"true": 1, "false": None},
-                    },
-                }
-        fields[path] = value
-        detail[path] = score, candidates
-    proposal = {
-        "version": 2,
-        "model": {
-            "dataset_id": model.get("meta", {}).get("dataset_id"),
-            "transaction_id": model.get("meta", {}).get("transaction_id"),
-            "effective_date": model.get("meta", {}).get("transaction_effective_date"),
-        },
-        "join": {"column": join_column},
-        "fields": fields,
-    }
-    lines = [
-        "# CSV-to-dataset mapping",
-        "",
-        "Edit `csv-mapping.json`. Each row connects one dataset datapoint to one",
-        "input column; parsing is shown only when it changes the input value.",
-        "",
-        f"Mapped automatically: **{sum(value is not None for value in fields.values())}/{len(fields)}**.",
-        "",
-        "| Dataset datapoint | CSV source and column | Parsing or review note |",
-        "|---|---|---|",
-    ]
-    for path, field in model.get("fields", {}).items():
-        value = fields[path]
-        if value:
-            display = (
-                f"{value.get('source')}:{value.get('column')}"
-                if isinstance(value, Mapping) else str(value)
-            )
-            parsing = (
-                f"Parse as `{value.get('parse_as')}` and apply `{value.get('transform', {}).get('type')}` transform"
-                if isinstance(value, Mapping) and value.get("parse_as") else "Direct"
-            )
-            lines.append(
-                f"| {field.get('name') or path} (`{path}`) | `{display}` | {parsing} |"
-            )
-        else:
-            alternatives = ", ".join(f"{name} ({score:.2f})" for score, name in detail[path][1][:3]) or "none"
-            lines.append(
-                f"| {field.get('name') or path} (`{path}`) | — | Review candidates: {alternatives} |"
-            )
-    lines += [
-        "",
-        "Candidate scores are suggestions only. Unmapped rows remain `null` in the JSON",
-        "until a user chooses a source column.",
-        "",
-    ]
-    return proposal, "\n".join(lines) + "\n"
-
-
-def _read_column_values(input_dir: Path | None, locator: str) -> set[str]:
-    source, column = locator.split(":", 1)
-    if input_dir is None:
-        return set()
-    path = input_dir / f"{source}.csv"
-    if not path.exists():
-        return set()
-    with path.open(encoding="utf-8-sig", newline="") as handle:
-        sample = handle.read(8192)
-        handle.seek(0)
-        try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-        except csv.Error:
-            dialect = csv.excel
-        return {str(row.get(column, "")).strip() for row in csv.DictReader(handle, dialect=dialect) if str(row.get(column, "")).strip()}
-
-
-def _code_mapping_defaults_for_field(field: Mapping[str, Any]) -> dict[str, str]:
-    """Return model-derived raw aliases for one coded field.
-
-    The mapping file is user-facing configuration, so it should be useful before
-    any CSV has been inspected.  Every canonical model value is accepted as
-    itself; terminology codes and differing display names are aliases for that
-    canonical value.  Direct ``field["codes"]`` associations are deliberately
-    ignored here because those describe the data element itself, not one of its
-    permitted values.
-    """
-    values = accepted_values(field)
-    candidates: dict[str, set[str]] = defaultdict(set)
-    canonical_names = {str(value) for value in values}
-
-    def add(alias: Any, canonical: Any) -> None:
-        alias_text = str(alias or "").strip()
-        canonical_text = str(canonical or "").strip()
-        if alias_text and canonical_text in canonical_names:
-            candidates[alias_text].add(canonical_text)
-
-    for canonical, raw_info in values.items():
-        canonical_text = str(canonical)
-        info = raw_info if isinstance(raw_info, Mapping) else {}
-        add(canonical_text, canonical_text)
-
-        code = str(info.get("code") or "").strip()
-        if code:
-            add(code, canonical_text)
-
-        display = str(info.get("display_name") or "").strip()
-        if display and display != canonical_text:
-            add(display, canonical_text)
-        for synonym in info.get("synonyms", []):
-            add(synonym, canonical_text)
-
-    # Dataset concept-list labels are not matched to formal display names.
-    # They become generated input aliases only through the exact
-    # concept-list-member terminology association compiled into model.json.
-    logical_domain = field.get("logical_domain", {})
-    logical_options = (
-        logical_domain.get("options", {})
-        if isinstance(logical_domain, Mapping) else {}
-    )
-    if isinstance(logical_options, Mapping):
-        for label, raw_option in logical_options.items():
-            option = raw_option if isinstance(raw_option, Mapping) else {}
-            association = option.get("terminology_association", {})
-            if not isinstance(association, Mapping):
-                continue
-            associated_canonical = association.get("canonical")
-            add(label, associated_canonical)
-            for synonym in option.get("synonyms", []):
-                add(synonym, associated_canonical)
-
-    # Keep compatibility with hand-built/minimal models where concept-list
-    # options have not yet been folded into ``values``.
-    for option in field.get("options", []):
-        option_text = str(option).strip()
-        if option_text:
-            candidates.setdefault(option_text, set()).add(option_text)
-
-    defaults: dict[str, str] = {}
-    for alias, destinations in candidates.items():
-        # A canonical executable value always means itself. Other aliases are
-        # emitted only when the compiled evidence has one destination.
-        if alias in canonical_names:
-            defaults[alias] = alias
-        elif len(destinations) == 1:
-            defaults[alias] = next(iter(destinations))
-    return defaults
-
-
-def code_mapping_defaults(model: Mapping[str, Any]) -> dict[str, Any]:
-    """Build the input-independent code mapping scaffold from the model."""
-    fields: dict[str, dict[str, str]] = {}
-    for path, field in model.get("fields", {}).items():
-        values = accepted_values(field)
-        options = [str(value) for value in field.get("options", []) if str(value)]
-        has_terminology_codes = any(
-            isinstance(info, Mapping) and bool(info.get("code"))
-            for info in values.values()
-        )
-        if field.get("type") not in {"code", "ordinal"} and not has_terminology_codes:
-            continue
-        if not values and not options:
-            continue
-        fields[path] = _code_mapping_defaults_for_field(field)
-    return {"version": 1, "fields": fields}
-
-
-def codes_mapping_proposal(model: Mapping[str, Any], csv_mapping: Mapping[str, Any], input_dir: Path | None) -> tuple[dict[str, Any], str]:
-    proposal = code_mapping_defaults(model)
-    fields: dict[str, dict[str, str | None]] = {
-        path: dict(values) for path, values in proposal["fields"].items()
-    }
-    lines = [
-        "# Input-value-to-dataset-code mapping",
-        "",
-        "Edit `codes-mapping.json`. Canonical dataset values are accepted unchanged;",
-        "the tables therefore show only aliases that require translation and unresolved",
-        "input values observed in the CSV files. An unresolved value in a finite domain",
-        "is an input error; source normalization does not choose an HL7 missing-data code.",
-        "",
-    ]
-
-    for path, translations in fields.items():
-        field = model.get("fields", {}).get(path, {})
-        values = accepted_values(field)
-        locator = csv_mapping.get("fields", {}).get(path)
-        locator_text: str | None
-        if isinstance(locator, Mapping) and locator.get("source") and locator.get("column"):
-            locator_text = f"{locator['source']}:{locator['column']}"
-        else:
-            locator_text = locator if isinstance(locator, str) else None
-        raw_values = _read_column_values(input_dir, locator_text) if locator_text else set()
-
-        by_norm: dict[str, str] = {}
-        by_code: dict[str, str] = {}
-        for canonical, raw_info in values.items():
-            canonical_text = str(canonical)
-            info = raw_info if isinstance(raw_info, Mapping) else {}
-            by_norm.setdefault(_norm(canonical_text), canonical_text)
-            display = str(info.get("display_name") or "").strip()
-            if display:
-                by_norm.setdefault(_norm(display), canonical_text)
-            code = str(info.get("code") or "").strip()
-            if code:
-                by_code.setdefault(code, canonical_text)
-
-        for raw in sorted(raw_values):
-            translations.setdefault(raw, by_code.get(raw) or by_norm.get(_norm(raw)))
-
-        observed_mapped = sum(translations.get(raw) is not None for raw in raw_values)
-        lines.append(f"## {field.get('name') or path}")
-        lines.append("")
-        lines.append(
-            f"`{path}` — {sum(raw == canonical for raw, canonical in translations.items())} "
-            f"canonical values accepted directly; {observed_mapped}/{len(raw_values)} "
-            "observed input values mapped."
-        )
-        lines.append("")
-        shown = [
-            (raw, canonical) for raw, canonical in translations.items()
-            if canonical is None or raw != canonical
-        ]
-        if shown:
-            lines += [
-                "| Input value | Dataset value |",
-                "|---|---|",
-            ]
-            for raw, destination_value in shown:
-                destination = (
-                    f"`{destination_value}`"
-                    if destination_value
-                    else "**UNRESOLVED — outside executable dataset domain**"
-                )
-                lines.append(f"| `{raw}` | {destination} |")
-        else:
-            lines.append("No aliases require configuration.")
-        lines.append("")
-
-    return {"version": 1, "fields": fields}, "\n".join(lines) + "\n"
-
-
-def write_code_mapping(model_dir: Path, model: Mapping[str, Any]) -> dict[str, Any]:
-    """Write the model-derived code mapping before any CSV inspection."""
-    proposal, report = codes_mapping_proposal(model, {"fields": {}}, None)
-    write_json(model_dir / "codes-mapping.proposed.json", proposal)
-    (model_dir / "codes-mapping.md").write_text(report, encoding="utf-8")
-    return proposal
-
-
-def write_input_mappings(
-    output_dir: Path,
-    input_dir: Path,
-    model: Mapping[str, Any],
-    *,
-    join_column: str = "patient_id",
-) -> dict[str, Any]:
-    """Inspect one CSV snapshot and write only input-side mapping proposals."""
-    csv_proposal, csv_report = csv_mapping_proposal(model, input_dir, join_column)
-    code_proposal, code_report = codes_mapping_proposal(model, csv_proposal, input_dir)
-    write_json(output_dir / "csv-mapping.proposed.json", csv_proposal)
-    write_json(output_dir / "codes-mapping.proposed.json", code_proposal)
-    (output_dir / "csv-mapping.md").write_text(csv_report, encoding="utf-8")
-    (output_dir / "codes-mapping.md").write_text(code_report, encoding="utf-8")
-    return {"csv": csv_proposal, "codes": code_proposal}
 
 
 def cda_datapoints(

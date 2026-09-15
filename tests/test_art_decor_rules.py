@@ -5,16 +5,17 @@ import tempfile
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-from decor2hl7 import assertions, cda
+from decor2hl7 import assertions
 from decor2hl7.cda.art_decor import (
     inspect_template_constructs,
     require_supported_constructs,
 )
-from decor2hl7.cda.compile import compile_cda, select_template_revision
+from decor2hl7.cda.compile import compile_cda, select_template
+from decor2hl7.cda import render as cda
 from decor2hl7.cda.render import _validate_compiled_value
+from decor2hl7.cda.semantics import required_value_set_ids
 from decor2hl7.compile.structural import members_for_target
 from decor2hl7.compile.transaction import compile_model
-from decor2hl7.semantics import required_value_set_ids
 from decor2hl7.validate import verify_compiled_cda
 
 
@@ -68,8 +69,8 @@ class ArtDecorRuleInventoryTests(unittest.TestCase):
             '<template id="t" effectiveDate="2026" statusCode="retired"/>'
         )
         templates = {"t": [active, retired]}
-        self.assertIs(select_template_revision(templates, "t", "dynamic"), active)
-        self.assertIsNone(select_template_revision(templates, "t", "2026"))
+        self.assertIs(select_template(templates, "t", "dynamic"), active)
+        self.assertIsNone(select_template(templates, "t", "2026"))
 
     def test_choice_and_template_context_attributes_remain_executable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

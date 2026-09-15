@@ -184,12 +184,13 @@ adds only applicable indented traceability lines:
   smallest evidence that can reopen an unresolved mapping.
 
 The source-oriented tree shows template identity for every target because one
-datapoint may fan out across templates. The inverse tree deduplicates template
-identity at the entity node and is keyed by physical CDA leaves. Logical
-occurrences created by discriminator structures name both their logical target
-and shared physical target. Consequently its no-source count is calculated
-after logical-to-physical resolution. `○D` marks a physical leaf without a
-dataset counterpart that is completed by an exact reviewed target default.
+datapoint may map to targets in multiple templates. The inverse tree
+deduplicates template identity at the entity node and is keyed by physical CDA
+leaves. Logical occurrences created by discriminator structures name both their
+logical target and shared physical target. Consequently its no-source count is
+calculated after logical-to-physical resolution. `○D` marks a physical leaf
+without a dataset counterpart that is completed by an exact reviewed target
+default.
 
 The extended report remains exhaustive and deterministic. It does not promote
 `possible_targets` to semantic suggestions, invent absolute document XPaths,
