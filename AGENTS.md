@@ -1,112 +1,110 @@
 # Instructions for coding agents
 
-This file applies to the entire repository. Read the project information below
-before planning or changing code. Do not treat conversation history, an
-unmerged branch, or a copied source tree as the authoritative project state.
+This file applies to the entire repository. Use the checked-out `main` code,
+tests, and current topic documentation together; do not reconstruct policy from
+conversation history, deleted dated analyses, generated source trees, or an
+unmerged branch.
 
 ## Required project context
 
-Read these files in this order:
+Read these current documents before planning or changing the project:
 
-1. [`Project-decor2hl7.md`](Project-decor2hl7.md) — goal, ownership, the three
-   workflows, workspace layout, and project-wide constraints.
-2. [`docs/decisions.md`](docs/decisions.md) — accepted, open, rejected, and
-   superseded semantic and architectural decisions, with implementation status.
-3. [`docs/known-issues.md`](docs/known-issues.md) — unresolved clinical,
-   specification, validation, and delivery boundaries. Do not silently invent a
-   solution for an open boundary.
-4. [`docs/architecture.md`](docs/architecture.md) — current component and data
+1. [`Project-decor2hl7.md`](Project-decor2hl7.md) — goal, ownership, workspace,
+   and project-wide invariants.
+2. [`docs/index.md`](docs/index.md) — topic navigation and authority order.
+3. [`docs/topics/art-decor-authority.md`](docs/topics/art-decor-authority.md) —
+   owner constructs and the boundary for local supplements.
+4. [`docs/open-boundaries.md`](docs/open-boundaries.md) — unresolved matters;
+   do not silently invent a solution for one.
+5. [`docs/architecture.md`](docs/architecture.md) — current component and data
    flow boundaries.
-5. [`README.md`](README.md) — current user-facing commands and behavior.
+6. [`README.md`](README.md) — current user-facing commands and behavior.
 
-Then read the task-specific material:
+Then read the task-specific topic page identified by `docs/index.md`, plus:
 
+- [`docs/specification-to-mapping-pipeline.md`](docs/specification-to-mapping-pipeline.md)
+  for acquisition, compilation, or mapping-pipeline work;
+- [`docs/reference-transaction.md`](docs/reference-transaction.md) for selected
+  AKTIN profile and clinical mapping questions;
 - [`docs/mapping-documentation-format.md`](docs/mapping-documentation-format.md)
-  for changes to generated `cda-mapping.md` documentation;
-- [`docs/analyses/README.md`](docs/analyses/README.md) and the relevant dated
-  analysis for specification evidence and retrieval/compiler investigations;
-- [`docs/history/`](docs/history/) only for historical rationale, not current
-  policy;
-- the affected tests and implementation files for executable behavior.
+  for generated mapping-documentation changes;
+- [`docs/decisions.md`](docs/decisions.md) only when resolving a stable `DEC-*`
+  identifier used by mapping or recovery metadata;
+- the affected implementation and regression tests for executable behavior.
 
 ## Authority and conflict handling
 
-The `randomchars42/decor2hl7` repository on `main` is canonical. Use its code,
-tests, and durable documentation together:
+The `randomchars42/decor2hl7` repository on `main` is canonical. Exact owner
+artifacts define specification facts. Topic pages state accepted current project
+policy. Tests prove implemented behavior but do not independently establish
+clinical policy. Generated workspace artifacts provide concrete evidence for
+their exact release and transaction.
 
-- `docs/decisions.md` records current project policy;
-- `docs/known-issues.md` records deliberately unresolved boundaries;
-- dated analyses are evidence snapshots and may describe earlier behavior;
-- tests prove implemented behavior but do not by themselves establish clinical
-  policy;
-- conversations are working context and must be consolidated into the
-  repository before they are considered durable decisions.
+If these sources disagree, identify the conflict. Do not merge artifact
+revisions, infer semantics from generic runtime capability, or substitute a
+nearby ART-DECOR artifact for an exact missing identity.
 
-If sources disagree, identify the conflict explicitly. Do not merge different
-artifact revisions, infer clinical semantics from generic runtime capability,
-or replace an exact missing ART-DECOR artifact with another revision.
+Chronological analysis and completed-plan documents are intentionally absent.
+Git history is available for archaeology, but historical conclusions are not
+current policy unless they survive in a topic page, the reference-transaction
+page, or an open boundary.
 
-## Demo workspace evidence
+## Reference workspace
 
-The GitHub repository `randomchars42/decor2hl7-test-workspace` contains a
-complete demo workspace for the currently selected release and transaction. It
-includes the current generated state of:
+The companion `randomchars42/decor2hl7-test-workspace` records the current
+generated reference state. Verify its `aktin.json` identity before using it. A
+complete workspace contains:
 
-- `spec/<release>/` from `decor2hl7 fetch`;
-- `model/<release>/<transaction>/` from `decor2hl7 build`;
-- `mapping/<release>/<transaction>/` from
-  `decor2hl7 init-cda-mapping`;
-- `site/<release>/` and `site/<release>/<transaction>/` from
-  `decor2hl7 init-site-config`, together with the input proposal on which that
-  site configuration is based; and
-- `config/sources.json` where the demo needs repository-hint overrides.
+- `spec/<release>/` from `fetch`;
+- `model/<release>/<transaction>/` from `build`;
+- `mapping/<release>/<transaction>/` from `init-cda-mapping`;
+- `site/` and input configuration;
+- `test/` generated from the authored scenario;
+- acquisition configuration under `config/` when required.
 
-Use that workspace as the first concrete evidence source for questions about
-the selected templates, mappings, concepts, target locations and generated
-proposals—for example, why a dataset concept is not mapped. Check the exact
-release and transaction recorded there before drawing conclusions. The demo is
-generated evidence, not policy: resolve conflicts in favor of this repository's
-`main` branch, decision register and source code, and implement fixes here
-rather than editing generated demo outputs directly.
+For a field-level question, inspect the selected source under `spec/`, compiled
+field and mapping evidence under `model/`, and the reviewed selection under
+`mapping/` together. The generated workspace is evidence, not policy. Implement
+durable fixes in this repository.
 
 ## Working rules
 
 - Preserve the three ownership boundaries: portable target mappings belong to
-  the specification/mapping workflow, CSV/code/site configuration belongs to
-  the local site workflow, and runtime consumes compiled models and reviewed
-  configuration without accessing ART-DECOR.
+  the specification workflow, CSV/code/site configuration belongs to the local
+  site workflow, and runtime consumes both with compiled models.
 - Keep the normalized dataset and site-input pipeline target-neutral. CDA is the
-  first target, not the architectural boundary; future FHIR support should reuse
-  target-independent stages.
+  first target, not the common architecture.
 - Prefer procedural, typed, small, unit-testable functions and one coherent CLI.
   Do not introduce a class hierarchy without a recorded reason.
-- Preserve explicit artifact identity, effective dates, provenance, occurrence
-  identity, and degraded-versus-fatal build distinctions.
-- Never silently infer joins, repeated-occurrence alignment, lossy terminology
-  crosswalks, clinical timestamps, or mapping choices without sufficient
-  evidence and a reviewable rule.
+- Preserve exact artifact identity, effective dates, provenance, occurrence
+  identity, and crawl-degraded versus build-degraded distinctions.
+- Never infer joins, independent repeated-occurrence alignment, lossy
+  terminology crosswalks, clinical timestamps, or mapping choices without
+  sufficient evidence and a reviewable rule.
+- Do not copy generated coverage counts, test totals, or temporary commit state
+  into durable prose. Keep volatile measurements in generated artifacts and
+  regression fixtures.
 
 ## Repository write authorization
 
 The repository owner has authorized coding agents working on this project to
 create and merge pull requests into `randomchars42/decor2hl7` without requesting
-case-by-case confirmation. This authorization remains in effect until the owner
-revokes it.
-
-Continue to use a pull request, review the exact diff, complete the checks below,
-and respect repository protections. This authorization does not permit bypassing
-failed checks, branch protection, permission failures, or an explicit request to
-leave a pull request unmerged.
+case-by-case confirmation. Continue to use a pull request, review the exact
+diff, complete the repository checklist, and respect branch protections and
+failed checks. This authorization ends if the owner revokes it or explicitly
+asks that a pull request remain unmerged.
 
 ## Finishing a change
 
-For every semantic or architectural change, update in the same pull request:
+For a semantic or architectural change, update in the same pull request:
 
-1. the affected entry in `docs/decisions.md`, or add the next stable `DEC-*`;
-2. the affected item in `docs/known-issues.md`, when applicable;
-3. regression tests for the behavior;
-4. user-facing and generated-documentation specifications, when applicable.
+1. the authoritative topic page;
+2. the affected entry in `docs/open-boundaries.md`, if any;
+3. regression tests;
+4. user-facing or generated-documentation specifications, when applicable;
+5. `docs/decisions.md` only if durable mapping/recovery metadata needs a new or
+   changed stable identifier.
 
 Use [`.github/pull_request_template.md`](.github/pull_request_template.md) as
-the completion checklist. Record verification commands and do not leave a
-decision only in chat, an analysis snapshot, or an unmerged branch.
+the completion checklist. Record verification commands and do not leave policy
+only in chat or an unmerged branch.

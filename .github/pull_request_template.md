@@ -4,8 +4,9 @@ Describe the observable change and its scope.
 
 ## Semantic consistency
 
-- [ ] Durable decision record updated, or not applicable
-- [ ] Known issue opened/resolved, or not applicable
+- [ ] Authoritative topic documentation updated, or not applicable
+- [ ] Open boundary opened/resolved, or not applicable
+- [ ] Stable decision identifier updated only when durable metadata requires it, or not applicable
 - [ ] Regression test added or updated, or not applicable
 - [ ] User-facing/generated documentation updated, or not applicable
 - [ ] No decision exists only in conversation text or an unmerged branch
