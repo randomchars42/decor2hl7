@@ -304,6 +304,313 @@ def _dataset_coverage_tree(
     return lines + ["```"]
 
 
+def _physical_target_name(
+    cda: Mapping[str, Any], rule: Mapping[str, Any],
+) -> str:
+    """Resolve a reviewable logical occurrence to its physical CDA leaf."""
+    name = cda_target_name(rule)
+    if name in cda.get("targets", {}):
+        return name
+    datapoint = cda.get("datapoints", {}).get(name, {})
+    if isinstance(datapoint, Mapping) and datapoint.get("cda_target"):
+        return str(datapoint["cda_target"])
+    return name
+
+
+def _plain(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _cardinality(model: Mapping[str, Any]) -> str:
+    minimum = model.get("min")
+    maximum = model.get("max")
+    if minimum is None and maximum is None:
+        return ""
+    return f"{0 if minimum is None else minimum}..{'*' if maximum is None else maximum}"
+
+
+def _source_trace(path: str, field: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    if field.get("concept"):
+        parts.append(f"concept {field['concept']}")
+    parts.append(path)
+    if field.get("type"):
+        parts.append(str(field["type"]))
+    cardinality = _cardinality(field)
+    if cardinality:
+        parts.append(cardinality)
+    return " · ".join(parts)
+
+
+def _template_identity(target: Mapping[str, Any]) -> str:
+    template_id = str(target.get("template_id") or "")
+    revision = str(target.get("template_effective_date") or "")
+    if not template_id:
+        return ""
+    return template_id + (f" @ {revision}" if revision else "")
+
+
+def _binding_trace(target: Mapping[str, Any]) -> str:
+    bindings: list[str] = []
+    for binding in target.get("value_set_bindings", []):
+        if not isinstance(binding, Mapping) or not binding.get("id"):
+            continue
+        identity = str(binding["id"])
+        revision = str(binding.get("effective_date") or "")
+        if revision:
+            identity += f" @ {revision}"
+        if identity not in bindings:
+            bindings.append(identity)
+    if not bindings:
+        bindings.extend(
+            str(value) for value in target.get("value_sets", []) if value
+        )
+    return ", ".join(f"ValueSet {value}" for value in bindings)
+
+
+def _target_trace(
+    target: Mapping[str, Any], *, include_template: bool,
+) -> str:
+    parts: list[str] = []
+    if include_template:
+        parts.append(_template_label(target))
+        identity = _template_identity(target)
+        if identity:
+            parts.append(identity)
+    path = str(target.get("path") or target.get("element_name") or "")
+    if path:
+        parts.append(f"template-relative {path}")
+    shape = " ".join(filter(None, (
+        str(target.get("datatype") or ""),
+        _cardinality(target),
+        str(target.get("conformance") or ""),
+    )))
+    if shape:
+        parts.append(shape)
+    binding = _binding_trace(target)
+    if binding:
+        parts.append(binding)
+    return " · ".join(parts) or "compiled CDA target metadata unavailable"
+
+
+def _scalar_summary(value: Any) -> str:
+    if isinstance(value, Mapping):
+        preferred = [
+            key for key in (
+                "code", "codeSystem", "displayName", "nullFlavor", "value",
+            ) if value.get(key) not in (None, "")
+        ]
+        if preferred:
+            return ", ".join(f"{key}={value[key]}" for key in preferred)
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
+def _structure_trace(
+    name: str, structure: Mapping[str, Any], rule: Mapping[str, Any],
+    physical: str,
+) -> str:
+    kind = str(structure.get("type") or "structural rule")
+    parts = [f"{kind} ({name})"]
+    logical = str(rule.get("target") or "")
+    if physical and physical != logical:
+        parts.append(f"physical {{{physical}}}")
+    if rule.get("branch"):
+        parts.append(f"branch {rule['branch']}")
+    constants = rule.get("constants", {})
+    if not constants and rule.get("branch"):
+        branches = structure.get("branches", [])
+        if isinstance(branches, Sequence):
+            branch = next((
+                item for item in branches
+                if isinstance(item, Mapping)
+                and str(item.get("branch") or "") == str(rule["branch"])
+            ), {})
+            if isinstance(branch, Mapping):
+                constants = branch.get("constants", {})
+    if isinstance(constants, Mapping):
+        parts.extend(
+            f"{target}={_scalar_summary(value)}"
+            for target, value in constants.items()
+        )
+    policy = structure.get("policy")
+    if policy:
+        parts.append(f"policy {policy}")
+    transform = structure.get("transform", {})
+    if isinstance(transform, Mapping) and transform.get("type"):
+        parts.append(f"transform {transform['type']}")
+        if transform.get("null_flavor"):
+            parts.append(f"nullFlavor {transform['null_flavor']}")
+    reason = _plain(structure.get("reason"))
+    if reason:
+        parts.append(reason)
+    return "; ".join(parts)
+
+
+def _rule_trace(
+    rule: Mapping[str, Any], mapping: Mapping[str, Any], physical: str,
+) -> str:
+    structure_name = str(rule.get("structure") or "")
+    structures = mapping.get("structures", {})
+    if structure_name and isinstance(structures, Mapping):
+        structure = structures.get(structure_name, {})
+        if isinstance(structure, Mapping):
+            return _structure_trace(structure_name, structure, rule, physical)
+    mode = str(rule.get("mode") or "")
+    parts: list[str] = []
+    if mode == "fallback_if_active":
+        parts.append("fallback_if_active; fills only an already-active CDA branch")
+    elif mode == "presence":
+        parts.append("presence rule")
+    elif mode and mode != "value":
+        parts.append(f"mode {mode}")
+    transform = rule.get("transform")
+    if isinstance(transform, Mapping):
+        kind = str(transform.get("type") or "transform")
+        details = [f"transform {kind}"]
+        for key, label in (
+            ("select", "select"), ("code_system", "codeSystem"),
+            ("null_flavor", "nullFlavor"), ("policy", "policy"),
+        ):
+            if transform.get(key) not in (None, ""):
+                details.append(f"{label} {transform[key]}")
+        parts.append(", ".join(details))
+    reason = _plain(rule.get("reason"))
+    if reason:
+        parts.append(reason)
+    return "; ".join(parts)
+
+
+def _gap_trace(detail: Mapping[str, Any]) -> str:
+    gap = detail.get("gap", {})
+    parts: list[str] = []
+    if isinstance(gap, Mapping):
+        gate = str(gap.get("gate") or "")
+        kind = str(gap.get("kind") or "")
+        if gate or kind:
+            parts.append(":".join(value for value in (gate, kind) if value))
+        reopens = gap.get("reopens_with", [])
+        if isinstance(reopens, Sequence) and not isinstance(reopens, (str, bytes)):
+            evidence = ", ".join(str(value) for value in reopens if value)
+            if evidence:
+                parts.append(f"reopen with {evidence}")
+    reason = _plain(detail.get("unresolved_reason"))
+    if reason and reason not in parts:
+        parts.append(reason.replace("_", " "))
+    return " · ".join(parts) or "no approved semantic CDA association"
+
+
+def _extended_dataset_coverage_tree(
+    model: Mapping[str, Any], cda: Mapping[str, Any], mapping: Mapping[str, Any],
+    audit: Mapping[str, Any], coverage: Mapping[str, Any],
+) -> list[str]:
+    """Render source-oriented coverage with stable clinical/CDA traceability."""
+    groups = model.get("groups", {})
+    fields = model.get("fields", {})
+    children: dict[str | None, list[tuple[str, str]]] = defaultdict(list)
+    for path, group in groups.items():
+        parent = str(group.get("parent") or "") or None
+        children[parent].append(("group", str(path)))
+    for path in _ordered_model_paths(model):
+        field = fields.get(path, {})
+        parent = str(field.get("parent") or "") or None
+        children[parent].append(("field", path))
+
+    configured = mapping.get("fields", {})
+    reviewed = coverage.get("reviewed", {})
+    audited = audit.get("fields", {})
+    lines = ["```text", f"   Dataset model — {len(fields)} datapoints"]
+
+    def annotations(prefix: str, path: str, field: Mapping[str, Any]) -> None:
+        lines.append(f"   {prefix}S: {_source_trace(path, field)}")
+        selection = configured.get(path) if isinstance(configured, Mapping) else None
+        rules = [
+            rule for rule in mapping_rules(selection)
+            if rule.get("mode") != "fallback"
+        ]
+        for index, rule in enumerate(rules, 1):
+            physical = _physical_target_name(cda, rule)
+            target = cda.get("targets", {}).get(physical, {})
+            label = "T" if len(rules) == 1 else f"T{index}"
+            logical = str(rule.get("target") or physical)
+            suffix = (
+                f" · logical {{{logical}}} uses physical {{{physical}}}"
+                if logical != physical else ""
+            )
+            lines.append(
+                f"   {prefix}{label}: {_target_trace(target, include_template=True)}{suffix}"
+            )
+            trace = _rule_trace(rule, mapping, physical)
+            if trace:
+                lines.append(f"   {prefix}R: {trace}")
+        if path in coverage.get("suggested", {}):
+            targets = coverage["suggested"][path]
+            for index, target_name in enumerate(targets, 1):
+                label = "T" if len(targets) == 1 else f"T{index}"
+                target = cda.get("targets", {}).get(target_name, {})
+                lines.append(
+                    f"   {prefix}{label}: suggested {_target_trace(target, include_template=True)}"
+                )
+        review = reviewed.get(path)
+        if isinstance(review, Mapping):
+            decision = str(review.get("decision") or "reviewed null")
+            reason = _plain(review.get("reason"))
+            lines.append(f"   {prefix}G: {decision}" + (f" · {reason}" if reason else ""))
+        elif path in coverage.get("missing", []):
+            detail = audited.get(path, {}) if isinstance(audited, Mapping) else {}
+            detail = detail if isinstance(detail, Mapping) else {}
+            context = detail.get("context", {})
+            node = context.get("node", {}) if isinstance(context, Mapping) else {}
+            if isinstance(node, Mapping) and node:
+                lines.append(
+                    f"   {prefix}T-context: {_target_trace(node, include_template=True)}"
+                )
+            lines.append(f"   {prefix}G: {_gap_trace(detail)}")
+
+    def render(parent: str | None, stem: str = "") -> None:
+        items = children.get(parent, [])
+        for index, (kind, path) in enumerate(items):
+            last = index == len(items) - 1
+            branch = "└──" if last else "├──"
+            next_stem = stem + ("    " if last else "│   ")
+            if kind == "group":
+                group = groups.get(path, {})
+                name = str(group.get("name") or path.rsplit(".", 1)[-1])
+                suffix = (
+                    " [repeatable dataset group]"
+                    if group.get("repeating") else ""
+                )
+                lines.append(f"   {stem}{branch} {name}{suffix}")
+                render(path, next_stem)
+                continue
+            field = fields.get(path, {})
+            name = str(field.get("name") or path.rsplit(".", 1)[-1])
+            if path in coverage.get("selected", {}):
+                status = "✓"
+                consequence = " → " + ", ".join(
+                    f"{{{target}}}" for target in coverage["selected"][path]
+                )
+            elif path in reviewed:
+                status = "="
+                decision = str(reviewed[path].get("decision") or "")
+                consequence = " → — intentionally unmapped"
+                if decision:
+                    consequence += f" [{decision}]"
+            elif path in coverage.get("suggested", {}):
+                status = "!"
+                consequence = " → " + ", ".join(
+                    f"{{{target}}}" for target in coverage["suggested"][path]
+                )
+            else:
+                status = "×"
+                consequence = " → — no approved writable CDA target"
+            lines.append(f"{status:<3}{stem}{branch} {name}{consequence}")
+            annotations(next_stem, path, field)
+
+    render(None)
+    return lines + ["```"]
+
+
 def _reportable_cda_target(target: Mapping[str, Any]) -> bool:
     """Limit inverse coverage to template-level payload leaves.
 
@@ -448,6 +755,197 @@ def _cda_coverage_tree(
                     f"{status:<3}{area_stem}{entity_stem[len(area_stem):]}{branch} "
                     f"{leaf} {{{row['name']}}}{consequence}"
                 )
+    return lines + ["```"], no_source
+
+
+def _extended_cda_coverage_tree(
+    view: Mapping[str, Any], model: Mapping[str, Any], cda: Mapping[str, Any],
+    mapping: Mapping[str, Any], coverage: Mapping[str, Any],
+) -> tuple[list[str], int]:
+    """Render physical CDA coverage with logical occurrence traceability."""
+    fields = model.get("fields", {})
+    configured = mapping.get("fields", {})
+    selected: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    if isinstance(configured, Mapping):
+        for path in _ordered_model_paths(model):
+            for rule in mapping_rules(configured.get(path)):
+                if rule.get("mode") == "fallback":
+                    continue
+                physical = _physical_target_name(cda, rule)
+                selected[physical].append({
+                    "path": path,
+                    "logical": str(rule.get("target") or physical),
+                    "rule": rule,
+                })
+
+    suggested: dict[str, list[str]] = defaultdict(list)
+    for path, names in coverage.get("suggested", {}).items():
+        for name in names:
+            suggested[str(name)].append(str(path))
+
+    def physical_configuration(
+        key: str,
+    ) -> dict[str, list[tuple[str, Mapping[str, Any]]]]:
+        result: dict[str, list[tuple[str, Mapping[str, Any]]]] = defaultdict(list)
+        configured_values = mapping.get(key, {})
+        if not isinstance(configured_values, Mapping):
+            return result
+        for logical, value in configured_values.items():
+            if not isinstance(value, Mapping):
+                continue
+            physical = _physical_target_name(cda, {"target": str(logical)})
+            result[physical].append((str(logical), value))
+        return result
+
+    defaults = physical_configuration("target_defaults")
+    site_requirements = physical_configuration("site_requirements")
+    required_gap_targets = required_construction_gap_targets(cda, mapping)
+    site_owned_targets = site_requirement_targets(cda, mapping)
+
+    included = {
+        str(name) for name, target in cda.get("targets", {}).items()
+        if _reportable_cda_target(target)
+    }
+    included.update(selected)
+    included.update(suggested)
+    included.update(defaults)
+    included.update(site_requirements)
+
+    nodes, parents = view["nodes"], view["parents"]
+    rows_by_section: dict[tuple[int, ...] | None, list[dict[str, Any]]] = defaultdict(list)
+    no_source = 0
+    for name in included:
+        target = cda.get("targets", {}).get(name, {})
+        locations = list(target.get("locations", []))
+        if len(locations) != 1 or _location(locations[0]) is None:
+            continue
+        location = _location(locations[0])
+        assert location is not None
+        selected_rows = selected.get(name, [])
+        suggested_paths = suggested.get(name, [])
+        if not selected_rows and not suggested_paths and _reportable_cda_target(target):
+            no_source += 1
+        rows_by_section[_section_of(location, nodes, parents)].append({
+            "name": name,
+            "target": target,
+            "location": location,
+            "entity": _template_label(target),
+            "selected": selected_rows,
+            "suggested": suggested_paths,
+        })
+    for rows in rows_by_section.values():
+        rows.sort(key=lambda row: (row["location"], row["name"]))
+
+    template = view["template"]
+    title = str(template.get("display_name") or template.get("name") or "ClinicalDocument")
+    lines = ["```text", f"   {title} (ClinicalDocument)"]
+    document_identity = str(template.get("id") or "")
+    if document_identity:
+        revision = str(template.get("effective_date") or "")
+        lines.append(
+            "   Template: " + document_identity + (f" @ {revision}" if revision else "")
+        )
+    candidate_areas: list[tuple[str, tuple[int, ...] | None]] = [
+        ("Document header", None),
+        *[(_section_label(section, nodes, cda), section) for section in view["sections"]],
+    ]
+    areas = [area for area in candidate_areas if rows_by_section.get(area[1])]
+    for area_index, (area_name, section) in enumerate(areas):
+        rows = rows_by_section[section]
+        area_last = area_index == len(areas) - 1
+        area_branch = "└──" if area_last else "├──"
+        area_stem = "    " if area_last else "│   "
+        lines.append(f"   {area_branch} {area_name}")
+        entities = _entity_groups([{"entity": row["entity"], **row} for row in rows])
+        for entity_index, (entity, entity_rows) in enumerate(entities):
+            entity_last = entity_index == len(entities) - 1
+            entity_branch = "└──" if entity_last else "├──"
+            entity_stem = area_stem + ("    " if entity_last else "│   ")
+            lines.append(f"   {area_stem}{entity_branch} {entity}")
+            identity = _template_identity(entity_rows[0]["target"])
+            if identity:
+                lines.append(f"   {entity_stem}Template: {identity}")
+            for row_index, row in enumerate(entity_rows):
+                last = row_index == len(entity_rows) - 1
+                branch = "└──" if last else "├──"
+                leaf_stem = entity_stem + ("    " if last else "│   ")
+                selected_rows = row["selected"]
+                suggested_paths = row["suggested"]
+                if selected_rows:
+                    status = "✓!" if suggested_paths else "✓"
+                    source_names = [
+                        str(fields.get(item["path"], {}).get("name") or item["path"])
+                        for item in selected_rows
+                    ]
+                    consequence = " ← " + ", ".join(dict.fromkeys(source_names))
+                    if suggested_paths:
+                        names = [
+                            str(fields.get(path, {}).get("name") or path)
+                            for path in suggested_paths
+                        ]
+                        consequence += "; suggested: " + ", ".join(names)
+                elif suggested_paths:
+                    status = "!"
+                    names = [
+                        str(fields.get(path, {}).get("name") or path)
+                        for path in suggested_paths
+                    ]
+                    consequence = " ← " + ", ".join(names)
+                else:
+                    status = "○D" if defaults.get(row["name"]) else "○"
+                    consequence = " ← no dataset counterpart"
+                if row["name"] in required_gap_targets:
+                    status += "▲"
+                elif row["name"] in site_owned_targets:
+                    status += "◆"
+                    requirement_rows = site_requirements.get(row["name"], [])
+                    if requirement_rows:
+                        channel = str(requirement_rows[0][1].get("channel") or "")
+                        if not selected_rows and not suggested_paths and channel:
+                            consequence = f" ← site configuration via cda.{channel}; no dataset counterpart"
+                leaf = _leaf(row["target"].get("path") or row["target"].get("element_name"))
+                lines.append(
+                    f"{status:<3}{area_stem}{entity_stem[len(area_stem):]}{branch} "
+                    f"{leaf} {{{row['name']}}}{consequence}"
+                )
+                lines.append(
+                    f"   {leaf_stem}T: {_target_trace(row['target'], include_template=False)}"
+                )
+                source_rows = selected_rows + [
+                    {"path": path, "logical": row["name"], "rule": {}}
+                    for path in suggested_paths
+                ]
+                for index, item in enumerate(source_rows, 1):
+                    path = str(item["path"])
+                    field = fields.get(path, {})
+                    label = "S" if len(source_rows) == 1 else f"S{index}"
+                    logical = str(item.get("logical") or row["name"])
+                    logical_note = (
+                        f" · logical {{{logical}}}" if logical != row["name"] else ""
+                    )
+                    lines.append(
+                        f"   {leaf_stem}{label}: {_source_trace(path, field)}{logical_note}"
+                    )
+                traces = list(dict.fromkeys(
+                    trace for item in selected_rows
+                    if (trace := _rule_trace(item["rule"], mapping, row["name"]))
+                ))
+                for trace in traces:
+                    lines.append(f"   {leaf_stem}R: {trace}")
+                for logical, default in defaults.get(row["name"], []):
+                    value = _scalar_summary(default)
+                    reason = _plain(default.get("reason"))
+                    lines.append(
+                        f"   {leaf_stem}R: exact target default for {{{logical}}}: {value}"
+                        + (f"; {reason}" if reason else "")
+                    )
+                for logical, requirement in site_requirements.get(row["name"], []):
+                    channel = str(requirement.get("channel") or "")
+                    reason = _plain(requirement.get("reason"))
+                    lines.append(
+                        f"   {leaf_stem}R: site-owned {{{logical}}} via cda.{channel}"
+                        + (f"; {reason}" if reason else "")
+                    )
     return lines + ["```"], no_source
 
 
@@ -2126,6 +2624,73 @@ def render_cda_mapping_trees_markdown(
         "## Complete CDA coverage tree",
         "",
         "`Logical CDA target` ← `dataset datapoint`",
+        "",
+        *cda_tree,
+        "",
+    ]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_cda_mapping_extended_trees_markdown(
+    model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    mapping: Mapping[str, Any],
+    audit: Mapping[str, Any],
+) -> str:
+    """Render AKTIN-facing coverage trees with stable traceability evidence."""
+    view = _mapping_view(model, cda, mapping)
+    coverage = _coverage_index(model, cda, mapping, audit)
+    cda_tree, physical_no_source = _extended_cda_coverage_tree(
+        view, model, cda, mapping, coverage,
+    )
+    headline_counts = coverage_headline_counts(model, cda, mapping, audit)
+    # The compact report retains its historical logical-target count. This
+    # report resolves discriminator occurrences to the shared physical leaf.
+    headline_counts["no_source_leaves"] = physical_no_source
+    template = view["template"]
+    lines = [
+        "# Extended dataset-to-CDA coverage trees",
+        "",
+        "This generated companion is intended for AKTIN, clinical reviewers and "
+        "CDA template authors who do not need to know the decor2hl7 directory "
+        "layout. It presents the reviewed portable mapping; edit "
+        "`cda-mapping.json`, not this report.",
+        "",
+        f"Document template: **{template.get('display_name') or template.get('name') or 'ClinicalDocument'}** "
+        f"(`{template.get('id')}` @ `{template.get('effective_date')}`)",
+        "",
+        format_coverage_headline(headline_counts),
+        "",
+        "The primary tree line is kept compact. Indented evidence lines mean:",
+        "",
+        "- `S:` source concept OID, stable dataset path, logical type and cardinality;",
+        "- `T:` owning template/revision, template-relative XPath, CDA datatype, "
+        "cardinality, conformance and required ValueSet where available;",
+        "- `R:` executable transform, structural rule, reviewed default or site responsibility;",
+        "- `G:` reviewed non-transmission or unresolved evidence gate and reopening condition.",
+        "",
+        "Status: `✓` mapped; `!` suggested but not selected; `×` no approved "
+        "target; `=` intentionally unmapped; `○` physical CDA leaf without a "
+        "dataset counterpart; `D` exact reviewed target default; `▲` unresolved "
+        "required construction; `◆` site-owned required construction. Markers may combine.",
+        "",
+        "Logical targets identify separately reviewable occurrences. When several "
+        "logical occurrences write one repeatable CDA leaf, the report also names "
+        "the shared physical target. The inverse no-source count is therefore "
+        "computed after logical-to-physical resolution.",
+        "",
+        "The CDA tree excludes generic datatype-expansion plumbing and fixed, "
+        "conditional-fixed, or system-supplied values. Those remain available in `cda.json`.",
+        "",
+        "## Complete dataset tree",
+        "",
+        "`Dataset datapoint` → `{logical CDA target}`",
+        "",
+        *_extended_dataset_coverage_tree(model, cda, mapping, audit, coverage),
+        "",
+        "## Complete physical CDA coverage tree",
+        "",
+        "`{physical CDA target}` ← `dataset datapoint` (with logical occurrence where distinct)",
         "",
         *cda_tree,
         "",

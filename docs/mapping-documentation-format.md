@@ -1,6 +1,6 @@
 # Generated CDA mapping documentation
 
-This specification defines the three generated, human-facing CDA mapping
+This specification defines the four generated, human-facing CDA mapping
 reports. They apply to dataset-to-CDA mapping and are for reviewers who
 understand either the dataset or the CDA template but should not need to
 understand compiler internals.
@@ -8,8 +8,9 @@ understand compiler internals.
 ## Source of truth and report purpose
 
 `cda-mapping.json` is the editable source of truth. `cda-mapping.md`,
-`cda-mapping-details.md`, `cda-mapping-trees.md` and all XML-like fragments are
-generated explanations and may be replaced by the next build.
+`cda-mapping-details.md`, `cda-mapping-trees.md`,
+`cda-mapping-trees-extended.md` and all XML-like fragments are generated
+explanations and may be replaced by the next build.
 
 The guide must say explicitly:
 
@@ -47,7 +48,7 @@ Together the reports should answer:
 
 ## Required organization
 
-Generate three reports with distinct roles:
+Generate four reports with distinct roles:
 
 1. `cda-mapping.md`: document identity and coverage headline, the dataset tree
    pruned to unresolved datapoints, the CDA tree pruned to evidence candidates
@@ -57,7 +58,10 @@ Generate three reports with distinct roles:
    previews, structural/default rules, then full scores, evidence chains and
    structural group context;
 3. `cda-mapping-trees.md`: the complete dataset-to-CDA and inverse
-   CDA-to-dataset coverage trees.
+   CDA-to-dataset coverage trees;
+4. `cda-mapping-trees-extended.md`: the same coverage organized for AKTIN,
+   clinical and template reviewers, with source concept identities, exact CDA
+   template revisions, template-relative XPaths, rule behavior and gap evidence.
 
 ## Coverage headline and trees
 
@@ -165,6 +169,31 @@ missing-required marker.
 
 The trees are coverage overviews. They omit candidate scores, rejected
 alternatives and long evidence chains.
+
+### Extended coverage trees
+
+`cda-mapping-trees-extended.md` preserves each compact primary leaf line and
+adds only applicable indented traceability lines:
+
+- `S:` gives the source concept OID, stable dataset path, type and cardinality;
+- `T:` gives the owning template and revision, explicitly template-relative
+  XPath, CDA datatype/cardinality/conformance, and required ValueSet;
+- `R:` explains non-trivial executable behavior: transforms, structural rules,
+  exact target defaults, and site-owned requirements;
+- `G:` records an intentional non-transmission decision or the audit gate and
+  smallest evidence that can reopen an unresolved mapping.
+
+The source-oriented tree shows template identity for every target because one
+datapoint may fan out across templates. The inverse tree deduplicates template
+identity at the entity node and is keyed by physical CDA leaves. Logical
+occurrences created by discriminator structures name both their logical target
+and shared physical target. Consequently its no-source count is calculated
+after logical-to-physical resolution. `○D` marks a physical leaf without a
+dataset counterpart that is completed by an exact reviewed target default.
+
+The extended report remains exhaustive and deterministic. It does not promote
+`possible_targets` to semantic suggestions, invent absolute document XPaths,
+or introduce an additional mapping classification.
 
 ## Section and entity presentation
 

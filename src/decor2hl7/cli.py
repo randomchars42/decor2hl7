@@ -706,7 +706,7 @@ def _write_mapping_guides(
     if not _mapping_decisions_differ(mapping, proposal):
         for guide_name in (
             "cda-mapping.md", "cda-mapping-details.md",
-            "cda-mapping-trees.md",
+            "cda-mapping-trees.md", "cda-mapping-trees-extended.md",
         ):
             _copy_generated_guide(
                 model_dir / guide_name, destination.parent / guide_name
@@ -715,6 +715,7 @@ def _write_mapping_guides(
 
     from .compile.reports import (
         render_accepted_cda_mappings_markdown,
+        render_cda_mapping_extended_trees_markdown,
         render_cda_mapping_markdown,
         render_cda_mapping_trees_markdown,
     )
@@ -724,6 +725,9 @@ def _write_mapping_guides(
             model, cda, mapping, audit
         ),
         "cda-mapping-trees.md": render_cda_mapping_trees_markdown(
+            model, cda, mapping, audit
+        ),
+        "cda-mapping-trees-extended.md": render_cda_mapping_extended_trees_markdown(
             model, cda, mapping, audit
         ),
     }

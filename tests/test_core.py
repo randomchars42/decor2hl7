@@ -34,6 +34,7 @@ from decor2hl7.cda.parity import declared_endpoint_parity
 from decor2hl7.compile.reports import (
     _outline_datapoint_lines, coverage_headline_counts,
     format_coverage_headline, render_accepted_cda_mappings_markdown,
+    render_cda_mapping_extended_trees_markdown,
     render_cda_mapping_markdown, render_cda_mapping_trees_markdown,
 )
 from decor2hl7.compile.terminology import domain_difference
@@ -901,6 +902,7 @@ class CoreTests(unittest.TestCase):
             decisions = (output / "cda-mapping.md").read_text(encoding="utf-8")
             self.assertNotIn("Abridged configuration excerpt", decisions)
             self.assertTrue((output / "cda-mapping-trees.md").is_file())
+            self.assertTrue((output / "cda-mapping-trees-extended.md").is_file())
 
 
     def test_ta_selects_formally_bound_hl7_code_payload(self) -> None:
@@ -1277,6 +1279,9 @@ class CoreTests(unittest.TestCase):
         trees = render_cda_mapping_trees_markdown(
             model, cda_model, mapping_cfg, audit
         )
+        extended_trees = render_cda_mapping_extended_trees_markdown(
+            model, cda_model, mapping_cfg, audit
+        )
         accepted = render_accepted_cda_mappings_markdown(
             model, cda_model, mapping_cfg
         )
@@ -1307,6 +1312,30 @@ class CoreTests(unittest.TestCase):
         )
         self.assertIn("!      └── Referral source", report)
         self.assertIn("✓  │       ├── low {Encounter.low} ← Start", trees)
+        self.assertIn("S: case.start", extended_trees)
+        self.assertIn(
+            "T: Encounter · enc @ 2026-01-01 · template-relative "
+            "hl7:componentOf/hl7:encompassingEncounter/hl7:effectiveTime/hl7:low · TS",
+            extended_trees,
+        )
+        self.assertIn("## Complete physical CDA coverage tree", extended_trees)
+        logical_mapping = {
+            "fields": {
+                **mapping_cfg["fields"],
+                "case.start": {
+                    "target": "Encounter.logical_low",
+                    "cda_target": "Encounter.low",
+                },
+            },
+        }
+        logical_trees = render_cda_mapping_extended_trees_markdown(
+            model, cda_model, logical_mapping, audit
+        )
+        self.assertIn("low {Encounter.low} ← Start", logical_trees)
+        self.assertIn("logical {Encounter.logical_low}", logical_trees)
+        self.assertNotIn(
+            "low {Encounter.low} ← no dataset counterpart", logical_trees
+        )
         self.assertIn(
             "○▲         └── text {Referral.unused} ← no dataset counterpart",
             trees,

@@ -4667,6 +4667,7 @@ def write_cda_mapping(
     write_json(model_dir / "mapping-audit.json", audit)
     (model_dir / "cda-mapping-details.md").write_text(cda_details, encoding="utf-8")
     from .reports import (
+        render_cda_mapping_extended_trees_markdown,
         render_cda_mapping_markdown, render_cda_mapping_trees_markdown,
         write_readable_cda,
     )
@@ -4679,6 +4680,12 @@ def write_cda_mapping(
     )
     (model_dir / "cda-mapping-trees.md").write_text(
         tree_report, encoding="utf-8"
+    )
+    extended_tree_report = render_cda_mapping_extended_trees_markdown(
+        model, enriched_cda, cda_proposal, audit
+    )
+    (model_dir / "cda-mapping-trees-extended.md").write_text(
+        extended_tree_report, encoding="utf-8"
     )
     write_readable_cda(model_dir, enriched_cda, audit)
     return cda_proposal

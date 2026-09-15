@@ -407,6 +407,9 @@ class CliTests(unittest.TestCase):
             (model / "cda-mapping.md").write_text("# CDA guide", encoding="utf-8")
             (model / "cda-mapping-details.md").write_text("# CDA details", encoding="utf-8")
             (model / "cda-mapping-trees.md").write_text("# CDA trees", encoding="utf-8")
+            (model / "cda-mapping-trees-extended.md").write_text(
+                "# Extended CDA trees", encoding="utf-8"
+            )
             site_dir = transaction_site_dir(root)
             site_dir.mkdir(parents=True)
             (site_dir / "csv-mapping.proposed.json").write_text('{"fields":{"a":"cases:a"}}')
@@ -426,6 +429,10 @@ class CliTests(unittest.TestCase):
             self.assertEqual((mapping_dir / "cda-mapping.md").read_text(), "# CDA guide")
             self.assertEqual((mapping_dir / "cda-mapping-details.md").read_text(), "# CDA details")
             self.assertEqual((mapping_dir / "cda-mapping-trees.md").read_text(), "# CDA trees")
+            self.assertEqual(
+                (mapping_dir / "cda-mapping-trees-extended.md").read_text(),
+                "# Extended CDA trees",
+            )
             self.assertEqual((site_dir / "codes-mapping.md").read_text(), "# Code guide")
             self.assertFalse((mapping_dir / "codes-mapping.md").exists())
 
@@ -450,7 +457,7 @@ class CliTests(unittest.TestCase):
             write_json(model_dir / "cda-mapping.proposed.json", proposal)
             for guide in (
                 "cda-mapping.md", "cda-mapping-details.md",
-                "cda-mapping-trees.md",
+                "cda-mapping-trees.md", "cda-mapping-trees-extended.md",
             ):
                 (model_dir / guide).write_text("# guide", encoding="utf-8")
 
@@ -518,6 +525,9 @@ class CliTests(unittest.TestCase):
             (model_dir / "cda-mapping.md").write_text("# CDA guide", encoding="utf-8")
             (model_dir / "cda-mapping-details.md").write_text("# CDA details", encoding="utf-8")
             (model_dir / "cda-mapping-trees.md").write_text("# CDA trees", encoding="utf-8")
+            (model_dir / "cda-mapping-trees-extended.md").write_text(
+                "# Extended CDA trees", encoding="utf-8"
+            )
             self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
             with patch("decor2hl7.cli._compiler_inputs", return_value={"templates": []}), patch(
                 "decor2hl7.validate.verify_compiled_against_artdecor", return_value=[]
@@ -640,7 +650,7 @@ class CliTests(unittest.TestCase):
             write_json(model_dir / "cda-mapping.proposed.json", mapping)
             for guide in (
                 "cda-mapping.md", "cda-mapping-details.md",
-                "cda-mapping-trees.md",
+                "cda-mapping-trees.md", "cda-mapping-trees-extended.md",
             ):
                 (model_dir / guide).write_text("# guide", encoding="utf-8")
             self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)

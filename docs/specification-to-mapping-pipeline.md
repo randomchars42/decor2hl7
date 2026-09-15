@@ -218,6 +218,7 @@ Current mapping rules:
 | `cda-mapping.md` | unresolved review work |
 | `cda-mapping-details.md` | accepted selections and full evidence |
 | `cda-mapping-trees.md` | exhaustive dataset and CDA coverage |
+| `cda-mapping-trees-extended.md` | AKTIN-facing coverage with exact source/template traceability and rule/gap annotations |
 | `cda-expanded-readable.*` | readable effective target hierarchy |
 | diagnostics and conformance reports | reproducibility and failure evidence |
 

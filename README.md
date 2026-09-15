@@ -51,7 +51,8 @@ decor2hl7 check-cda-mapping
 Selection changes only `aktin.json`; it does not fetch or build. Catalog
 commands print stable keys accepted by the corresponding `set-*` commands.
 
-Review the generated mapping guides and edit the portable
+Review the generated mapping guides, including the AKTIN-facing
+`cda-mapping-trees-extended.md`, and edit the portable
 `mapping/<release>/<transaction>/cda-mapping.json`, not the generated Markdown
 or XML previews. `mapping-lock.json` records the exact model and target identity.
 
@@ -197,7 +198,7 @@ consulted by the selected compiler inputs.
 - `cda.json`: exact physical CDA constraint and value model;
 - `mapping-audit.json`: candidates, evidence, gaps, and coverage;
 - `cda-mapping.proposed.json`: concise executable proposal;
-- generated mapping guides and readable CDA trees;
+- generated mapping guides, compact and extended coverage trees, and readable CDA trees;
 - build and conformance diagnostics.
 
 The complete sequence and authority boundaries are described in
