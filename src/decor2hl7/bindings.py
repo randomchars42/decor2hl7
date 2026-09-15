@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from .data import field_value
-from .semantics import identifier_root_for_target
+from .semantics import identifier_root_for_target, transformed_compatibility
 from .cda.model import ValueRepresentationKind
 from .cda.terminology import (
     NULL_FLAVORS,
@@ -26,6 +26,14 @@ from .transforms import (
 
 FALLBACK_IF_ACTIVE_MARKER = "__fallback_if_active__"
 SITE_REQUIREMENT_CHANNELS = frozenset({"values", "fallback_if_active"})
+
+
+class _CodedOriginalTextAuthorization:
+    """In-memory capability for an explicitly reviewed coded composition."""
+
+
+_CODED_ORIGINAL_TEXT_AUTHORIZATION = _CodedOriginalTextAuthorization()
+_CODED_ORIGINAL_TEXT_MARKER = "__decor2hl7_coded_original_text__"
 
 
 def fallback_if_active_value(value: Any) -> dict[str, Any]:
@@ -45,6 +53,27 @@ def unwrap_fallback_if_active(value: Any) -> Any:
         value.get(FALLBACK_IF_ACTIVE_MARKER)
         if is_fallback_if_active(value) else value
     )
+
+
+def authorizes_coded_original_text(value: Any) -> bool:
+    """Return whether a runtime-composed coded value authorizes originalText.
+
+    The identity-only marker cannot be supplied through JSON input or site
+    configuration.  It is used for an owner-reviewed representation such as
+    an uncoded medication name carried by ``code nullFlavor=\"NA\"``.
+    """
+    return (
+        isinstance(value, Mapping)
+        and value.get(_CODED_ORIGINAL_TEXT_MARKER)
+        is _CODED_ORIGINAL_TEXT_AUTHORIZATION
+    )
+
+
+def _authorize_coded_original_text(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        **dict(value),
+        _CODED_ORIGINAL_TEXT_MARKER: _CODED_ORIGINAL_TEXT_AUTHORIZATION,
+    }
 
 
 def presence_target_complete(
@@ -361,13 +390,14 @@ def _required_construction_gap_details(
             return True
         if not node_value:
             return False
-        represented = next((
+        represented_value: Any = next((
             targets.get(str(name), {}).get("value_representation")
             for name in node.get("targets", [])
             if targets.get(str(name), {}).get("value_representation")
         ), {})
-        if not isinstance(represented, Mapping):
+        if not isinstance(represented_value, Mapping):
             return False
+        represented: Mapping[str, Any] = represented_value
         represented_names = {
             str(name) for name in (
                 list(represented.get("attributes") or [])
@@ -1458,6 +1488,62 @@ def _concatenate(values: list[Any], separator: str) -> Any:
     return separator.join(present) if present else None
 
 
+def _compose_coded_value(
+    code: Any,
+    display_name: Any,
+    *,
+    null_flavor: str,
+) -> Any:
+    """Compose a coded datatype from occurrence-aligned code and name values."""
+    if isinstance(code, list) or isinstance(display_name, list):
+        count = max(
+            len(value) if isinstance(value, list) else 1
+            for value in (code, display_name)
+            if value is not None
+        )
+        return [
+            _compose_coded_value(
+                (
+                    code[index]
+                    if isinstance(code, list) and index < len(code)
+                    else code if not isinstance(code, list) and index == 0
+                    else None
+                ),
+                (
+                    display_name[index]
+                    if isinstance(display_name, list)
+                    and index < len(display_name)
+                    else (
+                        display_name
+                        if not isinstance(display_name, list) and index == 0
+                        else None
+                    )
+                ),
+                null_flavor=null_flavor,
+            )
+            for index in range(count)
+        ]
+
+    wording = _comparable_wording(display_name)
+    if _present(code):
+        if not isinstance(code, Mapping):
+            raise ValueError(
+                "compose_coded requires its code source transform to produce "
+                "a coded object"
+            )
+        result = dict(code)
+        if wording:
+            result["displayName"] = wording
+            result["raw"] = wording
+        return result
+    if not wording:
+        return None
+    return _authorize_coded_original_text({
+        "nullFlavor": null_flavor,
+        "raw": wording,
+    })
+
+
 def build_assignments(
     record: Mapping[str, Any],
     model: Mapping[str, Any],
@@ -1532,7 +1618,7 @@ def build_assignments(
             source_specs = _structure_sources(structure)
             sources = [str(spec["source"]) for spec in source_specs]
             target_name = str(structure.get("target") or "")
-            values = []
+            collected_values: list[Any] = []
             for spec in source_specs:
                 transformed = apply_transform(
                     field_value(
@@ -1541,21 +1627,55 @@ def build_assignments(
                     ),
                     spec.get("transform"),
                 )
-                values.append(None if transformed is OMIT else transformed)
+                collected_values.append(
+                    None if transformed is OMIT else transformed
+                )
             if kind == "coalesce":
                 value = _coalesce(
-                    values,
+                    collected_values,
                     str(structure.get("policy") or "equal_or_error"),
                     rule_id,
                     problems,
                 )
             else:
                 value = _concatenate(
-                    values, str(structure.get("separator") or "; ")
+                    collected_values, str(structure.get("separator") or "; ")
                 )
             value = apply_transform(value, structure.get("transform"))
             target = targets.get(target_name, {})
             _assign(assignments, target_name, _prepare_identifier(target_name, target, value, site))
+            continue
+        if kind == "compose_coded":
+            source_specs = _structure_sources(structure)
+            by_role = {
+                str(spec.get("role") or ""): spec for spec in source_specs
+            }
+            role_values: dict[str, Any] = {}
+            for role in ("code", "display_name"):
+                spec = by_role.get(role, {})
+                source = str(spec.get("source") or "")
+                transformed = apply_transform(
+                    field_value(
+                        record, source,
+                        model.get("fields", {}).get(source, {}),
+                    ),
+                    spec.get("transform"),
+                )
+                role_values[role] = (
+                    None if transformed is OMIT else transformed
+                )
+            target_name = str(structure.get("target") or "")
+            target = targets.get(target_name, {})
+            value = _compose_coded_value(
+                role_values["code"],
+                role_values["display_name"],
+                null_flavor=str(structure.get("null_flavor") or "NA"),
+            )
+            _assign(
+                assignments,
+                target_name,
+                _prepare_identifier(target_name, target, value, site),
+            )
             continue
         if kind in {"fan_out", "repeat_by_discriminator"}:
             branches = [branch for branch in structure.get("branches", []) if isinstance(branch, Mapping)]
@@ -1627,7 +1747,7 @@ def covered_shared_claims(mapping: Mapping[str, Any]) -> dict[str, set[str]]:
     covered: dict[str, set[str]] = {}
     for rule in structure_rules(mapping):
         kind = str(rule.get("type") or "")
-        if kind in {"coalesce", "concatenate"} and rule.get("target"):
+        if kind in {"coalesce", "concatenate", "compose_coded"} and rule.get("target"):
             covered[str(rule["target"])] = {
                 str(spec["source"]) for spec in _structure_sources(rule)
             }
@@ -1656,7 +1776,7 @@ def validate_structures(
         seen_ids.add(rule_id)
         if kind not in {
             "for_each", "fan_out", "repeat_by_discriminator", "coalesce",
-            "concatenate",
+            "concatenate", "compose_coded",
         }:
             errors.append(f"{prefix} has unknown type {kind!r}")
             continue
@@ -1697,11 +1817,13 @@ def validate_structures(
                 )
             for_each_targets[location] = rule_id
             continue
-        if kind in {"coalesce", "concatenate"}:
+        if kind in {"coalesce", "concatenate", "compose_coded"}:
             source_specs = _structure_sources(rule)
             sources = [str(spec["source"]) for spec in source_specs]
             target_name = str(rule.get("target") or "")
-            if len(sources) < 2:
+            if kind == "compose_coded" and len(sources) != 2:
+                errors.append(f"{prefix} requires exactly two sources")
+            elif kind != "compose_coded" and len(sources) < 2:
                 errors.append(f"{prefix} requires at least two sources")
             if kind == "coalesce" and str(
                 rule.get("policy") or "equal_or_error"
@@ -1727,8 +1849,93 @@ def validate_structures(
             target = targets.get(target_name)
             if not target or not target.get("writable") or len(target.get("locations", [])) != 1:
                 errors.append(f"{prefix} references non-renderable target {target_name!r}")
-            elif target.get("repeat_ancestors"):
-                depths = {len(fields.get(path, {}).get("repeat_chain", [])) for path in sources}
+            elif kind == "compose_coded":
+                representation = target.get("value_representation", {})
+                if (
+                    not isinstance(representation, Mapping)
+                    or representation.get("kind")
+                    != ValueRepresentationKind.CODED.value
+                ):
+                    errors.append(f"{prefix} target must be a coded value")
+                roles = [str(spec.get("role") or "") for spec in source_specs]
+                if sorted(roles) != ["code", "display_name"]:
+                    errors.append(
+                        f"{prefix} sources must have the distinct roles "
+                        "'code' and 'display_name'"
+                    )
+                by_role = {
+                    str(spec.get("role") or ""): spec for spec in source_specs
+                }
+                code_spec = by_role.get("code", {})
+                code_field = fields.get(str(code_spec.get("source") or ""), {})
+                compatible, reasons = transformed_compatibility(
+                    code_field, target, code_spec.get("transform"),
+                )
+                if not compatible:
+                    errors.append(
+                        f"{prefix} code source is not executable: "
+                        + "; ".join(reasons)
+                    )
+                display_spec = by_role.get("display_name", {})
+                display_field = fields.get(
+                    str(display_spec.get("source") or ""), {}
+                )
+                display_transform = display_spec.get("transform", {})
+                if str(display_field.get("type") or "") not in {"text", "code"}:
+                    errors.append(
+                        f"{prefix} display_name source must be textual or coded"
+                    )
+                if (
+                    not isinstance(display_transform, Mapping)
+                    or display_transform.get("type") != "narrative"
+                ):
+                    errors.append(
+                        f"{prefix} display_name source requires a narrative transform"
+                    )
+                null_flavor = str(rule.get("null_flavor") or "")
+                if null_flavor not in NULL_FLAVORS:
+                    errors.append(
+                        f"{prefix} has invalid null_flavor {null_flavor!r}"
+                    )
+                elif not required_binding_allows_null_flavor(
+                    target, null_flavor,
+                ):
+                    errors.append(
+                        f"{prefix} null_flavor {null_flavor!r} is not admitted "
+                        "by the coded target"
+                    )
+                review_reason = rule.get("reason")
+                if (
+                    not isinstance(review_reason, str)
+                    or not review_reason.strip()
+                ):
+                    errors.append(f"{prefix} requires a non-empty review reason")
+                locations = list(target.get("locations", []))
+                target_path = str(target.get("path") or "")
+                companions = [
+                    candidate
+                    for candidate in targets.values()
+                    if isinstance(candidate, Mapping)
+                    and candidate.get("writable")
+                    and candidate.get("content_role") == "coded_original_text"
+                    and len(candidate.get("locations", [])) == 1
+                    and len(locations) == 1
+                    and str(candidate["locations"][0]).startswith(
+                        str(locations[0]) + "."
+                    )
+                    and str(candidate.get("path") or "").rsplit("/", 1)[0]
+                    == target_path
+                ]
+                if len(companions) != 1:
+                    errors.append(
+                        f"{prefix} requires one writable coded_original_text "
+                        "companion"
+                    )
+            if isinstance(target, Mapping) and target.get("repeat_ancestors"):
+                depths = {
+                    len(fields.get(path, {}).get("repeat_chain", []))
+                    for path in sources
+                }
                 if depths != {len(target.get("repeat_ancestors", []))}:
                     errors.append(f"{prefix} source and target repeat depths differ")
             continue

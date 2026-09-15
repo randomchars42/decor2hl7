@@ -352,9 +352,9 @@ class ReferenceClosureTests(unittest.TestCase):
             {
                 "dataset_fields": 120,
                 "generated_mapped_fields": 84,
-                "reviewed_mapped_fields": 106,
-                "field_override_count": 22,
-                "structure_override_count": 2,
+                "reviewed_mapped_fields": 107,
+                "field_override_count": 23,
+                "structure_override_count": 3,
                 "field_review_override_count": 5,
                 "target_default_override_count": 6,
                 "site_requirement_override_count": 6,
@@ -374,7 +374,23 @@ class ReferenceClosureTests(unittest.TestCase):
             "UVMedicationInformationsimple.manufacturedProduct."
             "manufacturedMaterial.name"
         )
-        self.assertIsNone(reviewed["fields"][product_name])
+        self.assertEqual(
+            reviewed["fields"][product_name],
+            [
+                {
+                    "target": "UVMedicationInformationsimple.code",
+                    "structure": "compose-medication-product-code",
+                },
+                {
+                    "target": "Medikation.text",
+                    "structure": "concatenate-medication-narrative",
+                    "transform": {
+                        "type": "narrative",
+                        "prefix": "Arzneimittel: ",
+                    },
+                },
+            ],
+        )
         self.assertEqual(
             reviewed["fields"][lot_number],
             "UVMedicationInformationsimple.lotNumberText",

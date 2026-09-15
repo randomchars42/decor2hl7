@@ -269,8 +269,9 @@ than its richer SPEC sibling. See
 
 ### DEC-043 — Reviewed medication-administration mappings and intentional nulls
 
-Dose, rate, start, body site, route, conditional form, and narrative rules are
-reviewed; unsupported timing and non-transmitted fields remain explicit nulls.
+Dose, rate, start, body site, route, conditional form, coded product
+composition, and narrative rules are reviewed; unsupported timing and
+non-transmitted fields remain explicit nulls.
 See [`reference-transaction.md`](reference-transaction.md#medication).
 
 ## Runtime and delivery

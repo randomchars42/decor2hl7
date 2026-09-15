@@ -15,6 +15,7 @@ from typing import Any, Mapping
 
 from ..assertions import validate_contexts
 from ..bindings import (
+    authorizes_coded_original_text,
     build_assignments,
     fallback_if_active_value,
     is_fallback_if_active,
@@ -219,7 +220,8 @@ def _fraction_digits(value: Any) -> int | None:
         decimal = Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
-    return max(0, -decimal.as_tuple().exponent)
+    exponent = decimal.as_tuple().exponent
+    return max(0, -exponent) if isinstance(exponent, int) else None
 
 
 def _property_hard_match(rule: Mapping[str, Any], value: Any) -> bool:
@@ -827,7 +829,11 @@ def _coded_original_text(value: Any) -> Any:
     flavor = coded_null_flavor(value)
     # Only null flavors whose datatype meaning carries an alternate value may
     # gain originalText. Other flavors describe why no concept is known.
-    if flavor and flavor not in NULL_FLAVORS_WITH_ORIGINAL_TEXT:
+    if (
+        flavor
+        and flavor not in NULL_FLAVORS_WITH_ORIGINAL_TEXT
+        and not authorizes_coded_original_text(value)
+    ):
         return None
     for key in ("raw", "canonical", "displayName", "display"):
         if value.get(key) not in (None, ""):

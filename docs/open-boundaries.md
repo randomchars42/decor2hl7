@@ -72,11 +72,13 @@ sibling is not selected by AKTIN. Reopen with an owner-selected ingredient
 profile or a separately approved downstream profile whose strength and
 occurrence semantics are complete.
 
-Product name is likewise not mapped merely to the writable name exposed by
-open-template CDA/RIM expansion. Additional dosage instructions and intake
-instructions have no accepted structured or narrative placement. These fields
-need direct owner evidence or a separately reviewed target/narrative contract;
-label similarity and the availability of a text leaf are insufficient.
+Product name is resolved through the selected simple branch's coded product
+representation and the existing medication narrative; it is deliberately not
+mapped to the writable name exposed only by open-template CDA/RIM expansion.
+Additional dosage instructions and intake instructions still have no accepted
+structured or narrative placement. These fields need direct owner evidence or
+a separately reviewed target/narrative contract; label similarity and the
+availability of a text leaf are insufficient.
 
 ### Imaging region remains under-specified
 

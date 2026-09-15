@@ -1996,7 +1996,8 @@ def _datatype_attribute(
 
 
 def _expand_datatype_structure(
-    nodes: list[dict[str, Any]], definitions: Mapping[str, Any] | None = None,
+    nodes: list[dict[str, Any]],
+    definitions: DefinitionIndex | None = None,
     stack: tuple[str, ...] = (),
 ) -> None:
     """Overlay explicit template constraints on recursively expanded datatypes."""
@@ -2006,8 +2007,8 @@ def _expand_datatype_structure(
         seen: set[str] = set()
         while current and current not in seen:
             seen.add(current)
-            if current in (definitions or {}):
-                resolved = resolve_definition(  # type: ignore[arg-type]
+            if definitions is not None and current in definitions:
+                resolved = resolve_definition(
                     definitions, current,
                 )
                 return resolved if resolved.category == "datatype" else None
@@ -2025,7 +2026,9 @@ def _expand_datatype_structure(
                 policy = expand_datatype(current)
                 if policy.value_representation is not None:
                     return current
-            definition = (definitions or {}).get(current)
+            definition = (
+                definitions.get(current) if definitions is not None else None
+            )
             current = str(definition.base or "") if definition is not None else ""
         return None
 

@@ -272,10 +272,12 @@ def reviewed_coded_map_rule_errors(
     _, compiled_binding = matching[0]
     cases = transform.get("map", {})
     cases = cases if isinstance(cases, Mapping) else {}
-    outputs = [
-        case.get("value")
+    outputs: list[Mapping[str, Any]] = [
+        output
         for case in cases.values()
-        if isinstance(case, Mapping) and isinstance(case.get("value"), Mapping)
+        if isinstance(case, Mapping)
+        for output in [case.get("value")]
+        if isinstance(output, Mapping)
     ]
     null_outputs = [
         output for output in outputs

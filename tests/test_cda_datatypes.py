@@ -755,6 +755,117 @@ class CdaDatatypeTests(unittest.TestCase):
             assert original is not None
             self.assertEqual(original.text, "Reviewed wording")
 
+    def test_compose_coded_value_combines_code_and_product_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document">
+  <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
+    <element name="hl7:code" datatype="CD" minimumMultiplicity="1" maximumMultiplicity="1">
+      <attribute name="nullFlavor" datatype="CS" isOptional="true"/>
+      <element name="hl7:originalText" datatype="ST" minimumMultiplicity="0" maximumMultiplicity="1"/>
+    </element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {
+                    "template_id": "doc", "template_effective_date": "2026",
+                },
+                "groups": {},
+                "fields": {
+                    "product.code": {"type": "code", "repeat_chain": []},
+                    "product.name": {"type": "text", "repeat_chain": []},
+                },
+            }
+            compiled = compile_cda([source], model)
+            target_name, _ = target_at(compiled, "/hl7:code")
+            mapping_cfg = {
+                "fields": {
+                    "product.code": {
+                        "target": target_name, "structure": "product-code",
+                    },
+                    "product.name": {
+                        "target": target_name, "structure": "product-code",
+                    },
+                },
+                "structures": {
+                    "product-code": {
+                        "type": "compose_coded",
+                        "target": target_name,
+                        "null_flavor": "NA",
+                        "reason": (
+                            "The profile represents product code and name in "
+                            "one coded value."
+                        ),
+                        "sources": [
+                            {
+                                "source": "product.code", "role": "code",
+                                "transform": {
+                                    "type": "code_system",
+                                    "code_system": "1.2.276.0.76.4.6",
+                                },
+                            },
+                            {
+                                "source": "product.name",
+                                "role": "display_name",
+                                "transform": {"type": "narrative"},
+                            },
+                        ],
+                    },
+                },
+            }
+            self.assertEqual(
+                validate.check_config(
+                    model,
+                    compiled,
+                    {"fields": {"product.code": None, "product.name": None}},
+                    mapping_cfg,
+                    require_site_configuration=False,
+                ),
+                [],
+            )
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P1",
+                    "values": {
+                        "product.code": {"raw": "12345678"},
+                        "product.name": "Example medicine",
+                    },
+                    "instances": {},
+                },
+                model, compiled, mapping_cfg, {},
+            )
+            self.assertEqual(problems, [])
+            code = find_required(
+                ET.fromstring(payload), ".//{urn:hl7-org:v3}code",
+            )
+            self.assertEqual(code.get("code"), "12345678")
+            self.assertEqual(code.get("codeSystem"), "1.2.276.0.76.4.6")
+            self.assertEqual(code.get("displayName"), "Example medicine")
+            self.assertEqual(
+                find_required(code, "{urn:hl7-org:v3}originalText").text,
+                "Example medicine",
+            )
+
+            payload, problems = cda.emit(
+                {
+                    "key": "P2",
+                    "values": {"product.name": "Uncoded preparation"},
+                    "instances": {},
+                },
+                model, compiled, mapping_cfg, {},
+            )
+            self.assertEqual(problems, [])
+            code = find_required(
+                ET.fromstring(payload), ".//{urn:hl7-org:v3}code",
+            )
+            self.assertEqual(code.get("nullFlavor"), "NA")
+            self.assertIsNone(code.get("code"))
+            self.assertEqual(
+                find_required(code, "{urn:hl7-org:v3}originalText").text,
+                "Uncoded preparation",
+            )
+
     def test_artdecor_path_predicates_do_not_leak_into_xml_qnames(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "template.xml"

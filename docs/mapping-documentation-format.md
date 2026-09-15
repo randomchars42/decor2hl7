@@ -179,8 +179,8 @@ Use execution-oriented status labels:
 
 - **Mapped** — direct executable assignment;
 - **Transform** — executable after a declarative transformation;
-- **Structural rule** — repetition, repeat-by-discriminator, coalescing, or
-  reviewed concatenation
+- **Structural rule** — repetition, repeat-by-discriminator, coalescing,
+  reviewed concatenation, or coded value composition
   controls assignment;
 - **Presence rule** — a boolean activates an optional statement whose payload
   is fixed by the target template; false omits the statement;

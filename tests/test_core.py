@@ -1320,7 +1320,8 @@ class CoreTests(unittest.TestCase):
             model, cda_model, mapping_cfg, audit
         )
         self.assertIn(
-            "○◆         └── text {Referral.unused} ← no dataset counterpart",
+            "○◆         └── text {Referral.unused} ← site configuration via "
+            "cda.values; no dataset counterpart",
             site_owned_trees,
         )
         self.assertIn("◆ **Site-owned requirement**", site_owned_trees)
@@ -2527,7 +2528,7 @@ class CoreTests(unittest.TestCase):
             "effective_date": "2026", "element_id": "low",
             "kind": "templateAssociation", "code_systems": [],
         }]
-        cda_model = {
+        cda_model: dict[str, Any] = {
             "source_index": {"encounter|ID:low": ["Encounter.low"]},
             "targets": {"Encounter.low": target},
         }
@@ -4101,7 +4102,7 @@ class CoreTests(unittest.TestCase):
 
     def test_mapping_target_identity_migrates_unique_owner_slot(self) -> None:
         owner = "1.2.3|ID:slot-7|PATH:hl7:observation/hl7:value"
-        current = {
+        current: dict[str, Any] = {
             "version": 7,
             "fields": {"finding": {
                 "target": "OldFinding.value", "cda_target": "OldFinding.value",
@@ -4139,7 +4140,7 @@ class CoreTests(unittest.TestCase):
         self,
     ) -> None:
         owner = "1.2.3|ID:slot-7|PATH:hl7:observation/hl7:statusCode"
-        current = {
+        current: dict[str, Any] = {
             "version": 8,
             "fields": {},
             "site_requirements": {
@@ -4184,7 +4185,7 @@ class CoreTests(unittest.TestCase):
 
     def test_mapping_target_identity_does_not_guess_ambiguous_slot(self) -> None:
         owner = "1.2.3|ID:slot-7|PATH:hl7:observation/hl7:value"
-        current = {
+        current: dict[str, Any] = {
             "fields": {"finding": "OldFinding.value"},
             "target_identities": {"OldFinding.value": {
                 "revisionless_source_key": owner,
@@ -4216,7 +4217,7 @@ class CoreTests(unittest.TestCase):
             "element_id": "slot-7", "path": "hl7:observation/hl7:value",
             "source_key": "1.2.3@2027-01-01|ID:slot-7|PATH:hl7:observation/hl7:value",
         }
-        current = {
+        current: dict[str, Any] = {
             "fields": {"finding": {
                 "target": "Finding_right.value",
                 "cda_target": "Finding.value",
@@ -7043,6 +7044,7 @@ class CoreTests(unittest.TestCase):
         model = {"fields": {
             "art": {"type": "code", "repeat_chain": []},
             "methode": {"type": "text", "repeat_chain": []},
+            "product_name": {"type": "text", "repeat_chain": []},
             "freitext": {"type": "text", "repeat_chain": []},
             "prn": {"type": "boolean", "repeat_chain": []},
         }}
@@ -7066,6 +7068,7 @@ class CoreTests(unittest.TestCase):
             "fields": {
                 "art": {"target": "Medication.route", "structure": "route", "transform": route_transform},
                 "methode": {"target": "Medication.route", "structure": "route", "transform": route_transform},
+                "product_name": {"target": "Medication.text", "structure": "text", "transform": {"type": "narrative", "prefix": "Arzneimittel: "}},
                 "freitext": {"target": "Medication.text", "structure": "text", "transform": {"type": "narrative"}},
                 "prn": {"target": "Medication.text", "structure": "text", "transform": {"type": "enum", "map": {"true": "Einnahme bei Bedarf", "false": None}}},
             },
@@ -7080,6 +7083,7 @@ class CoreTests(unittest.TestCase):
                     "type": "concatenate", "target": "Medication.text",
                     "separator": "; ",
                     "sources": [
+                        {"source": "product_name", "transform": {"type": "narrative", "prefix": "Arzneimittel: "}},
                         {"source": "freitext", "transform": {"type": "narrative"}},
                         {"source": "prn", "transform": {"type": "enum", "map": {"true": "Einnahme bei Bedarf", "false": None}}},
                     ],
@@ -7087,7 +7091,7 @@ class CoreTests(unittest.TestCase):
             },
         }
         assignments, problems = build_assignments(
-            {"values": {"art": {"raw": "oral"}, "methode": "oral", "freitext": "2 Tabletten", "prn": True}},
+            {"values": {"art": {"raw": "oral"}, "methode": "oral", "product_name": "Ramipril", "freitext": "2 Tabletten", "prn": True}},
             model, cda_model, mapping, {},
         )
         self.assertEqual(problems, [])
@@ -7097,7 +7101,7 @@ class CoreTests(unittest.TestCase):
         )
         self.assertEqual(
             assignments["Medication.text"],
-            "2 Tabletten; Einnahme bei Bedarf",
+            "Arzneimittel: Ramipril; 2 Tabletten; Einnahme bei Bedarf",
         )
 
         assignments, problems = build_assignments(
@@ -7110,7 +7114,7 @@ class CoreTests(unittest.TestCase):
 
     def test_intentional_unmapped_review_requires_a_null_and_reason(self) -> None:
         model = {"fields": {"a": {"type": "text"}}, "groups": {}}
-        cda_model = {"targets": {}, "document": []}
+        cda_model: dict[str, Any] = {"targets": {}, "document": []}
         csv_mapping = {"fields": {"a": None}}
         valid_mapping = {
             "version": 9,

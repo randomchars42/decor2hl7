@@ -311,16 +311,17 @@ def transformed_compatibility(
             reasons.append("narrative transform requires a textual CDA target")
     elif kind == "reviewed_coded_map":
         cases = transform.get("map", {})
-        outputs = [
-            case.get("value")
+        outputs: list[Mapping[str, Any]] = [
+            output
             for case in cases.values()
             if isinstance(case, Mapping)
+            for output in [case.get("value")]
+            if isinstance(output, Mapping)
         ] if isinstance(cases, Mapping) else []
         if (
             str(field.get("type") or "") != "code"
             or kind_value != ValueRepresentationKind.CODED.value
             or not outputs
-            or not all(isinstance(output, Mapping) for output in outputs)
         ):
             reasons.append(
                 "reviewed_coded_map requires a finite coded dataset field, "

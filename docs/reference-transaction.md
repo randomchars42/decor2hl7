@@ -66,9 +66,14 @@ Current reviewed behavior is:
 
 - one shared medication section contains one entry per repeated source
   medication;
-- product code maps to the selected simple-branch code and lot number maps to
-  its explicit `lotNumberText`;
-- product name is not mapped merely to the open-template CDA/RIM name leaf;
+- product code and product name are composed into the selected simple-branch
+  `manufacturedMaterial/code`: the configured product code uses the German PZN
+  code-system OID and the product name supplies `displayName`; with a name but
+  no code, the template-required `nullFlavor="NA"` is emitted and the name is
+  retained in `originalText`;
+- product name is also the first contribution to the existing medication
+  narrative concatenation; it is not mapped to the open-template CDA/RIM name
+  leaf;
 - application start maps to the atomic subordinate-administration `TS` choice;
 - dose and continuous rate map to `doseQuantity` and `rateQuantity`, with scalar
   and range quantities using compiled representations;
@@ -78,8 +83,9 @@ Current reviewed behavior is:
   when input supplies an exact code/system; uncoded wording goes to narrative;
 - route coalesces `Art der Anwendung` and `Methode der Anwendung`, preferring
   the first with a visible warning when both differ;
-- dosage text, event-offset wording, true PRN, medication reasons, and uncoded
-  form wording are concatenated in source order into medication narrative;
+- product name, dosage text, event-offset wording, true PRN, medication reasons,
+  and uncoded form wording are concatenated in source order into medication
+  narrative;
 - medication root and subordinate administration mood/status are site-owned
   activation-scoped requirements, not compiler defaults.
 
@@ -91,9 +97,9 @@ The medication mapping records these deliberate null selections:
 | Structured dosage time | Outside the current medication-given scope |
 | Event-relative repetition event | Timing construction is deferred; offset is narrative only |
 
-Product name, ingredient name/code/indicator/strength, additional dosage
-instructions, and intake instructions also remain unmapped, but they are open
-target/semantic gaps rather than accepted intentional-null reviews.
+Ingredient name/code/indicator/strength, additional dosage instructions, and
+intake instructions remain unmapped, but they are open target/semantic gaps
+rather than accepted intentional-null reviews.
 
 Medication history, recommendations, orders, and non-administration require an
 explicit per-medication source discriminator. Start/stop times do not establish

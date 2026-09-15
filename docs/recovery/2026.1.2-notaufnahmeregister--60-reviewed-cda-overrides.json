@@ -15,9 +15,9 @@
   "expected": {
     "dataset_fields": 120,
     "generated_mapped_fields": 84,
-    "reviewed_mapped_fields": 106,
-    "field_override_count": 22,
-    "structure_override_count": 2,
+    "reviewed_mapped_fields": 107,
+    "field_override_count": 23,
+    "structure_override_count": 3,
     "field_review_override_count": 5,
     "target_default_override_count": 6,
     "site_requirement_override_count": 6
@@ -125,12 +125,23 @@
     "abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose": "Problemobservationeddiagnosis.originalText",
     "abschlussdiagnosen.abschlussdiagnose.icd10": "Problemobservationeddiagnosis.observation.value",
     "masnahmen.medikamentose_therapie.medikation.medikament.chargennummer": "UVMedicationInformationsimple.lotNumberText",
+    "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname": [
+      {
+        "target": "UVMedicationInformationsimple.code",
+        "structure": "compose-medication-product-code"
+      },
+      {
+        "target": "Medikation.text",
+        "structure": "concatenate-medication-narrative",
+        "transform": {
+          "type": "narrative",
+          "prefix": "Arzneimittel: "
+        }
+      }
+    ],
     "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelcode": {
       "target": "UVMedicationInformationsimple.code",
-      "transform": {
-        "type": "code_system",
-        "code_system": "1.2.276.0.76.4.6"
-      }
+      "structure": "compose-medication-product-code"
     },
     "masnahmen.medikamentose_therapie.medikation.medikament.darreichungsform": [
       {
@@ -223,8 +234,15 @@
       "type": "concatenate",
       "target": "Medikation.text",
       "separator": "; ",
-      "reason": "Preserve reviewed medication dosage, PRN, reason and uncoded administration-form wording in the one available medication narrative slot.",
+      "reason": "Preserve the medication name plus reviewed dosage, PRN, reason and uncoded administration-form wording in the one available medication narrative slot.",
       "sources": [
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Arzneimittel: "
+          }
+        },
         {
           "source": "masnahmen.medikamentose_therapie.medikation.dosierung.freitext",
           "transform": {
@@ -268,6 +286,29 @@
             "type": "narrative",
             "only_if_uncoded": true,
             "prefix": "Darreichungsform: "
+          }
+        }
+      ]
+    },
+    "compose-medication-product-code": {
+      "type": "compose_coded",
+      "target": "UVMedicationInformationsimple.code",
+      "null_flavor": "NA",
+      "reason": "The selected AKTIN simple medication-information template represents the medicinal product in manufacturedMaterial/code. Combine Arzneimittel-Code with Arzneimittel-Name as code plus displayName; when only the name is available, use the template-mandated NA null flavor and preserve the name in originalText.",
+      "sources": [
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelcode",
+          "role": "code",
+          "transform": {
+            "type": "code_system",
+            "code_system": "1.2.276.0.76.4.6"
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname",
+          "role": "display_name",
+          "transform": {
+            "type": "narrative"
           }
         }
       ]

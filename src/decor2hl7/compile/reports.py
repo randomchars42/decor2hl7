@@ -429,6 +429,20 @@ def _cda_coverage_tree(
                     status += "▲"
                 elif row["name"] in site_owned_targets:
                     status += "◆"
+                    requirements = mapping.get("site_requirements", {})
+                    requirement = (
+                        requirements.get(row["name"], {})
+                        if isinstance(requirements, Mapping) else {}
+                    )
+                    channel = (
+                        str(requirement.get("channel") or "")
+                        if isinstance(requirement, Mapping) else ""
+                    )
+                    if not selected_paths and not suggested_paths and channel:
+                        consequence = (
+                            f" ← site configuration via cda.{channel}; "
+                            "no dataset counterpart"
+                        )
                 leaf = _leaf(row["target"].get("path") or row["target"].get("element_name"))
                 lines.append(
                     f"{status:<3}{area_stem}{entity_stem[len(area_stem):]}{branch} "
@@ -985,7 +999,7 @@ def _configuration_excerpt(
             compact_structure = {
                 key: structure[key] for key in (
                     "type", "source_group", "target_repeat", "target", "policy",
-                    "sources", "separator", "transform", "reason",
+                    "sources", "separator", "transform", "null_flavor", "reason",
                 ) if structure.get(key) is not None
             }
             if structure.get("branches"):
@@ -1647,6 +1661,19 @@ def _structural_and_completion_lines(
                     f"with `{rule.get('separator', '; ')}` and assign "
                     f"`{rule.get('target')}`."
                 )
+            elif kind == "compose_coded":
+                source_roles = {
+                    str(item.get("role") or ""): str(item.get("source") or "")
+                    for item in rule.get("sources", [])
+                    if isinstance(item, Mapping)
+                }
+                explanation = (
+                    f"Compose `{rule.get('target')}` from code "
+                    f"`{source_roles.get('code', '')}` and display name "
+                    f"`{source_roles.get('display_name', '')}`. If only the name is "
+                    f"present, write `nullFlavor=\"{rule.get('null_flavor', 'NA')}\"` "
+                    "and preserve that wording in `originalText`."
+                )
             else:
                 explanation = "Review this structural rule in `cda-mapping.json`."
             lines += [f"- `{name}`: {explanation}", ""]
@@ -2079,8 +2106,9 @@ def render_cda_mapping_trees_markdown(
         "portable configured source; this combines with its coverage symbol "
         "(for example `○▲`).",
         "- ◆ **Site-owned requirement** — an active owner-required CDA value is "
-        "explicitly delegated to site configuration; this combines with its "
-        "coverage symbol (for example `○◆`).",
+        "explicitly delegated to the named `cda.values` or "
+        "`cda.fallback_if_active` site channel; `○◆` means configuration-owned "
+        "construction with no dataset-field source.",
         "- ✓! **Mapped and suggested** — one datapoint is selected and another remains under review.",
         "",
         "The CDA tree excludes generic datatype-expansion plumbing and fixed, "

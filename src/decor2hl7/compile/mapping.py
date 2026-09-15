@@ -2835,7 +2835,7 @@ def _bound_enum_mapping(
                 associations = (
                     associations if isinstance(associations, list) else []
                 )
-                selected = {
+                association_matches = {
                     (
                         str(member.get("code") or ""),
                         str(member.get("codeSystem") or ""),
@@ -2847,11 +2847,11 @@ def _bound_enum_mapping(
                         str(association.get("code_system") or ""),
                     ), [])
                 }
-                if len(selected) != 1:
+                if len(association_matches) != 1:
                     exact_table = {}
                     exact_members = []
                     break
-                member = next(iter(selected.values()))
+                member = next(iter(association_matches.values()))
                 exact_members.append(member)
                 for alias in [str(label)] + [
                     str(value) for value in info.get("synonyms", [])
@@ -2912,12 +2912,14 @@ def _bound_enum_mapping(
                 if score:
                     ranked.append((score, dict(member)))
             best = max((score for score, _ in ranked), default=0)
-            selected = [member for score, member in ranked if score == best]
-            if len(selected) != 1:
+            lexical_matches = [
+                member for score, member in ranked if score == best
+            ]
+            if len(lexical_matches) != 1:
                 break
-            selected_members.append(selected[0])
+            selected_members.append(lexical_matches[0])
             for alias in aliases:
-                table[alias] = selected[0]
+                table[alias] = lexical_matches[0]
         else:
             if len({str(item.get("code") or "") for item in selected_members}) != len(source):
                 continue
@@ -4181,10 +4183,10 @@ def _code_mapping_defaults_for_field(field: Mapping[str, Any]) -> dict[str, str]
             association = option.get("terminology_association", {})
             if not isinstance(association, Mapping):
                 continue
-            canonical = association.get("canonical")
-            add(label, canonical)
+            associated_canonical = association.get("canonical")
+            add(label, associated_canonical)
             for synonym in option.get("synonyms", []):
-                add(synonym, canonical)
+                add(synonym, associated_canonical)
 
     # Keep compatibility with hand-built/minimal models where concept-list
     # options have not yet been folded into ``values``.
@@ -4582,21 +4584,23 @@ def migrate_mapping_target_identities(
     for rule in structure_items:
         if not isinstance(rule, dict):
             continue
-        for owner in [rule] + [
+        for rule_owner in [rule] + [
             branch for branch in rule.get("branches", [])
             if isinstance(branch, dict)
         ]:
-            if owner.get("target"):
-                target, physical = migrate_reference(owner["target"])
-                old_target = str(owner["target"])
-                old_physical = str(owner.get("cda_target") or old_target)
+            if rule_owner.get("target"):
+                target, physical = migrate_reference(rule_owner["target"])
+                old_target = str(rule_owner["target"])
+                old_physical = str(
+                    rule_owner.get("cda_target") or old_target
+                )
                 migrated_physical = physical or old_physical
                 if target != old_target or migrated_physical != old_physical:
                     changed += 1
-                owner["target"] = target
-                if "cda_target" in owner or migrated_physical != target:
-                    owner["cda_target"] = migrated_physical
-            constants = owner.get("constants", {})
+                rule_owner["target"] = target
+                if "cda_target" in rule_owner or migrated_physical != target:
+                    rule_owner["cda_target"] = migrated_physical
+            constants = rule_owner.get("constants", {})
             if isinstance(constants, dict):
                 for old_name in list(constants):
                     new_name, _physical = migrate_reference(old_name)

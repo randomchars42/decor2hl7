@@ -61,6 +61,10 @@ architectural decision.
   `equal_or_error`; a reviewed precedence policy must report differences.
 - `concatenate` maps present same-occurrence values independently and joins
   their textual results with an explicit separator.
+- `compose_coded` combines one coded source and one human display-name source
+  in the same occurrence into one coded CDA value. The reviewed rule fixes the
+  code transform and uncoded null flavor; when only the display name is
+  present, its wording is preserved in the compiled `originalText` companion.
 - `fallback` fills an absent target in the same occurrence.
 - `fallback_if_active` fills a required leaf only after another assignment has
   activated its optional branch. It never activates a branch or creates a
@@ -86,7 +90,8 @@ unsafe scalar default.
 `site_requirements` delegates one required target to either site `values` or
 `fallback_if_active`, with a reason but no concrete value. Portable mapping
 validation checks the contract; an actual site must provide a binding-valid
-value through the declared channel.
+value through the declared channel. Coverage therefore writes `○◆`: there is
+no dataset-field source (`○`), while construction ownership is explicit (`◆`).
 
 `field_reviews` records an intentional null selection. It requires an existing
 field, status `intentionally_unmapped`, a non-empty reason, and an actual null

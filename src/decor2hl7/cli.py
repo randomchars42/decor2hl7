@@ -685,11 +685,10 @@ def _mapping_decisions_differ(
 ) -> bool:
     """Return whether reviewer-owned executable choices differ from proposal."""
     return any(
-        current.get(key, default) != proposed.get(key, default)
-        for key, default in (
-            ("fields", {}), ("structures", {}), ("defaults", {}),
-            ("target_defaults", {}), ("site_requirements", {}),
-            ("field_reviews", {}),
+        current.get(key, {}) != proposed.get(key, {})
+        for key in (
+            "fields", "structures", "defaults", "target_defaults",
+            "site_requirements", "field_reviews",
         )
     )
 

@@ -341,9 +341,26 @@ def check_config(
                 compatibility_field["repeat_chain"] = chain + [
                     f"repeat_by_discriminator:{structure_name}"
                 ]
-            compatible, reasons = transformed_compatibility(
-                compatibility_field, target, transform
-            )
+            compatible: bool
+            reasons: list[str]
+            if (
+                structure.get("type") == "compose_coded"
+                and str(structure.get("target") or "") == cda_target_name
+                and any(
+                    isinstance(source, Mapping)
+                    and str(source.get("source") or "") == str(path)
+                    for source in structure.get("sources", [])
+                )
+            ):
+                # The structure owns the role-specific transforms and composes
+                # their outputs into one coded datatype.  Validating either
+                # source directly against that final coded target would reject
+                # the display-name text before composition.
+                compatible, reasons = True, []
+            else:
+                compatible, reasons = transformed_compatibility(
+                    compatibility_field, target, transform
+                )
             if for_each_target_positions(field, target, cda, cda_mapping) is not None:
                 reasons = [
                     compatibility_reason

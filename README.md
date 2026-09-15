@@ -13,14 +13,26 @@ For project rules and design questions, start with
 
 ## Quick start
 
-Install the package and create a workspace:
+Currently, `decor2hl7` must be installed from source. Clone the repository, or
+download and extract the source into a directory such as `decor2hl7/`:
 
 ```bash
+git clone https://github.com/randomchars42/decor2hl7.git
+cd decor2hl7
 python3 -m pip install -e .
-mkdir work
-cd work
+```
+
+Create the working directory outside the source checkout, then initialize it:
+
+```bash
+cd ..
+mkdir decor2hl7-work
+cd decor2hl7-work
 decor2hl7 init
 ```
+
+Once the package is published, the source checkout and editable installation
+can be replaced with `python3 -m pip install decor2hl7`.
 
 Select an exact release and transaction, then build the specification products:
 
