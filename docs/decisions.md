@@ -261,10 +261,10 @@ Admission time completes an already active allergy concern; unknown clinical
 onset and completed assertion status remain distinct reviewed values. See
 [`reference-transaction.md`](reference-transaction.md#allergy).
 
-### DEC-036 — Selected AKTIN medication branch is baseline authority
+### DEC-036 — Selected profile medication branch is baseline authority
 
-The reference mapping follows the exact simple branch selected by AKTIN rather
-than its richer SPEC sibling. See
+The reference mapping follows the exact simple branch selected by the active
+profile rather than its richer SPEC sibling. See
 [`reference-transaction.md`](reference-transaction.md#medication).
 
 ### DEC-043 — Reviewed medication-administration mappings and intentional nulls
@@ -285,9 +285,9 @@ and [`reference-transaction.md`](reference-transaction.md#imaging).
 
 ### DEC-045 — Medication ingredient and instruction wording
 
-In the selected AKTIN simple medication branch, preserve ingredient name and
-code, the explicit active-ingredient answer, verbatim strength, additional
-dosage instructions, and patient intake instructions as separately labelled,
+In the selected simple medication branch, preserve ingredient name and code,
+the explicit active-ingredient answer, verbatim strength, additional dosage
+instructions, and patient intake instructions as separately labelled,
 occurrence-local contributions to `Medikation.text`. This reviewed narrative
 contract does not select the uncontained detail sibling, infer a code system or
 strength ratio, or assert a structured CDA ingredient or instruction target.

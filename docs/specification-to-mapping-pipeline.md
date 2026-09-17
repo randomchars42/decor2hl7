@@ -1,8 +1,13 @@
-# From ART-DECOR specifications to a reviewed mapping
+# Technical specification-to-mapping pipeline
 
-This guide follows the setup-time workflow from selected ART-DECOR identity to
-compiled models, mapping evidence, and the portable reviewed CDA mapping. It
-stops before site input and runtime operation.
+This developer and technical-maintainer guide follows the setup-time pipeline
+from selected ART-DECOR identity to compiled models, mapping evidence, and the
+portable reviewed CDA mapping. It explains implementation boundaries and stops
+before site input and runtime operation.
+
+Specification maintainers and clinical mapping reviewers who need the
+task-oriented workflow should instead start with
+[`user/specification-and-mapping.md`](user/specification-and-mapping.md).
 
 Detailed semantic rules are not repeated here. Follow the topic links for the
 owner rule, decor2hl7 supplement, current effect, and evidence behind a stage.
@@ -46,7 +51,7 @@ The four principal products have different meanings:
 
 ## 1. Select identity
 
-`set-version` and `set-transaction` write `aktin.json`. They do not create
+`set-version` and `set-transaction` write `decor2hl7.json`. They do not create
 release or transaction artifacts. The selected OID and effective date determine
 later paths and exactness checks:
 
@@ -224,7 +229,7 @@ Current mapping rules:
 | `cda-mapping.proposed.md` | unresolved review work against the generated proposal |
 | `cda-mapping-details.md` | accepted selections and full evidence |
 | `cda-mapping-trees.md` | exhaustive dataset and CDA coverage |
-| `cda-mapping-trees-extended.md` | AKTIN-facing coverage with exact source/template traceability and rule/gap annotations |
+| `cda-mapping-trees-extended.md` | Clinical and template-review coverage with exact source/template traceability and rule/gap annotations |
 | `cda-expanded-readable.*` | readable effective target hierarchy |
 | diagnostics and conformance reports | reproducibility and failure evidence |
 

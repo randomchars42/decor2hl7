@@ -1,10 +1,13 @@
-# AKTIN 2026.1.2 reference transaction
+# Reference transaction 2026.1.2 / notaufnahmeregister--60
 
 This page records only non-obvious reviewed policy for release `2026.1.2`,
 transaction `notaufnahmeregister--60`. Exact field selections belong to the
 reviewed `cda-mapping.json`; generated coverage and diagnostics belong to the
 reference workspace. Counts are not copied here because they change whenever
 the workspace is rebuilt or reviewed.
+
+Organization and profile names in source artifacts identify provenance only;
+they do not imply endorsement of decor2hl7 by an artifact publisher.
 
 Related decisions: DEC-008, DEC-009, DEC-018, DEC-029, DEC-033, DEC-036,
 DEC-038, DEC-041, DEC-042, DEC-043, DEC-044, and DEC-045.
@@ -49,9 +52,9 @@ Allergy Concern Act, and Allergy Intolerance Observation.
 - Final-diagnosis Problem Observation uses the template-preferred LOINC
   statement code `29308-4`; the diagnosis itself remains in the observation
   value.
-- AKTIN confirmed that secondary ICD-10 has no target in this profile. It is
-  intentionally unmapped and is not represented as `CD.translation` or an
-  inferred additional observation.
+- The profile owner confirmed that secondary ICD-10 has no target in this
+  profile. It is intentionally unmapped and is not represented as
+  `CD.translation` or an inferred additional observation.
 - `Typ Verlegung` uses one exact finite `reviewed_coded_map` across the still
   unresolved Referral Actions binding. This authorizes only its enumerated
   target outputs and does not close the terminology gap.
@@ -73,8 +76,8 @@ entries. Those structured mapping questions remain open.
 ## Medication
 
 The baseline follows the exact simple UV Medication Information branch selected
-by the AKTIN Medikation template. The richer sibling detail branch is evidence,
-not authority to replace that selection.
+by the active medication template. The richer sibling detail branch is
+evidence, not authority to replace that selection.
 
 Current reviewed behavior is:
 
@@ -136,7 +139,7 @@ mood or lifecycle state.
   narrative links are compiler/runtime construction roles rather than dataset
   mappings.
 - The retained documentation-start concept is intentionally unmapped because
-  AKTIN reports that no current target template uses it.
+  the profile owner reports that no current target template uses it.
 
 Remaining profile and publication questions are in
 [`open-boundaries.md`](open-boundaries.md).

@@ -51,7 +51,7 @@ class ReferenceClosureTests(unittest.TestCase):
             cls.workspace / "model" / REFERENCE_RELEASE / REFERENCE_TRANSACTION
         )
         required = [
-            cls.workspace / "aktin.json",
+            cls.workspace / "decor2hl7.json",
             cls.model_dir / "build-diagnostics.json",
             cls.model_dir / "cda.json",
             cls.model_dir / "mapping-audit.json",
@@ -65,7 +65,7 @@ class ReferenceClosureTests(unittest.TestCase):
                 "local companion reference workspace is unavailable: "
                 + ", ".join(missing)
             )
-        selection = cls._load(cls.workspace / "aktin.json")
+        selection = cls._load(cls.workspace / "decor2hl7.json")
         if (
             selection.get("release", {}).get("key") != REFERENCE_RELEASE
             or selection.get("transaction", {}).get("key")

@@ -24,8 +24,8 @@ Then read the task-specific topic page identified by `docs/index.md`, plus:
 
 - [`docs/specification-to-mapping-pipeline.md`](docs/specification-to-mapping-pipeline.md)
   for acquisition, compilation, or mapping-pipeline work;
-- [`docs/reference-transaction.md`](docs/reference-transaction.md) for selected
-  AKTIN profile and clinical mapping questions;
+- [`docs/reference-transaction.md`](docs/reference-transaction.md) for the
+  selected reference profile and clinical mapping questions;
 - [`docs/mapping-documentation-format.md`](docs/mapping-documentation-format.md)
   for generated mapping-documentation changes;
 - [`docs/decisions.md`](docs/decisions.md) only when resolving a stable `DEC-*`
@@ -52,7 +52,7 @@ page, or an open boundary.
 ## Reference workspace
 
 The companion `randomchars42/decor2hl7-test-workspace` records the current
-generated reference state. Verify its `aktin.json` identity before using it. A
+generated reference state. Verify its `decor2hl7.json` identity before using it. A
 complete workspace contains:
 
 - `spec/<release>/` from `fetch`;

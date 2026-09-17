@@ -208,7 +208,7 @@ class CoreTests(unittest.TestCase):
             for path in ("spec", "model", "config", "mapping", "site", "test", "out", "state"):
                 self.assertTrue((root / path).is_dir())
             self.assertFalse((root / "raw").exists())
-            self.assertIsNone(load_json(root / "aktin.json")["release"])
+            self.assertIsNone(load_json(root / "decor2hl7.json")["release"])
             set_release(root, RELEASE)
             set_transaction(root, TRANSACTION)
             # Selection commands do not create release/transaction artifact paths.
@@ -222,16 +222,16 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as configured, tempfile.TemporaryDirectory() as override:
             root = Path(tmp)
             init_workspace(root)
-            settings = load_json(root / "aktin.json")
+            settings = load_json(root / "decor2hl7.json")
             settings["input"]["directory"] = configured
             from decor2hl7.workspace import write_json
-            write_json(root / "aktin.json", settings)
+            write_json(root / "decor2hl7.json", settings)
             self.assertEqual(input_dir(root), Path(configured).resolve())
             self.assertEqual(input_dir(root, override), Path(override).resolve())
-            settings = load_json(root / "aktin.json")
+            settings = load_json(root / "decor2hl7.json")
             settings["input"]["directory"] = "relative-input"
             from decor2hl7.workspace import write_json
-            write_json(root / "aktin.json", settings)
+            write_json(root / "decor2hl7.json", settings)
             self.assertEqual(input_dir(root, required=False), (root / "relative-input").resolve())
             self.assertFalse((root / "raw").exists())
 

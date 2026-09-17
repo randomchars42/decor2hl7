@@ -1435,7 +1435,7 @@ def parser() -> argparse.ArgumentParser:
     q.set_defaults(func=cmd_build)
 
     q = sub.add_parser("propose-input", help="inspect CSV input and propose CSV/code mappings")
-    q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
+    q.add_argument("--input", help="CSV input directory; overrides decor2hl7.json input.directory")
     q.add_argument("--join-column", default="patient_id")
     _add_runtime_config_overrides(q, cda=False)
     q.set_defaults(func=cmd_propose_input)
@@ -1491,12 +1491,12 @@ def parser() -> argparse.ArgumentParser:
     q.set_defaults(func=cmd_validate_cda)
 
     q = sub.add_parser("check-input", help="validate the external CSV input snapshot without emitting CDA")
-    q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
+    q.add_argument("--input", help="CSV input directory; overrides decor2hl7.json input.directory")
     _add_runtime_config_overrides(q)
     q.set_defaults(func=cmd_check_input)
 
     q = sub.add_parser("transform", help="read, normalize, validate and emit changed documents")
-    q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
+    q.add_argument("--input", help="CSV input directory; overrides decor2hl7.json input.directory")
     _add_runtime_config_overrides(q)
     q.set_defaults(func=cmd_transform)
 
@@ -1506,7 +1506,7 @@ def parser() -> argparse.ArgumentParser:
     q.set_defaults(func=cmd_send)
 
     q = sub.add_parser("run", help="perform the runtime pipeline")
-    q.add_argument("--input", help="CSV input directory; overrides aktin.json input.directory")
+    q.add_argument("--input", help="CSV input directory; overrides decor2hl7.json input.directory")
     q.add_argument("--send", action="store_true")
     _add_runtime_config_overrides(q)
     q.set_defaults(func=cmd_run)

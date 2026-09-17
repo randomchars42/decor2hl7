@@ -5,8 +5,8 @@ available through Git and is not duplicated in durable documentation.
 
 ## Specification and mapping
 
-1. Obtain AKTIN clarification for the provisional presenting-complaint onset
-   placement.
+1. Obtain profile-owner clarification for the provisional
+   presenting-complaint onset placement.
 2. Complete medication timing only after branch-selection and occurrence
    semantics are established; keep current intentional nulls meanwhile.
 3. Reopen ingredient and structured imaging-region mappings only with an

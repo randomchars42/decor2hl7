@@ -205,12 +205,12 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["--root", str(root), "init"]), 0)
             with patch("decor2hl7.retrieval.catalog.releases", return_value=RELEASES):
                 self.assertEqual(main(["--root", str(root), "set-version", "2026.1.2"]), 0)
-            settings = load_json(root / "aktin.json")
+            settings = load_json(root / "decor2hl7.json")
             self.assertEqual(settings["release"]["key"], "2026.1.2")
             self.assertIsNone(settings["transaction"])
             with patch("decor2hl7.retrieval.catalog.transactions", return_value=TRANSACTIONS):
                 self.assertEqual(main(["--root", str(root), "set-transaction", "notaufnahmeregister--60"]), 0)
-            settings = load_json(root / "aktin.json")
+            settings = load_json(root / "decor2hl7.json")
             self.assertEqual(settings["transaction"]["key"], "notaufnahmeregister--60")
             # Set commands still have no artifact-directory side effects.
             self.assertFalse((root / "spec" / "2026.1.2").exists())

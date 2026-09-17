@@ -23,7 +23,7 @@ def load(path: Path) -> dict[str, Any]:
 def main() -> None:
     repository = Path(__file__).resolve().parents[1]
     workspace = repository.parent / "test-workplace"
-    selection = load(workspace / "aktin.json")
+    selection = load(workspace / "decor2hl7.json")
     if (
         selection.get("release", {}).get("key") != RELEASE
         or selection.get("transaction", {}).get("key") != TRANSACTION

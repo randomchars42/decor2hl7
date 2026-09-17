@@ -82,7 +82,7 @@ artifact ownership:
 INPUT/                             producer-owned source snapshot
 
 WORKSPACE/
-├── aktin.json                     selected release and transaction
+├── decor2hl7.json                 selected release and transaction
 ├── config/                        acquisition hints and reviewed overlays
 ├── spec/                          fetched release cache and closures
 ├── model/                         generated compiled models and evidence

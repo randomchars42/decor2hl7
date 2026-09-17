@@ -2,7 +2,7 @@
 
 Selection is deliberately independent from filesystem creation:
 
-* ``init`` creates only the top-level workspace and ``aktin.json``.
+* ``init`` creates only the top-level workspace and ``decor2hl7.json``.
 * ``set-version KEY`` and ``set-transaction KEY`` only update selection state.
 * commands that create artifacts create the directories they own lazily.
 
@@ -21,7 +21,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Mapping
 
-SETTINGS = "aktin.json"
+SETTINGS = "decor2hl7.json"
 # ``config`` is intentionally reserved for acquisition-wide configuration
 # such as sources.json.  Shareable CDA mappings, site-specific input mappings,
 # and generated test fixtures have different owners and lifecycles.
@@ -152,7 +152,8 @@ def transaction_key(name: str, oid: str) -> str:
 def input_dir(root: Path, override: str | Path | None = None, *, required: bool = True) -> Path | None:
     """Resolve the external CSV input root.
 
-    Command-line input wins over the optional deployment default in ``aktin.json``.
+    Command-line input wins over the optional deployment default in
+    ``decor2hl7.json``.
     The path is external to the decor2hl7 workspace and is never created here.
     """
     explicit = override is not None
@@ -165,13 +166,13 @@ def input_dir(root: Path, override: str | Path | None = None, *, required: bool 
         if required:
             raise ValueError(
                 "no input directory configured; pass `--input PATH` or set "
-                "`input.directory` in aktin.json"
+                "`input.directory` in decor2hl7.json"
             )
         return None
     path = Path(str(value)).expanduser()
     if not path.is_absolute():
         # Explicit CLI paths follow ordinary shell semantics; a stored relative
-        # deployment default is anchored at the workspace that owns aktin.json.
+        # The stored deployment default is anchored at its owning workspace.
         path = path.resolve() if explicit else (root / path).resolve()
     else:
         path = path.resolve()

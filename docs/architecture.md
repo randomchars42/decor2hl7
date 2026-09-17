@@ -77,7 +77,8 @@ src/decor2hl7/
 
 ## Setup-time data flow
 
-Selection writes identity to `aktin.json` and creates no generated directories.
+Selection writes identity to `decor2hl7.json` and creates no generated
+directories.
 Artifact-producing commands own their output paths:
 
 | Command | Main products |

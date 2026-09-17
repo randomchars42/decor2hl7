@@ -64,9 +64,9 @@ Generate four reports with distinct roles:
    structural group context;
 3. `cda-mapping-trees.md`: the complete dataset-to-CDA and inverse
    CDA-to-dataset coverage trees;
-4. `cda-mapping-trees-extended.md`: the same coverage organized for AKTIN,
-   clinical and template reviewers, with source concept identities, exact CDA
-   template revisions, template-relative XPaths, rule behavior and gap evidence.
+4. `cda-mapping-trees-extended.md`: the same coverage organized for clinical
+   and template reviewers, with source concept identities, exact CDA template
+   revisions, template-relative XPaths, rule behavior and gap evidence.
 
 ## Coverage headline and trees
 

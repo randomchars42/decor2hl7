@@ -8,7 +8,8 @@ relevant topic or reference-transaction page.
 
 ### Referral Actions terminology is unavailable
 
-AKTIN ValueSet `1.2.276.0.76.11.53@2015-11-17` includes CodeSystem
+The selected profile's ValueSet `1.2.276.0.76.11.53@2015-11-17` includes
+CodeSystem
 `1.2.276.0.76.3.1.195.5.53@2019-12-30T00:00:00`, but that exact CodeSystem is
 not published by any located ART-DECOR project or identified DIVI/HL7 Germany
 publication. The expansion therefore remains incomplete and the build remains
@@ -44,14 +45,14 @@ documentation does not copy the volatile event counts.
 
 ## Reference-profile semantics
 
-### Presenting-complaint onset needs AKTIN confirmation
+### Presenting-complaint onset needs profile-owner confirmation
 
 The reviewed mapping provisionally places the presenting-complaint onset on
 CEDIS Problem Concern Act `effectiveTime/low`. The active template declares
 `width` but not `low`; the pinned datatype model makes `low` structurally legal
 while generated co-occurrence rules disallow the scalar parent representation.
-The mapping remains provisional until AKTIN confirms that `low` is the intended
-clinical meaning or publishes a direct association.
+The mapping remains provisional until the profile owner confirms that `low` is
+the intended clinical meaning or publishes a direct association.
 
 ### Medication timing remains incomplete
 
@@ -68,12 +69,12 @@ event code and start/stop semantics.
 
 The selected simple medication branch does not establish ingredient name, code,
 active-ingredient indicator, or strength/denominator placement. The detail
-sibling is not selected by AKTIN. The reviewed reference mapping now preserves
-ingredient name, code, active-ingredient wording, and verbatim strength in the
-occurrence-local medication narrative. This does not assert structured
-ingredient semantics. Reopen the structured mapping with an owner-selected
-ingredient profile or a separately approved downstream profile whose code
-system, strength, and occurrence semantics are complete.
+sibling is not selected by the active profile. The reviewed reference mapping
+now preserves ingredient name, code, active-ingredient wording, and verbatim
+strength in the occurrence-local medication narrative. This does not assert
+structured ingredient semantics. Reopen the structured mapping with an
+owner-selected ingredient profile or a separately approved downstream profile
+whose code system, strength, and occurrence semantics are complete.
 
 Product name is resolved through the selected simple branch's coded product
 representation and the existing medication narrative; it is deliberately not
