@@ -7,7 +7,7 @@ reference workspace. Counts are not copied here because they change whenever
 the workspace is rebuilt or reviewed.
 
 Related decisions: DEC-008, DEC-009, DEC-018, DEC-029, DEC-033, DEC-036,
-DEC-038, DEC-041, DEC-042, and DEC-043.
+DEC-038, DEC-041, DEC-042, DEC-043, DEC-044, and DEC-045.
 
 ## Evidence boundary
 
@@ -56,6 +56,20 @@ Allergy Concern Act, and Allergy Intolerance Observation.
   unresolved Referral Actions binding. This authorizes only its enumerated
   target outputs and does not close the terminology gap.
 
+## Imaging
+
+MRI and X-ray examination regions are reviewed wording-only mappings to the
+Diagnostics section narrative:
+
+- MRI region is one labelled fact, `MRT – Untersuchungsregion`;
+- X-ray region is a `for_each` fact, `Röntgen – Untersuchungsregion`, which
+  preserves every source occurrence and its order.
+
+Both source fields remain `null` under structured `fields`. These rules do not
+claim a region-bearing MRI particle, a complete X-ray code crosswalk, or any
+selection, coalescing, or conflict relationship with structured diagnostic
+entries. Those structured mapping questions remain open.
+
 ## Medication
 
 The baseline follows the exact simple UV Medication Information branch selected
@@ -74,6 +88,10 @@ Current reviewed behavior is:
 - product name is also the first contribution to the existing medication
   narrative concatenation; it is not mapped to the open-template CDA/RIM name
   leaf;
+- ingredient name and code, the explicit active-ingredient answer, and verbatim
+  strength are separately labelled contributions to the same occurrence-local
+  medication narrative; the boolean is rendered as `ja` or `nein`, while an
+  absent answer contributes nothing;
 - application start maps to the atomic subordinate-administration `TS` choice;
 - dose and continuous rate map to `doseQuantity` and `rateQuantity`, with scalar
   and range quantities using compiled representations;
@@ -83,9 +101,10 @@ Current reviewed behavior is:
   when input supplies an exact code/system; uncoded wording goes to narrative;
 - route coalesces `Art der Anwendung` and `Methode der Anwendung`, preferring
   the first with a visible warning when both differ;
-- product name, dosage text, event-offset wording, true PRN, medication reasons,
-  and uncoded form wording are concatenated in source order into medication
-  narrative;
+- product name, ingredient wording, dosage text, additional dosage instructions,
+  patient intake instructions, event-offset wording, true PRN, medication
+  reasons, and uncoded form wording are concatenated in reviewed order into
+  medication narrative;
 - medication root and subordinate administration mood/status are site-owned
   activation-scoped requirements, not compiler defaults.
 
@@ -98,8 +117,10 @@ The medication mapping records these deliberate null selections:
 | Event-relative repetition event | Timing construction is deferred; offset is narrative only |
 
 Ingredient name/code/indicator/strength, additional dosage instructions, and
-intake instructions remain unmapped, but they are open target/semantic gaps
-rather than accepted intentional-null reviews.
+intake instructions therefore no longer remain untransmitted. Their structured
+ingredient and instruction targets remain open: the selected simple branch has
+no ingredient container, source ingredient strength is free text rather than a
+ratio, and the two unconstrained code domains establish no code-system bridge.
 
 Medication history, recommendations, orders, and non-administration require an
 explicit per-medication source discriminator. Start/stop times do not establish

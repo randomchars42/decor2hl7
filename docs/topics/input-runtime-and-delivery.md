@@ -4,8 +4,8 @@ Site input configuration, portable target mapping, and runtime operation have
 different owners. Runtime consumes compiled models and reviewed configuration;
 it never accesses ART-DECOR XML or services.
 
-Related decisions: DEC-002, DEC-005, DEC-006, DEC-007, DEC-034, DEC-035, and
-DEC-041.
+Related decisions: DEC-002, DEC-005, DEC-006, DEC-007, DEC-034, DEC-035,
+DEC-041, and DEC-044.
 
 ## Site-owned input
 
@@ -79,6 +79,10 @@ ordinary ingestion, validation, binding, rendering, and assertion modules
 without production state or transport. The deterministic synthetic generator
 remains available for broad smoke coverage, but it cannot prove mutually
 exclusive clinical branches.
+
+Fixture coverage treats both structured field selections and checked
+narrative-only sources as mapped. This ensures reviewed wording-only fields are
+exercised without pretending they produced structured target assignments.
 
 ## Transport
 

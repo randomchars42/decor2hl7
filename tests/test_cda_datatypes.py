@@ -1388,7 +1388,88 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(problems, [])
             section = find_required(ET.fromstring(payload), f".//{{{HL7}}}section")
             self.assertEqual(find_required(section, f"{{{HL7}}}title").text, "Clinical facts")
-            self.assertEqual(find_required(section, f"{{{HL7}}}text").text, "mapped fact")
+            self.assertEqual(
+                find_required(section, f"{{{HL7}}}text").text,
+                "Fact: mapped fact",
+            )
+
+    def test_section_narrative_tables_include_mapped_and_reviewed_imaging_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "template.xml"
+            source.write_text('''<template id="doc" effectiveDate="2026" name="Document"
+    displayName="Diagnostics">
+  <element name="hl7:ClinicalDocument">
+    <element name="hl7:component"><element name="hl7:structuredBody">
+      <element name="hl7:component" minimumMultiplicity="0" maximumMultiplicity="1">
+        <element name="hl7:section" minimumMultiplicity="1" maximumMultiplicity="1">
+          <element name="hl7:title" datatype="ST" minimumMultiplicity="1" maximumMultiplicity="1"/>
+          <element name="hl7:text" datatype="SD.TEXT" minimumMultiplicity="1" maximumMultiplicity="1"/>
+          <element name="hl7:entry" minimumMultiplicity="0" maximumMultiplicity="1">
+            <element name="hl7:observation"><element name="hl7:value" datatype="ST"/></element>
+          </element>
+        </element>
+      </element>
+    </element></element>
+  </element>
+</template>''', encoding="utf-8")
+            model = {
+                "meta": {"template_id": "doc", "template_effective_date": "2026"},
+                "groups": {"xray": {"name": "X-ray", "repeating": True}},
+                "fields": {
+                    "mapped": {
+                        "name": "Mapped fact", "type": "text", "parent": None,
+                        "repeat_chain": [], "value_sets": [], "codes": [],
+                    },
+                    "mri": {
+                        "name": "MRI region", "type": "code", "parent": None,
+                        "repeat_chain": [], "value_sets": [], "codes": [],
+                    },
+                    "xray.region": {
+                        "name": "X-ray region", "type": "code", "parent": "xray",
+                        "repeat_chain": ["xray"], "value_sets": [], "codes": [],
+                    },
+                },
+            }
+            compiled = compile_cda([source], model)
+            value_target, _ = target_at(compiled, "/hl7:observation/hl7:value")
+            section_text, _ = target_at(compiled, "/hl7:section/hl7:text")
+            mapping = {
+                "fields": {"mapped": value_target, "mri": None, "xray.region": None},
+                "narratives": {section_text: {"blocks": [
+                    {
+                        "type": "fact", "source": "mri", "label": "MRI region",
+                        "reason": "Reviewed wording-only representation.",
+                    },
+                    {
+                        "type": "for_each", "source_repeat": "xray",
+                        "source": "xray.region", "label": "X-ray region",
+                        "reason": "Preserve every reviewed occurrence.",
+                    },
+                ]}},
+            }
+            payload, problems = cda.emit(
+                {
+                    "key": "P1", "values": {
+                        "mapped": "existing", "mri": {"canonical": "Head"},
+                    },
+                    "instances": {"xray": [
+                        {"values": {"xray.region": {"canonical": "Chest"}}, "instances": {}},
+                        {"values": {"xray.region": {"canonical": "Pelvis"}}, "instances": {}},
+                    ]},
+                },
+                model, compiled, mapping, {},
+            )
+            self.assertEqual(problems, [])
+            section = find_required(ET.fromstring(payload), f".//{{{HL7}}}section")
+            narrative = find_required(section, f"{{{HL7}}}text")
+            rows = [
+                ["".join(cell.itertext()) for cell in row.findall(f"{{{HL7}}}td")]
+                for row in narrative.findall(f".//{{{HL7}}}tbody/{{{HL7}}}tr")
+            ]
+            self.assertIn(["Mapped fact", "existing"], rows)
+            self.assertIn(["MRI region", "Head"], rows)
+            self.assertIn(["1", "X-ray region", "Chest"], rows)
+            self.assertIn(["2", "X-ray region", "Pelvis"], rows)
 
     def test_required_entry_text_references_generated_section_narrative(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1500,7 +1581,7 @@ class CdaDatatypeTests(unittest.TestCase):
             )
 
             contents = root.findall(
-                f".//{{{HL7}}}section/{{{HL7}}}text/{{{HL7}}}content"
+                f".//{{{HL7}}}section/{{{HL7}}}text//{{{HL7}}}content"
             )
             self.assertEqual([item.text for item in contents], ["10 mg", "Drug B"])
             self.assertEqual(

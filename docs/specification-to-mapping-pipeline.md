@@ -221,7 +221,7 @@ Current mapping rules:
 |---|---|
 | `mapping-audit.json` | structured evidence, candidates, gaps, claims, rules, coverage |
 | `cda-mapping.proposed.json` | concise executable proposal |
-| `cda-mapping.md` | unresolved review work |
+| `cda-mapping.proposed.md` | unresolved review work against the generated proposal |
 | `cda-mapping-details.md` | accepted selections and full evidence |
 | `cda-mapping-trees.md` | exhaustive dataset and CDA coverage |
 | `cda-mapping-trees-extended.md` | AKTIN-facing coverage with exact source/template traceability and rule/gap annotations |
@@ -237,7 +237,10 @@ format contract is
 `init-cda-mapping` moves the proposal across the ownership boundary into
 `mapping/<release>/<transaction>/`. A new mapping starts from the proposal; an
 existing mapping preserves reviewer-owned selections while refreshing derived
-guides, compatible identities, and generated notes.
+guides, compatible identities, and generated notes. Its `cda-mapping.md` is
+rendered from the reviewed mapping and contains only decisions that remain open;
+reviewed mappings, intentional nulls, and narrative-only decisions remain in
+the headline, details, and exhaustive trees but not in that work queue.
 
 `init-cda-mapping --reset` explicitly replaces reviewed state. Ordinary target
 renaming migrates only through one unique stored owner identity. Structure type

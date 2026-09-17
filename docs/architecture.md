@@ -60,6 +60,7 @@ src/decor2hl7/
 │   ├── terminology.py      target binding enforcement
 │   ├── semantics.py        CDA value compatibility
 │   ├── parity.py           published/compiled endpoint comparison
+│   ├── narrative.py        checked section-narrative rules and presentation IR
 │   └── render.py           representation-driven XML output
 ├── domain.py               target-neutral dataset value domains
 ├── data.py                 CSV ingestion and occurrence normalization
@@ -82,7 +83,7 @@ Artifact-producing commands own their output paths:
 | Command | Main products |
 |---|---|
 | `fetch` | release cache, manifest, artifact-owner index, transaction closure |
-| `build` | `model.json`, `cda.json`, diagnostics, mapping audit and proposal |
+| `build` | `model.json`, `cda.json`, diagnostics, mapping audit, proposal, and `cda-mapping.proposed.md` |
 | `init-cda-mapping` | reviewed mapping bundle and lock |
 | `propose-input` | site-local CSV/code proposals |
 | `init-site-config` | reviewed site bundle |

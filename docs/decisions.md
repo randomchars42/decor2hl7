@@ -274,6 +274,25 @@ composition, and narrative rules are reviewed; unsupported timing and
 non-transmitted fields remain explicit nulls.
 See [`reference-transaction.md`](reference-transaction.md#medication).
 
+### DEC-044 — Reviewed narrative-only facts and labelled section presentation
+
+Present executable mappings as labelled, occurrence-preserving section
+narrative content. A separate checked `narratives` contract may preserve exact
+reviewed source wording without asserting a structured CDA value mapping. The
+reference MRI fact and repeated X-ray regions use that contract. See
+[`topics/mapping-and-construction.md`](topics/mapping-and-construction.md#narrative-presentation)
+and [`reference-transaction.md`](reference-transaction.md#imaging).
+
+### DEC-045 — Medication ingredient and instruction wording
+
+In the selected AKTIN simple medication branch, preserve ingredient name and
+code, the explicit active-ingredient answer, verbatim strength, additional
+dosage instructions, and patient intake instructions as separately labelled,
+occurrence-local contributions to `Medikation.text`. This reviewed narrative
+contract does not select the uncontained detail sibling, infer a code system or
+strength ratio, or assert a structured CDA ingredient or instruction target.
+See [`reference-transaction.md`](reference-transaction.md#medication).
+
 ## Runtime and delivery
 
 ### DEC-034 — Bounded receiver transport adapters

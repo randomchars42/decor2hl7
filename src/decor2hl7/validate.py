@@ -35,6 +35,7 @@ from .cda.semantics import (
 )
 from .transforms import mapping_rules, validate_transform
 from .cda.model import ValueRepresentationKind
+from .cda.narrative import validate_narratives
 from .cda.terminology import (
     coded_fallback_rule_errors,
     reviewed_coded_map_rule_errors,
@@ -498,6 +499,7 @@ def check_config(
     ))
     errors.extend(validate_target_defaults(cda, cda_mapping))
     errors.extend(validate_structures(model, cda, cda_mapping))
+    errors.extend(validate_narratives(model, cda, cda_mapping))
     errors.extend(
         f"cda-mapping: {problem}"
         for problem in required_construction_gaps(cda, cda_mapping, site)

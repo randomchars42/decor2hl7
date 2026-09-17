@@ -329,6 +329,9 @@ class ReferenceClosureTests(unittest.TestCase):
             if path not in proposal.get("target_defaults", {})
         }
         self.assertEqual(recovery["field_overrides"], proposal_null_reviewed)
+        self.assertEqual(
+            recovery["narrative_overrides"], reviewed.get("narratives", {}),
+        )
         reviewed_only_structures = {
             name: value for name, value in reviewed["structures"].items()
             if proposal.get("structures", {}).get(name) != value
@@ -352,8 +355,10 @@ class ReferenceClosureTests(unittest.TestCase):
             {
                 "dataset_fields": 120,
                 "generated_mapped_fields": 84,
-                "reviewed_mapped_fields": 107,
-                "field_override_count": 23,
+                "reviewed_mapped_fields": 113,
+                "reviewed_narrative_fields": 2,
+                "field_override_count": 29,
+                "narrative_target_count": 1,
                 "structure_override_count": 3,
                 "field_review_override_count": 5,
                 "target_default_override_count": 6,
@@ -394,6 +399,66 @@ class ReferenceClosureTests(unittest.TestCase):
         self.assertEqual(
             reviewed["fields"][lot_number],
             "UVMedicationInformationsimple.lotNumberText",
+        )
+        medication_root = "masnahmen.medikamentose_therapie.medikation"
+        narrative_fields = {
+            f"{medication_root}.medikament.wirkstoff.wirkstoffname": {
+                "type": "narrative",
+                "prefix": "Wirkstoff: ",
+            },
+            f"{medication_root}.medikament.wirkstoff.wirkstoffcode": {
+                "type": "narrative",
+                "prefix": "Wirkstoff-Code: ",
+            },
+            (
+                f"{medication_root}.medikament.wirkstoff."
+                "arzneilich_wirksamer_bestandteilq"
+            ): {
+                "type": "enum",
+                "map": {
+                    "true": "Arzneilich wirksamer Bestandteil: ja",
+                    "false": "Arzneilich wirksamer Bestandteil: nein",
+                },
+            },
+            f"{medication_root}.medikament.wirkstoff.wirkstarke": {
+                "type": "narrative",
+                "prefix": "Wirkstärke: ",
+            },
+            f"{medication_root}.dosierung.zusatzliche_hinweise": {
+                "type": "narrative",
+                "prefix": "Zusätzlicher Hinweis: ",
+            },
+            f"{medication_root}.dosierung.anweisungen_zur_einnahme": {
+                "type": "narrative",
+                "prefix": "Einnahmeanweisung: ",
+            },
+        }
+        for path, transform in narrative_fields.items():
+            self.assertEqual(
+                reviewed["fields"][path],
+                {
+                    "target": "Medikation.text",
+                    "structure": "concatenate-medication-narrative",
+                    "transform": transform,
+                },
+            )
+        medication_sources = [
+            item["source"]
+            for item in reviewed["structures"][
+                "concatenate-medication-narrative"
+            ]["sources"]
+        ]
+        self.assertEqual(
+            medication_sources[1:5],
+            list(narrative_fields)[:4],
+        )
+        self.assertEqual(
+            medication_sources[5:8],
+            [
+                f"{medication_root}.dosierung.freitext",
+                f"{medication_root}.dosierung.zusatzliche_hinweise",
+                f"{medication_root}.dosierung.anweisungen_zur_einnahme",
+            ],
         )
         self.assertTrue(cda["targets"][material_name]["datatype_derived"])
         self.assertIsNone(cda["targets"][material_name]["element_id"])

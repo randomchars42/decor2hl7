@@ -21,6 +21,7 @@ from .compile.site import code_mapping_defaults
 from .data import field_value, ingest
 from .domain import accepted_values
 from .cda.model import ValueRepresentationKind
+from .cda.narrative import narrative_blocks, narrative_source_rules
 from .workspace import load_json, write_json
 
 
@@ -765,10 +766,10 @@ def setup_fixture(
     write_json(config_root / "codes-mapping.json", codes_mapping)
     write_json(config_root / "site.json", site)
 
-    all_mapped = sorted(
+    all_mapped = sorted({
         path for path, selected in cda_mapping.get("fields", {}).items()
         if selected is not None
-    )
+    } | set(narrative_source_rules(cda_mapping)))
     coverage = (
         scenario_meta["expected"].get("coverage", "all-mapped")
         if scenario_meta is not None else "all-mapped"
@@ -964,6 +965,11 @@ def run_fixture(
         for selected in cda_mapping.get("fields", {}).values()
         for rule in mapping_rules(selected)
     }
+    selected_target_names.update(
+        str(block.get("section_target") or "")
+        for block in narrative_blocks(cda_mapping)
+        if block.get("section_target")
+    )
     for structure in structure_rules(cda_mapping):
         if structure.get("target"):
             selected_target_names.add(str(structure["target"]))

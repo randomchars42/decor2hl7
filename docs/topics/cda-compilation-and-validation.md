@@ -5,8 +5,8 @@ constraints with the pinned CDA R2/RIM and HL7 V3 datatype graph before mapping
 or rendering begins.
 
 Related decisions: DEC-013, DEC-014, DEC-017, DEC-019, DEC-020, DEC-021,
-DEC-023, DEC-024, DEC-026, DEC-028, DEC-030, DEC-031, DEC-032, DEC-039, and
-DEC-040.
+DEC-023, DEC-024, DEC-026, DEC-028, DEC-030, DEC-031, DEC-032, DEC-039,
+DEC-040, and DEC-044.
 
 ## Effective physical model
 
@@ -62,6 +62,14 @@ Required entry `text/reference/@value` branches are compiler-owned narrative
 infrastructure when the exact constraints prove the relationship. Rendering
 creates an occurrence-local fragment identifier and matching section
 `content/@ID`; the fragment URI is not a clinical mapping target.
+
+For `SD.TEXT` section narratives, rendering writes mapped facts as CDA
+NarrativeBlock paragraphs and tables rather than flattening unrelated scalars.
+Generated entry fragment IDs are placed in the first matching occurrence value
+cell; unmatched fragments remain a list, so every reference still resolves.
+For a plain text section target, the same labelled content uses a compact text
+fallback. This presentation is derived from the reviewed mapping and normalized
+record; it does not add clinical assignments.
 
 ## Schematron and assertions
 

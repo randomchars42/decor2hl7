@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 import json
+import xml.etree.ElementTree as ET
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
-import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape, quoteattr
 
-from ..bindings import (
-    required_construction_gaps,
-    required_construction_gap_targets,
-    required_unmapped_null_flavor,
-    site_requirement_targets,
-)
+from ..bindings import (required_construction_gap_targets,
+                        required_construction_gaps,
+                        required_unmapped_null_flavor,
+                        site_requirement_targets)
+from ..cda.narrative import narrative_blocks, narrative_source_rules
 from ..transforms import cda_target_name, mapping_rules
+from .mapping import gap_reopening_evidence_label
 
 
 def _comment(value: str) -> ET.Element:
@@ -143,6 +143,41 @@ def _mapping_view(
                 "location": location,
             })
 
+    for block in narrative_blocks(mapping):
+        dataset_path = str(block.get("source") or "")
+        physical_name = str(block.get("section_target") or "")
+        target = cda.get("targets", {}).get(physical_name, {})
+        locations = list(target.get("locations", []))
+        if not dataset_path or len(locations) != 1 or _location(locations[0]) is None:
+            continue
+        location = _location(locations[0])
+        assert location is not None
+        rule = {
+            "target": physical_name,
+            "mode": "narrative",
+            "reason": block.get("reason"),
+            "decision": block.get("decision"),
+            "label": block.get("label"),
+            "type": block.get("type"),
+        }
+        rows_by_section[_section_of(location, nodes, parents)].append({
+            "dataset_path": dataset_path,
+            "dataset_name": str(
+                model.get("fields", {}).get(dataset_path, {}).get("name")
+                or dataset_path
+            ),
+            "target": physical_name,
+            "cda_target": physical_name,
+            "target_model": target,
+            "rule": rule,
+            "selection": block,
+            "structure": {},
+            "entity": _template_label(target),
+            "entity_name": str(target.get("template_name") or "CDA document"),
+            "location": location,
+            "narrative": True,
+        })
+
     return {
         "nodes": nodes,
         "parents": parents,
@@ -200,6 +235,7 @@ def _coverage_index(
 ) -> dict[str, Any]:
     configured = mapping.get("fields", {})
     reviews = mapping.get("field_reviews", {})
+    narrative_sources = narrative_source_rules(mapping)
     audited = audit.get("fields", {})
     selected: dict[str, list[str]] = {}
     suggested: dict[str, list[str]] = {}
@@ -208,6 +244,14 @@ def _coverage_index(
     for path in _ordered_model_paths(model):
         selection = configured.get(path) if isinstance(configured, Mapping) else None
         review = reviews.get(path) if isinstance(reviews, Mapping) else None
+        narrative_targets = list(dict.fromkeys(
+            str(rule.get("section_target") or "")
+            for rule in narrative_sources.get(path, [])
+            if rule.get("section_target")
+        ))
+        if narrative_targets:
+            selected[path] = narrative_targets
+            continue
         if (
             selection is None and isinstance(review, Mapping)
             and review.get("status") == "intentionally_unmapped"
@@ -440,7 +484,11 @@ def _rule_trace(
             return _structure_trace(structure_name, structure, rule, physical)
     mode = str(rule.get("mode") or "")
     parts: list[str] = []
-    if mode == "fallback_if_active":
+    if mode == "narrative":
+        kind = str(rule.get("type") or "fact")
+        decision = str(rule.get("decision") or "reviewed")
+        parts.append(f"reviewed narrative-only {kind} [{decision}]")
+    elif mode == "fallback_if_active":
         parts.append("fallback_if_active; fills only an already-active CDA branch")
     elif mode == "presence":
         parts.append("presence rule")
@@ -466,18 +514,42 @@ def _rule_trace(
 def _gap_trace(detail: Mapping[str, Any]) -> str:
     gap = detail.get("gap", {})
     parts: list[str] = []
+    gate = ""
+    kind = ""
+    inventory_only = False
+    possible_targets = detail.get("possible_targets", {})
+    possible_items = (
+        possible_targets.get("items", [])
+        if isinstance(possible_targets, Mapping) else []
+    )
     if isinstance(gap, Mapping):
         gate = str(gap.get("gate") or "")
         kind = str(gap.get("kind") or "")
         if gate or kind:
             parts.append(":".join(value for value in (gate, kind) if value))
+        inventory_only = (
+            gate == "semantic"
+            and kind == "no_association"
+            and bool(possible_items)
+        )
         reopens = gap.get("reopens_with", [])
         if isinstance(reopens, Sequence) and not isinstance(reopens, (str, bytes)):
-            evidence = ", ".join(str(value) for value in reopens if value)
+            evidence = (
+                "upstream association or reviewed semantic bridge"
+                if inventory_only
+                else ", ".join(dict.fromkeys(
+                    gap_reopening_evidence_label(value)
+                    for value in reopens if value
+                ))
+            )
             if evidence:
                 parts.append(f"reopen with {evidence}")
     reason = _plain(detail.get("unresolved_reason"))
-    if reason and reason not in parts:
+    if inventory_only:
+        parts.append(
+            "compatible writable targets are unproven inventory, not semantic evidence"
+        )
+    elif reason and reason not in parts:
         parts.append(reason.replace("_", " "))
     return " · ".join(parts) or "no approved semantic CDA association"
 
@@ -499,6 +571,7 @@ def _extended_dataset_coverage_tree(
         children[parent].append(("field", path))
 
     configured = mapping.get("fields", {})
+    narrative_by_source = narrative_source_rules(mapping)
     reviewed = coverage.get("reviewed", {})
     audited = audit.get("fields", {})
     lines = ["```text", f"   Dataset model — {len(fields)} datapoints"]
@@ -525,6 +598,18 @@ def _extended_dataset_coverage_tree(
             trace = _rule_trace(rule, mapping, physical)
             if trace:
                 lines.append(f"   {prefix}R: {trace}")
+        for block in narrative_by_source.get(path, []):
+            target_name = str(block.get("section_target") or "")
+            target = cda.get("targets", {}).get(target_name, {})
+            lines.append(
+                f"   {prefix}T: narrative {_target_trace(target, include_template=True)}"
+            )
+            reason = _plain(block.get("reason"))
+            decision = str(block.get("decision") or "reviewed narrative")
+            lines.append(
+                f"   {prefix}R: narrative-only {block.get('type')} [{decision}]"
+                + (f"; {reason}" if reason else "")
+            )
         if path in coverage.get("suggested", {}):
             targets = coverage["suggested"][path]
             for index, target_name in enumerate(targets, 1):
@@ -759,6 +844,21 @@ def _extended_cda_coverage_tree(
                     "logical": str(rule.get("target") or physical),
                     "rule": rule,
                 })
+    for block in narrative_blocks(mapping):
+        physical = str(block.get("section_target") or "")
+        source = str(block.get("source") or "")
+        if physical and source:
+            selected[physical].append({
+                "path": source,
+                "logical": physical,
+                "rule": {
+                    "target": physical,
+                    "mode": "narrative",
+                    "reason": block.get("reason"),
+                    "decision": block.get("decision"),
+                    "type": block.get("type"),
+                },
+            })
 
     suggested: dict[str, list[str]] = defaultdict(list)
     for path, names in coverage.get("suggested", {}).items():
@@ -1014,6 +1114,8 @@ def format_coverage_headline(
 
 def _mapping_status(row: Mapping[str, Any]) -> str:
     rule = row.get("rule", {})
+    if isinstance(rule, Mapping) and rule.get("mode") == "narrative":
+        return "Narrative rule"
     if isinstance(rule, Mapping) and rule.get("structure"):
         return "Structural rule"
     if isinstance(rule, Mapping) and rule.get("mode") == "presence":
@@ -1029,12 +1131,18 @@ def _configuration_instruction(row: Mapping[str, Any]) -> str:
     path = str(row["dataset_path"])
     name = str(row["dataset_name"])
     target = str(row["target"])
+    rule = row.get("rule", {})
+    if isinstance(rule, Mapping) and rule.get("mode") == "narrative":
+        return (
+            f"In `cda-mapping.json`, review the block for **{name}** in "
+            f"`narratives[\"{target}\"].blocks`; it presents the source wording "
+            "without asserting a structured CDA value mapping."
+        )
     if isinstance(row.get("selection"), str):
         return (
             f"In `cda-mapping.json`, map **{name}** by setting "
             f"`fields[\"{path}\"]` to `\"{target}\"`."
         )
-    rule = row.get("rule", {})
     if isinstance(rule, Mapping) and rule.get("mode") == "presence":
         return (
             f"In `cda-mapping.json`, review the rule stored at "
@@ -1105,12 +1213,21 @@ def _review_required(
     model_fields = model.get("fields", {})
     configured = mapping.get("fields", {})
     reviews = mapping.get("field_reviews", {})
+    narrative_sources = set(narrative_source_rules(mapping))
     audited = audit.get("fields", {})
     order = [path for path in model.get("order", []) if path in model_fields]
     order.extend(sorted(path for path in model_fields if path not in order))
     rows: list[dict[str, Any]] = []
     for path in order:
         if not isinstance(configured, Mapping) or configured.get(path) is not None:
+            continue
+        if path in narrative_sources:
+            continue
+        review = (
+            reviews.get(path, {}) if isinstance(reviews, Mapping) else {}
+        )
+        review = review if isinstance(review, Mapping) else {}
+        if review.get("status") == "intentionally_unmapped":
             continue
         detail = audited.get(path, {}) if isinstance(audited, Mapping) else {}
         detail = detail if isinstance(detail, Mapping) else {}
@@ -1142,12 +1259,6 @@ def _review_required(
             )
         else:
             action = "Find a representation manually, or retain `null`."
-        review = (
-            reviews.get(path, {}) if isinstance(reviews, Mapping) else {}
-        )
-        review = review if isinstance(review, Mapping) else {}
-        if review.get("status") == "intentionally_unmapped":
-            action = "Retain the explicit `null` unless the reviewed scope changes."
         rows.append({
             "path": str(path),
             "name": str(model_fields.get(path, {}).get("name") or path),
@@ -1442,17 +1553,29 @@ def _configuration_excerpt(
             return compact_rule(value)
         return value
 
+    field_rows = [row for row in rows if not row.get("narrative")]
     fields = {
         str(row["dataset_path"]): compact_selection(
             mapping.get("fields", {}).get(row["dataset_path"])
         )
-        for row in rows
+        for row in field_rows
     }
     structure_names = {
-        str(row["rule"].get("structure")) for row in rows
+        str(row["rule"].get("structure")) for row in field_rows
         if row["rule"].get("structure")
     }
-    excerpt: dict[str, Any] = {"fields": fields}
+    excerpt: dict[str, Any] = {}
+    if fields:
+        excerpt["fields"] = fields
+    narrative_targets = list(dict.fromkeys(
+        str(row["target"]) for row in rows if row.get("narrative")
+    ))
+    if narrative_targets:
+        configured_narratives = mapping.get("narratives", {})
+        excerpt["narratives"] = {
+            target: configured_narratives.get(target, {})
+            for target in narrative_targets
+        }
     if structure_names:
         excerpt["structures"] = {}
         for name in sorted(structure_names):
@@ -1520,12 +1643,7 @@ def _review_dataset_tree(
             detail = detail if isinstance(detail, Mapping) else {}
             gap = detail.get("gap", {})
             gap = gap if isinstance(gap, Mapping) else {}
-            review = row.get("review", {})
-            reviewed_null = bool(
-                isinstance(review, Mapping)
-                and review.get("status") == "intentionally_unmapped"
-            )
-            status = "=" if reviewed_null else "!" if (
+            status = "!" if (
                 row.get("candidates") or detail.get("primary")
                 or detail.get("runtime_blocked")
             ) else "×"
@@ -1536,7 +1654,6 @@ def _review_dataset_tree(
                 str(gap.get(key) or "") for key in ("gate", "kind")
             ).strip(":")
             notes = [value for value in (
-                "intentionally unmapped" if reviewed_null else "",
                 gate,
                 f"{possible_count} possible target{'s' if possible_count != 1 else ''}"
                 if possible_count else "no generated target inventory",
@@ -2139,6 +2256,24 @@ def _structural_and_completion_lines(
                 explanation = "Review this structural rule in `cda-mapping.json`."
             lines += [f"- `{name}`: {explanation}", ""]
 
+    narratives = mapping.get("narratives", {})
+    if isinstance(narratives, Mapping) and narratives:
+        lines += [
+            "## Accepted narrative-only rules",
+            "",
+            "These reviewed rules preserve source wording in a section narrative "
+            "without claiming a structured CDA value mapping.",
+            "",
+        ]
+        for block in narrative_blocks(mapping):
+            decision = f" [{block.get('decision')}]" if block.get("decision") else ""
+            lines.append(
+                f"- `{block.get('source')}` → `{{{block.get('section_target')}}}` as "
+                f"**{block.get('label')}** (`{block.get('type')}`){decision}: "
+                f"{block.get('reason') or 'Reviewed narrative presentation.'}"
+            )
+        lines.append("")
+
     field_reviews = mapping.get("field_reviews", {})
     if isinstance(field_reviews, Mapping) and field_reviews:
         lines += [
@@ -2405,7 +2540,11 @@ def render_cda_mapping_markdown(
         "- ! **Evidence candidate** — related evidence exists, but no executable mapping is selected.",
         "- ? **Possible target (unproven)** — type-compatible and reachable, but not semantic evidence.",
         "- × **No generated target** — manual template review has not yet produced a candidate.",
-        "- = **Intentionally unmapped** — an explicit reviewed-null reason is recorded.",
+        "",
+        "Reviewed mappings, narrative-only decisions, and intentional nulls are "
+        "resolved decisions and therefore omitted here. Their counts remain in "
+        "the headline and their details remain in `cda-mapping-details.md` and "
+        "the exhaustive trees.",
         "",
         "Nothing in a candidate list is selected automatically. Edit `cda-mapping.json`. "
         "Do not edit the XML-like template skeletons in this report; all trees, tables, "
@@ -2437,24 +2576,12 @@ def render_cda_mapping_markdown(
         detail = detail if isinstance(detail, Mapping) else {}
         gap = detail.get("gap", {})
         gap = gap if isinstance(gap, Mapping) else {}
-        review = row.get("review", {})
-        review = review if isinstance(review, Mapping) else {}
-        reviewed_null = review.get("status") == "intentionally_unmapped"
         lines += [
             f"### {row['name']}",
             "",
             f"Dataset datapoint: `{row['path']}`",
             "",
-            (
-                "**Reviewed decision:** Intentionally unmapped — "
-                + str(review.get("reason") or "no reason recorded")
-                + (
-                    f" ({review.get('decision')})"
-                    if review.get("decision") else ""
-                )
-                if reviewed_null else
-                f"**Why review is required:** {row['reason']}"
-            ),
+            f"**Why review is required:** {row['reason']}",
             "",
         ]
         if gap:
@@ -2614,10 +2741,7 @@ def render_cda_mapping_extended_trees_markdown(
     lines = [
         "# Extended dataset-to-CDA coverage trees",
         "",
-        "This generated companion is intended for AKTIN, clinical reviewers and "
-        "CDA template authors who do not need to know the decor2hl7 directory "
-        "layout. It presents the reviewed portable mapping; edit "
-        "`cda-mapping.json`, not this report.",
+        "Edit `cda-mapping.json`, not this report.",
         "",
         f"Document template: **{template.get('display_name') or template.get('name') or 'ClinicalDocument'}** "
         f"(`{template.get('id')}` @ `{template.get('effective_date')}`)",

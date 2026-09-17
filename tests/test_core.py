@@ -36,6 +36,7 @@ from decor2hl7.cda.datatypes import value_representation
 from decor2hl7.cda.extensions import load_extensions
 from decor2hl7.cda.parity import declared_endpoint_parity
 from decor2hl7.compile.reports import (
+    _gap_trace,
     coverage_headline_counts, format_coverage_headline,
     render_accepted_cda_mappings_markdown,
     render_cda_mapping_extended_trees_markdown,
@@ -903,6 +904,9 @@ class CoreTests(unittest.TestCase):
             self.assertIn("Dataset concept: `c`", details)
             output = Path(tmp) / "model"
             output.mkdir()
+            (output / "cda-mapping.md").write_text(
+                "# stale legacy proposal guide", encoding="utf-8"
+            )
             mapping_compiler.write_cda_mapping([project], output, model, target)
             audit = load_json(output / "mapping-audit.json")
             self.assertEqual(audit["fields"]["foo"]["selected"], "ExampleDocument.value")
@@ -923,8 +927,11 @@ class CoreTests(unittest.TestCase):
                 guide.index("Resulting CDA placement"),
             )
             self.assertNotIn("Put the value", guide)
-            decisions = (output / "cda-mapping.md").read_text(encoding="utf-8")
+            decisions = (output / "cda-mapping.proposed.md").read_text(
+                encoding="utf-8"
+            )
             self.assertNotIn("Abridged configuration excerpt", decisions)
+            self.assertFalse((output / "cda-mapping.md").exists())
             self.assertTrue((output / "cda-mapping-trees.md").is_file())
             self.assertTrue((output / "cda-mapping-trees-extended.md").is_file())
 
@@ -1374,6 +1381,61 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Referral code", report)
         self.assertIn("SPEC → TA", report)
         self.assertIn("selectable after review", report)
+
+    def test_review_workbench_contains_only_undecided_nulls(self) -> None:
+        model = {
+            "order": ["open", "reviewed", "narrative"],
+            "groups": {},
+            "fields": {
+                "open": {"name": "Open source value", "type": "text"},
+                "reviewed": {"name": "Reviewed null value", "type": "text"},
+                "narrative": {"name": "Narrative-only value", "type": "text"},
+            },
+        }
+        cda_model = {
+            "document_template": {
+                "id": "document", "effective_date": "2026",
+                "name": "Document",
+            },
+            "document": [],
+            "targets": {},
+        }
+        mapping = {
+            "fields": {"open": None, "reviewed": None, "narrative": None},
+            "field_reviews": {"reviewed": {
+                "status": "intentionally_unmapped",
+                "reason": "Reviewed scope excludes this value.",
+            }},
+            "narratives": {"Diagnostics.text": {"blocks": [{
+                "type": "fact", "source": "narrative", "label": "Narrative",
+                "reason": "Reviewed wording-only representation.",
+            }]}},
+        }
+        audit = {"fields": {
+            path: {
+                "unresolved_reason": "no_semantic_evidence",
+                "gap": {
+                    "gate": "blocked_upstream", "kind": "no_candidate",
+                    "reopens_with": [],
+                },
+            }
+            for path in model["fields"]
+        }}
+
+        report = render_cda_mapping_markdown(
+            model, cda_model, mapping, audit
+        )
+
+        self.assertIn("Open source value", report)
+        self.assertNotIn("Reviewed null value", report)
+        self.assertNotIn("Narrative-only value", report)
+        self.assertIn("✓ mapped **1 dp", report)
+        self.assertIn("= reviewed null **1 dp**", report)
+        self.assertIn("× no target **1 dp**", report)
+        self.assertIn(
+            "intentional nulls are resolved decisions and therefore omitted",
+            report,
+        )
 
     def test_code_normalization_rejects_unmapped_finite_domain_code(self) -> None:
         field = {"type": "code", "accepted_values": {"rot": {"code": "R", "code_system": "1.2.3", "display_name": "rot"}}}
@@ -2474,6 +2536,13 @@ class CoreTests(unittest.TestCase):
                             "Medication.deepText",
                         ],
                     )
+                if (
+                    expected == "semantic:no_association"
+                    and detail.get("possible_targets")
+                ):
+                    self.assertEqual(
+                        gap["reopens_with"], ["association:case.a"]
+                    )
 
         self.assertIsNone(classify(
             "case.complete",
@@ -2481,6 +2550,28 @@ class CoreTests(unittest.TestCase):
             {"formal_terminology": {"status": "bound", "complete": True}},
             [],
         ))
+
+    def test_gap_trace_explains_unproven_target_inventory(self) -> None:
+        trace = _gap_trace({
+            "unresolved_reason": "structural_container_available",
+            "possible_targets": {"items": [{"target": "Medication.code"}]},
+            "gap": {
+                "gate": "semantic",
+                "kind": "no_association",
+                # Cached v9 audits used to repeat the source path here. The
+                # renderer must not leak that tautology while the audit is
+                # being regenerated with the stable association request key.
+                "reopens_with": ["case.a"],
+            },
+        })
+
+        self.assertEqual(
+            trace,
+            "semantic:no_association · reopen with upstream association or "
+            "reviewed semantic bridge · compatible writable targets are unproven "
+            "inventory, not semantic evidence",
+        )
+        self.assertNotIn("case.a", trace)
 
     def test_schematron_constraints_only_strengthen_an_existing_candidate(self) -> None:
         target = {
@@ -4163,7 +4254,7 @@ class CoreTests(unittest.TestCase):
         )
 
         self.assertEqual(changed, 1)
-        self.assertEqual(current["version"], 9)
+        self.assertEqual(current["version"], 10)
         self.assertEqual(current["fields"]["finding"], {
             "target": "NewFinding.value", "cda_target": "NewFinding.value",
         })
@@ -4218,6 +4309,38 @@ class CoreTests(unittest.TestCase):
             },
         )
         self.assertIn("NewFinding.statusCode", current["target_identities"])
+
+    def test_narrative_target_identity_migrates_unique_owner_slot(self) -> None:
+        owner = "1.2.3|ID:text-7|PATH:hl7:section/hl7:text"
+        current: dict[str, Any] = {
+            "fields": {"finding": None},
+            "narratives": {"OldSection.text": {"blocks": [{
+                "type": "fact", "source": "finding", "label": "Finding",
+                "reason": "Reviewed wording-only representation.",
+            }]}},
+            "target_identities": {"OldSection.text": {
+                "cda_target": "OldSection.text",
+                "revisionless_source_key": owner,
+            }},
+        }
+        proposed = {"target_identities": {"NewSection.text": {
+            "cda_target": "NewSection.text",
+            "revisionless_source_key": owner,
+        }}}
+        compiled = {"targets": {"NewSection.text": {
+            "template_id": "1.2.3", "template_effective_date": "2027-01-01",
+            "element_id": "text-7", "path": "hl7:section/hl7:text",
+            "source_key": "1.2.3@2027-01-01|ID:text-7|PATH:hl7:section/hl7:text",
+        }}}
+
+        changed = mapping_compiler.migrate_mapping_target_identities(
+            current, proposed, compiled
+        )
+
+        self.assertEqual(changed, 1)
+        self.assertNotIn("OldSection.text", current["narratives"])
+        self.assertIn("NewSection.text", current["narratives"])
+        self.assertIn("NewSection.text", current["target_identities"])
 
     def test_mapping_target_identity_does_not_guess_ambiguous_slot(self) -> None:
         owner = "1.2.3|ID:slot-7|PATH:hl7:observation/hl7:value"
@@ -7086,7 +7209,13 @@ class CoreTests(unittest.TestCase):
             "art": {"type": "code", "repeat_chain": []},
             "methode": {"type": "text", "repeat_chain": []},
             "product_name": {"type": "text", "repeat_chain": []},
+            "ingredient_name": {"type": "text", "repeat_chain": []},
+            "ingredient_code": {"type": "code", "repeat_chain": []},
+            "ingredient_active": {"type": "boolean", "repeat_chain": []},
+            "ingredient_strength": {"type": "text", "repeat_chain": []},
             "freitext": {"type": "text", "repeat_chain": []},
+            "additional_instruction": {"type": "code", "repeat_chain": []},
+            "patient_instruction": {"type": "text", "repeat_chain": []},
             "prn": {"type": "boolean", "repeat_chain": []},
         }}
         cda_model = {"targets": {
@@ -7110,7 +7239,13 @@ class CoreTests(unittest.TestCase):
                 "art": {"target": "Medication.route", "structure": "route", "transform": route_transform},
                 "methode": {"target": "Medication.route", "structure": "route", "transform": route_transform},
                 "product_name": {"target": "Medication.text", "structure": "text", "transform": {"type": "narrative", "prefix": "Arzneimittel: "}},
+                "ingredient_name": {"target": "Medication.text", "structure": "text", "transform": {"type": "narrative", "prefix": "Wirkstoff: "}},
+                "ingredient_code": {"target": "Medication.text", "structure": "text", "transform": {"type": "narrative", "prefix": "Wirkstoff-Code: "}},
+                "ingredient_active": {"target": "Medication.text", "structure": "text", "transform": {"type": "enum", "map": {"true": "Arzneilich wirksamer Bestandteil: ja", "false": "Arzneilich wirksamer Bestandteil: nein"}}},
+                "ingredient_strength": {"target": "Medication.text", "structure": "text", "transform": {"type": "narrative", "prefix": "Wirkstärke: "}},
                 "freitext": {"target": "Medication.text", "structure": "text", "transform": {"type": "narrative"}},
+                "additional_instruction": {"target": "Medication.text", "structure": "text", "transform": {"type": "narrative", "prefix": "Zusätzlicher Hinweis: "}},
+                "patient_instruction": {"target": "Medication.text", "structure": "text", "transform": {"type": "narrative", "prefix": "Einnahmeanweisung: "}},
                 "prn": {"target": "Medication.text", "structure": "text", "transform": {"type": "enum", "map": {"true": "Einnahme bei Bedarf", "false": None}}},
             },
             "structures": {
@@ -7125,14 +7260,32 @@ class CoreTests(unittest.TestCase):
                     "separator": "; ",
                     "sources": [
                         {"source": "product_name", "transform": {"type": "narrative", "prefix": "Arzneimittel: "}},
+                        {"source": "ingredient_name", "transform": {"type": "narrative", "prefix": "Wirkstoff: "}},
+                        {"source": "ingredient_code", "transform": {"type": "narrative", "prefix": "Wirkstoff-Code: "}},
+                        {"source": "ingredient_active", "transform": {"type": "enum", "map": {"true": "Arzneilich wirksamer Bestandteil: ja", "false": "Arzneilich wirksamer Bestandteil: nein"}}},
+                        {"source": "ingredient_strength", "transform": {"type": "narrative", "prefix": "Wirkstärke: "}},
                         {"source": "freitext", "transform": {"type": "narrative"}},
+                        {"source": "additional_instruction", "transform": {"type": "narrative", "prefix": "Zusätzlicher Hinweis: "}},
+                        {"source": "patient_instruction", "transform": {"type": "narrative", "prefix": "Einnahmeanweisung: "}},
                         {"source": "prn", "transform": {"type": "enum", "map": {"true": "Einnahme bei Bedarf", "false": None}}},
                     ],
                 },
             },
         }
         assignments, problems = build_assignments(
-            {"values": {"art": {"raw": "oral"}, "methode": "oral", "product_name": "Ramipril", "freitext": "2 Tabletten", "prn": True}},
+            {"values": {
+                "art": {"raw": "oral"},
+                "methode": "oral",
+                "product_name": "Ramipril",
+                "ingredient_name": "Ramipril",
+                "ingredient_code": {"raw": "C09AA05"},
+                "ingredient_active": True,
+                "ingredient_strength": "5 mg pro Tablette",
+                "freitext": "2 Tabletten",
+                "additional_instruction": {"raw": "Kann Schwindel verursachen"},
+                "patient_instruction": "Mit Wasser einnehmen",
+                "prn": True,
+            }},
             model, cda_model, mapping, {},
         )
         self.assertEqual(problems, [])
@@ -7142,8 +7295,28 @@ class CoreTests(unittest.TestCase):
         )
         self.assertEqual(
             assignments["Medication.text"],
-            "Arzneimittel: Ramipril; 2 Tabletten; Einnahme bei Bedarf",
+            "Arzneimittel: Ramipril; Wirkstoff: Ramipril; "
+            "Wirkstoff-Code: C09AA05; Arzneilich wirksamer Bestandteil: ja; "
+            "Wirkstärke: 5 mg pro Tablette; 2 Tabletten; "
+            "Zusätzlicher Hinweis: Kann Schwindel verursachen; "
+            "Einnahmeanweisung: Mit Wasser einnehmen; Einnahme bei Bedarf",
         )
+
+        assignments, problems = build_assignments(
+            {"values": {"ingredient_active": False}},
+            model, cda_model, mapping, {},
+        )
+        self.assertEqual(problems, [])
+        self.assertEqual(
+            assignments["Medication.text"],
+            "Arzneilich wirksamer Bestandteil: nein",
+        )
+
+        assignments, problems = build_assignments(
+            {"values": {}}, model, cda_model, mapping, {},
+        )
+        self.assertEqual(problems, [])
+        self.assertNotIn("Medication.text", assignments)
 
         assignments, problems = build_assignments(
             {"values": {"art": {"raw": "oral"}, "methode": "intravenös"}},
@@ -7158,7 +7331,7 @@ class CoreTests(unittest.TestCase):
         cda_model: dict[str, Any] = {"targets": {}, "document": []}
         csv_mapping = {"fields": {"a": None}}
         valid_mapping = {
-            "version": 9,
+            "version": 10,
             "fields": {"a": None},
             "field_reviews": {"a": {
                 "status": "intentionally_unmapped",
@@ -7183,6 +7356,62 @@ class CoreTests(unittest.TestCase):
                 require_site_configuration=False,
             ),
         )
+
+    def test_reviewed_narrative_rules_require_exact_source_shapes(self) -> None:
+        model = {"fields": {
+            "mri": {"type": "code", "repeat_chain": []},
+            "xray.region": {"type": "code", "repeat_chain": ["xray"]},
+        }, "groups": {}}
+        target = "Diagnostics.text"
+        cda_model: dict[str, Any] = {"targets": {target: {
+            "writable": True, "prohibited": False, "locations": ["0.1"],
+            "content_role": "section_narrative", "logical_types": ["text"],
+            "value_representation": {"kind": "element_text"},
+            "repeat_ancestors": [],
+        }}, "document": []}
+        csv_mapping = {"fields": {"mri": None, "xray.region": None}}
+        valid_mapping = {
+            "fields": {"mri": None, "xray.region": None},
+            "narratives": {target: {"blocks": [
+                {
+                    "type": "fact", "source": "mri", "label": "MRI region",
+                    "reason": "Reviewed wording-only representation.",
+                },
+                {
+                    "type": "for_each", "source_repeat": "xray",
+                    "source": "xray.region", "label": "X-ray region",
+                    "reason": "Preserve every reviewed occurrence.",
+                },
+            ]}},
+        }
+        self.assertEqual(
+            validate.check_config(
+                model, cda_model, csv_mapping, valid_mapping,
+                require_site_configuration=False,
+            ),
+            [],
+        )
+        counts = coverage_headline_counts(
+            model, cda_model, valid_mapping,
+            {"fields": {"mri": {}, "xray.region": {}}},
+        )
+        self.assertEqual(counts["mapped_datapoints"], 2)
+        self.assertEqual(counts["mapped_leaves"], 2)
+        self.assertEqual(counts["no_target_datapoints"], 0)
+        invalid = {
+            **valid_mapping,
+            "narratives": {target: {"blocks": [{
+                "type": "fact", "source": "xray.region", "label": "X-ray",
+                "reason": "Incorrectly loses occurrence identity.",
+            }]}},
+        }
+        self.assertTrue(any(
+            "source is repeated; use for_each" in error
+            for error in validate.check_config(
+                model, cda_model, csv_mapping, invalid,
+                require_site_configuration=False,
+            )
+        ))
 
     def test_quantity_normalization_rejects_ambiguous_or_invalid_shapes(self) -> None:
         with self.assertRaisesRegex(ValueError, "conflicts with fixed dataset unit"):

@@ -6,7 +6,7 @@ contains concise executable selections and review metadata.
 
 Related decisions: DEC-007, DEC-008, DEC-009, DEC-011, DEC-015, DEC-016,
 DEC-017, DEC-018, DEC-020, DEC-023, DEC-024, DEC-025, DEC-029, DEC-030,
-DEC-033, DEC-035, DEC-038, DEC-040, DEC-041, DEC-042, and DEC-043.
+DEC-033, DEC-035, DEC-038, DEC-040, DEC-041, DEC-042, DEC-043, and DEC-044.
 
 ## Evidence and gates
 
@@ -87,6 +87,34 @@ The following are field-assignment modes under `fields`, not entries in
 - `presence` lets a boolean activate one optional statement only when exact
   owner evidence fixes its complete payload.
 
+## Narrative presentation
+
+Every present executable field mapping is also presented in the narrative of
+its owning CDA section. Direct mappings to the section text remain paragraphs;
+other singleton facts use labelled `Merkmal`/`Wert` rows. Repeated facts add a
+one-based `Vorkommen` column and retain source occurrence boundaries. Missing
+values are omitted, booleans use document-language wording, and codes and
+quantities use their normalized human-readable forms. Mapping transforms still
+control whether a source contributes: for example, a false value transformed
+to omission is not reintroduced by presentation, and a coalesce rule presents
+only the winning source in each occurrence.
+
+`cda-mapping.json:narratives` is a separate reviewed bridge for source wording
+that has no defensible structured target. It is keyed by one exact writable,
+unambiguous `section_narrative` target and contains `blocks`:
+
+- `fact` accepts one non-repeated source field;
+- `for_each` accepts one source field whose `repeat_chain` is exactly the named
+  `source_repeat`, and renders every occurrence independently.
+
+Each block requires `source`, `label`, and `reason`; `decision` and
+`reviewed_at` retain review provenance. Its source remains `null` in `fields`
+and cannot also appear in `field_reviews`. A narrative block may activate its
+own non-repeated section, but it does not assert a structured CDA value, create
+or coalesce structured entry occurrences, or provide a terminology crosswalk.
+Unknown block types, keys, sources, repeated shapes, and targets fail portable
+mapping validation.
+
 ## Completion and ownership
 
 `defaults.required_unmapped` supplies the general legal missing-information
@@ -115,7 +143,7 @@ The canonical generated products are:
 
 - `mapping-audit.json`: structured evidence, decisions, gaps, and coverage;
 - `cda-mapping.proposed.json`: executable proposal;
-- `cda-mapping.md`: unresolved review work;
+- `cda-mapping.proposed.md`: unresolved review work for the generated proposal;
 - `cda-mapping-details.md`: accepted selections and evidence;
 - `cda-mapping-trees.md`: exhaustive dataset and CDA coverage.
 - `cda-mapping-trees-extended.md`: exhaustive AKTIN-facing coverage with
@@ -127,6 +155,9 @@ overwriting reviewer choices. `--reset` explicitly replaces reviewed state with
 the current proposal. Target names may migrate only through one unique stored
 owner identity; structure type names are neither aliased nor translated.
 `mapping-lock.json` pins transaction, model, CDA, and mapping identity.
+The bundle's `cda-mapping.md` is a strictly unresolved work queue; resolved
+structured mappings, narrative-only decisions, and intentional nulls are
+retained in the other reports instead of appearing as open decision cards.
 
 The reference transaction's non-obvious reviewed mappings are summarized in
 [`../reference-transaction.md`](../reference-transaction.md). The generated

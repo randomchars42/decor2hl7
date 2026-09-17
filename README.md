@@ -4,14 +4,19 @@
 release and transaction. CDA is the first output target; the normalized dataset
 and input pipeline remain target-neutral.
 
-Python 3.10.8 or newer is supported. Runtime has no third-party dependencies.
-Setup/build and explicit CDA conformance validation use checksum-pinned external
-packages and Java tooling cached by `fetch`.
+## Site_requirements
+
+- Python 3.10.8 or newer is supported.
+- Runtime has no third-party dependencies.
+- Setup/build and explicit CDA conformance validation use checksum-pinned
+  external packages and Java tooling cached by `fetch`.
 
 For project rules and design questions, start with
 [`docs/index.md`](docs/index.md).
 
 ## Quick start
+
+### Installation
 
 Currently, `decor2hl7` must be installed from source. Clone the repository, or
 download and extract the source into a directory such as `decor2hl7/`:
@@ -22,6 +27,11 @@ cd decor2hl7
 python3 -m pip install -e .
 ```
 
+Once the package is published, the source checkout and editable installation
+can be replaced with `python3 -m pip install decor2hl7`.
+
+### Setting up the working directory
+
 Create the working directory outside the source checkout, then initialize it:
 
 ```bash
@@ -31,30 +41,48 @@ cd decor2hl7-work
 decor2hl7 init
 ```
 
-Once the package is published, the source checkout and editable installation
-can be replaced with `python3 -m pip install decor2hl7`.
+### Workflows
+
+`decor2hl7` facilitates 3 workflows:
+
+- ingesting an ART-DECOR release + transaction and producing a mapping between
+  a dataset and a hl7 document; this typically needs to be done only once per
+  version + transaction + target and might be shared between different sites;
+- setting up a local site that will be sending the hl7 documents; this includes
+  configuration of sending and local raw data to dataset mapping;
+- running; this actually takes raw data, transforms it into its local data
+  model and then generates a valid hl7 document;
+
+## A quick glance at cda mapping
 
 Select an exact release and transaction, then build the specification products:
 
 ```bash
-decor2hl7 list-versions
-decor2hl7 set-version 2026.1.2
-decor2hl7 list-transactions
-decor2hl7 set-transaction notaufnahmeregister--60
+# in your working directory
 
-decor2hl7 fetch
-decor2hl7 build
-decor2hl7 init-cda-mapping
-decor2hl7 check-cda-mapping
+decor2hl7 list-versions
+decor2hl7 set-version 2026.1.2                      # pin version
+decor2hl7 list-transactions
+decor2hl7 set-transaction notaufnahmeregister--60   # pin transaction
+
+decor2hl7 fetch                                     # recursively fetch all
+                                                    # necessary sources
+                                                    # this might take a while
+decor2hl7 build                                     # build an internal model &
+                                                    # try to establish mappings
+decor2hl7 init-cda-mapping                          # place suggestions for
+                                                    # mapping where they might
+                                                    # be edited
+
+# review & adjust mappings
+
+decor2hl7 check-cda-mapping                         # check mappings
 ```
 
-Selection changes only `aktin.json`; it does not fetch or build. Catalog
-commands print stable keys accepted by the corresponding `set-*` commands.
-
-Review the generated mapping guides, including the AKTIN-facing
-`cda-mapping-trees-extended.md`, and edit the portable
-`mapping/<release>/<transaction>/cda-mapping.json`, not the generated Markdown
-or XML previews. `mapping-lock.json` records the exact model and target identity.
+Review the generated mapping guides, including `cda-mapping-trees-extended.md`,
+and edit the portable `mapping/<release>/<transaction>/cda-mapping.json`, not
+the generated Markdown or XML previews. `mapping-lock.json` records the exact
+model and target identity.
 
 ## Configure a site's input
 
@@ -74,7 +102,7 @@ change the portable CDA mapping.
 If `--input` is omitted, input commands use the optional deployment default:
 
 ```json
-{"input": {"directory": "/data/aktin/export"}}
+{ "input": { "directory": "/data/aktin/export" } }
 ```
 
 Runtime commands accept `--cda-mapping FILE` and `--site-config DIRECTORY` to
@@ -198,7 +226,8 @@ consulted by the selected compiler inputs.
 - `cda.json`: exact physical CDA constraint and value model;
 - `mapping-audit.json`: candidates, evidence, gaps, and coverage;
 - `cda-mapping.proposed.json`: concise executable proposal;
-- generated mapping guides, compact and extended coverage trees, and readable CDA trees;
+- `cda-mapping.proposed.md`: unresolved review work for that generated proposal;
+- generated mapping details, compact and extended coverage trees, and readable CDA trees;
 - build and conformance diagnostics.
 
 The complete sequence and authority boundaries are described in
@@ -212,6 +241,9 @@ The portable mapping separates:
 - `structures`: the exact rule types `for_each`,
   `repeat_by_discriminator`, `coalesce`, `concatenate`, and `compose_coded`;
 - `field_reviews`: intentional null selections;
+- `narratives`: reviewed wording-only facts keyed by an exact section narrative
+  target; `fact` handles a singleton source and `for_each` preserves one named
+  source repeat;
 - `defaults` and `target_defaults`: generic and exact reviewed completion;
 - `site_requirements`: required values delegated to a named site channel;
 - target identities and configuration provenance.
@@ -220,6 +252,9 @@ The portable mapping separates:
 ancestor. `repeat_by_discriminator` instead creates separately labelled CDA
 occurrences for distinct source fields that share one physical value target.
 Structure type names are exact; `check-cda-mapping` rejects unknown names.
+The renderer also presents every present mapped field as labelled section
+narrative content. `narratives` adds only explicitly reviewed source wording;
+it does not create a structured CDA value or terminology mapping.
 
 Generated Markdown explains the JSON but is never itself configuration. The
 format contract is

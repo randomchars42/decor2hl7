@@ -64,29 +64,35 @@ Closing this boundary requires an upstream association or a reviewed compound
 occurrence rule that defines which source facts select which branch, including
 event code and start/stop semantics.
 
-### Some medication payloads have no reviewed target
+### Some medication payloads have no reviewed structured target
 
 The selected simple medication branch does not establish ingredient name, code,
 active-ingredient indicator, or strength/denominator placement. The detail
-sibling is not selected by AKTIN. Reopen with an owner-selected ingredient
-profile or a separately approved downstream profile whose strength and
-occurrence semantics are complete.
+sibling is not selected by AKTIN. The reviewed reference mapping now preserves
+ingredient name, code, active-ingredient wording, and verbatim strength in the
+occurrence-local medication narrative. This does not assert structured
+ingredient semantics. Reopen the structured mapping with an owner-selected
+ingredient profile or a separately approved downstream profile whose code
+system, strength, and occurrence semantics are complete.
 
 Product name is resolved through the selected simple branch's coded product
 representation and the existing medication narrative; it is deliberately not
 mapped to the writable name exposed only by open-template CDA/RIM expansion.
-Additional dosage instructions and intake instructions still have no accepted
-structured or narrative placement. These fields need direct owner evidence or
-a separately reviewed target/narrative contract; label similarity and the
-availability of a text leaf are insufficient.
+Additional dosage instructions and intake instructions are likewise preserved
+as separately labelled medication-narrative contributions. A structured
+instruction representation remains open and needs direct owner evidence or a
+separately reviewed instruction profile; the reviewed narrative contract does
+not make a code-system or structured-target claim.
 
-### Imaging region remains under-specified
+### Structured imaging region remains under-specified
 
 The active MRI statement contains no region-bearing particle. X-ray region has
 only a partial set of LOINC-shaped option associations and lacks a complete
 code-system-qualified crosswalk plus repeat, coalescing, and conflict policy.
-Reopen with an active region target and formal binding, or a complete reviewed
-mapping contract.
+The reviewed reference mapping now preserves MRI and each X-ray region as
+labelled Diagnostics-section narrative wording, without claiming structured
+semantics. Reopen the structured mapping only with an active region target and
+formal binding, or a complete reviewed structured mapping contract.
 
 ### EDIS containment remains a local profile overlay
 

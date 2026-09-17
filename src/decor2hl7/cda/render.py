@@ -29,6 +29,7 @@ from ..cooccurrence import (
 )
 from .semantics import units_equivalent
 from .model import ValueRepresentationKind
+from .narrative import build_section_narratives
 from .terminology import (
     NULL_FLAVOR_CODE_SYSTEM,
     NULL_FLAVORS,
@@ -385,6 +386,115 @@ def _validate_compiled_value(
         )
 
 
+def _write_section_narrative(
+    element: ET.Element, value: Mapping[str, Any], target: Mapping[str, Any]
+) -> None:
+    """Write the portable section-narrative intermediate representation."""
+    paragraphs = [
+        item for item in value.get("paragraphs", [])
+        if isinstance(item, Mapping) and item.get("text") not in (None, "")
+    ]
+    facts = [
+        item for item in value.get("facts", [])
+        if isinstance(item, Mapping) and item.get("value") not in (None, "")
+    ]
+    repeated = [
+        item for item in value.get("repeated_facts", [])
+        if isinstance(item, Mapping) and item.get("value") not in (None, "")
+    ]
+    links = [
+        item for item in value.get("entry_links", [])
+        if isinstance(item, Mapping) and item.get("id")
+        and item.get("text") not in (None, "")
+    ]
+    structured = str(target.get("datatype") or "").upper() == "SD.TEXT"
+    if not structured:
+        parts = [str(item["text"]) for item in paragraphs]
+        parts.extend(f"{item.get('label')}: {item['value']}" for item in facts)
+        parts.extend(
+            f"{'.'.join(str(int(index) + 1) for index in item.get('occurrence', []))} "
+            f"{item.get('label')}: {item['value']}"
+            for item in repeated
+        )
+        parts.extend(str(item["text"]) for item in links)
+        element.text = "; ".join(part for part in parts if part) or None
+        return
+
+    for item in paragraphs:
+        paragraph = ET.SubElement(element, f"{{{HL7}}}paragraph")
+        paragraph.text = str(item["text"])
+
+    consumed_links: set[int] = set()
+
+    def value_cell(
+        row: ET.Element, item: Mapping[str, Any], occurrence: tuple[int, ...]
+    ) -> None:
+        cell = ET.SubElement(row, f"{{{HL7}}}td")
+        link_index = next((
+            index for index, link in enumerate(links)
+            if index not in consumed_links
+            and tuple(link.get("occurrence", [])) == occurrence
+        ), None)
+        if link_index is None:
+            cell.text = str(item["value"])
+            return
+        consumed_links.add(link_index)
+        content = ET.SubElement(cell, f"{{{HL7}}}content")
+        content.set("ID", str(links[link_index]["id"]))
+        content.text = str(item["value"])
+
+    if facts:
+        table = ET.SubElement(element, f"{{{HL7}}}table")
+        head = ET.SubElement(table, f"{{{HL7}}}thead")
+        row = ET.SubElement(head, f"{{{HL7}}}tr")
+        for heading in ("Merkmal", "Wert"):
+            cell = ET.SubElement(row, f"{{{HL7}}}th")
+            cell.text = heading
+        body = ET.SubElement(table, f"{{{HL7}}}tbody")
+        for item in facts:
+            row = ET.SubElement(body, f"{{{HL7}}}tr")
+            label = ET.SubElement(row, f"{{{HL7}}}td")
+            label.text = str(item.get("label") or "Merkmal")
+            value_cell(row, item, ())
+
+    repeated_groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
+    for item in repeated:
+        repeated_groups.setdefault(
+            tuple(str(part) for part in item.get("repeat_chain", [])), []
+        ).append(item)
+    for repeated_rows in repeated_groups.values():
+        table = ET.SubElement(element, f"{{{HL7}}}table")
+        head = ET.SubElement(table, f"{{{HL7}}}thead")
+        row = ET.SubElement(head, f"{{{HL7}}}tr")
+        for heading in ("Vorkommen", "Merkmal", "Wert"):
+            cell = ET.SubElement(row, f"{{{HL7}}}th")
+            cell.text = heading
+        body = ET.SubElement(table, f"{{{HL7}}}tbody")
+        ordered_rows = sorted(
+            enumerate(repeated_rows),
+            key=lambda pair: (tuple(pair[1].get("occurrence", [])), pair[0]),
+        )
+        for _index, item in ordered_rows:
+            occurrence = tuple(int(index) for index in item.get("occurrence", []))
+            row = ET.SubElement(body, f"{{{HL7}}}tr")
+            ordinal = ET.SubElement(row, f"{{{HL7}}}td")
+            ordinal.text = ".".join(str(index + 1) for index in occurrence) or "1"
+            label = ET.SubElement(row, f"{{{HL7}}}td")
+            label.text = str(item.get("label") or "Merkmal")
+            value_cell(row, item, occurrence)
+
+    remaining = [
+        item for index, item in enumerate(links) if index not in consumed_links
+    ]
+    if remaining:
+        listing = ET.SubElement(element, f"{{{HL7}}}list")
+        for item in remaining:
+            list_item = ET.SubElement(listing, f"{{{HL7}}}item")
+            content = ET.SubElement(list_item, f"{{{HL7}}}content")
+            content.set("ID", str(item["id"]))
+            content.text = str(item["text"])
+
+
 def _write_value(
     element: ET.Element,
     value: Any,
@@ -415,20 +525,7 @@ def _write_value(
     ):
         value = {"nullFlavor": str(value["code"])}
     if isinstance(value, Mapping) and value.get("__section_narrative__"):
-        base = str(value.get("text") or "")
-        items = [
-            item for item in value.get("items", [])
-            if isinstance(item, Mapping)
-            and item.get("id")
-            and item.get("text") not in (None, "")
-        ]
-        element.text = base + ("; " if base and items else "") or None
-        for index, narrative_item in enumerate(items):
-            content = ET.SubElement(element, f"{{{HL7}}}content")
-            content.set("ID", str(narrative_item["id"]))
-            content.text = str(narrative_item["text"])
-            if index + 1 < len(items):
-                content.tail = "; "
+        _write_section_narrative(element, value, target)
         return
     if isinstance(value, Mapping) and value.get("nullFlavor"):
         element.set("nullFlavor", str(value["nullFlavor"]))
@@ -548,15 +645,6 @@ def _activate_fallback_elements(
                 active.add(location)
 
 
-def _node_target_names(node: Mapping[str, Any]) -> set[str]:
-    names = {str(name) for name in node.get("targets", [])}
-    for attr in node.get("attributes", []):
-        names.update(str(name) for name in attr.get("targets", []))
-    for child in node.get("children", []):
-        names.update(_node_target_names(child))
-    return names
-
-
 def _narrative_scalars(value: Any) -> list[str]:
     if isinstance(value, list):
         return [item for nested in value for item in _narrative_scalars(nested)]
@@ -579,51 +667,19 @@ def _complete_content_roles(
     targets: Mapping[str, Mapping[str, Any]],
     assignments: dict[str, Any],
     explicit_names: set[str],
+    record: Mapping[str, Any],
+    model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    mapping: Mapping[str, Any],
+    site: Mapping[str, Any],
 ) -> None:
-    """Complete compiled section roles for explicitly active sections."""
-    def assign_role(section: Mapping[str, Any], role: str, value: str) -> None:
-        def walk(nodes: list[Mapping[str, Any]]) -> None:
-            for node in nodes:
-                if node.get("content_role") == role:
-                    for raw_name in node.get("targets", []):
-                        name = str(raw_name)
-                        target = targets.get(name, {})
-                        if target.get("writable") and len(target.get("locations", [])) == 1:
-                            fixed_text = target.get("fixed_text")
-                            assignments.setdefault(
-                                name,
-                                value if fixed_text is None else str(fixed_text),
-                            )
-                            return
-                walk(list(node.get("children", [])))
-        walk(list(section.get("children", [])))
-
-    def visit(nodes: list[Mapping[str, Any]]) -> None:
-        for node in nodes:
-            local_name = str(node.get("name") or "").split(":", 1)[-1].split("[", 1)[0]
-            if node.get("kind") == "element" and local_name == "section":
-                names = _node_target_names(node)
-                assigned_names = sorted(names & explicit_names)
-                if assigned_names:
-                    label = next(
-                        (
-                            str(targets[name].get("template_display_name")
-                                or targets[name].get("template_name") or "Section")
-                            for name in node.get("targets", [])
-                            if name in targets
-                        ),
-                        "Section",
-                    )
-                    values: list[str] = []
-                    for name in assigned_names:
-                        if targets.get(name, {}).get("narrative_link"):
-                            continue
-                        values.extend(_narrative_scalars(assignments.get(name)))
-                    narrative = "; ".join(dict.fromkeys(item for item in values if item))
-                    assign_role(node, "section_title", label)
-                    assign_role(node, "section_narrative", narrative or label)
-            visit(list(node.get("children", [])))
-    visit(document)
+    """Complete section roles with checked, mapping-aware presentation."""
+    del document, targets
+    titles, narratives = build_section_narratives(
+        record, model, cda, mapping, assignments, explicit_names, site
+    )
+    assignments.update(titles)
+    assignments.update(narratives)
 
 
 def _narrative_occurrences(
@@ -682,7 +738,7 @@ def _occurrence_assignment(
 
 def _merge_section_fragments(
     current: Any,
-    fragments: Mapping[tuple[int, ...], list[dict[str, str]]],
+    fragments: Mapping[tuple[int, ...], list[dict[str, Any]]],
     depth: int,
 ) -> Any:
     """Merge generated ``content`` nodes into a section-shaped assignment."""
@@ -694,15 +750,17 @@ def _merge_section_fragments(
             if isinstance(value, Mapping) and value.get("__section_narrative__"):
                 return {
                     **dict(value),
-                    "items": list(value.get("items", [])) + additions,
+                    "entry_links": list(value.get("entry_links", [])) + additions,
                 }
             text = "; ".join(
                 dict.fromkeys(item for item in _narrative_scalars(value) if item)
             )
             return {
                 "__section_narrative__": True,
-                "text": text,
-                "items": additions,
+                "paragraphs": ([{"text": text}] if text else []),
+                "facts": [],
+                "repeated_facts": [],
+                "entry_links": additions,
             }
 
         matching = {
@@ -740,7 +798,7 @@ def _complete_linked_narratives(
 ) -> None:
     """Generate occurrence-local entry references and section narrative IDs."""
     section_fragments: dict[
-        str, dict[tuple[int, ...], list[dict[str, str]]]
+        str, dict[tuple[int, ...], list[dict[str, Any]]]
     ] = {}
     section_depths: dict[str, int] = {}
 
@@ -807,6 +865,7 @@ def _complete_linked_narratives(
             grouped.setdefault(occurrence[:section_depth], []).append({
                 "id": fragment_id,
                 "text": text,
+                "occurrence": list(occurrence[section_depth:]),
             })
         assignments[reference_name] = _occurrence_assignment(
             reference_values, occurrence_depth
@@ -1630,7 +1689,8 @@ def emit(
     collect_physical_values(list(document))
     _complete_value_companions(list(document), targets, assignments)
     _complete_content_roles(
-        list(document), targets, assignments, explicit_assignment_names
+        list(document), targets, assignments, explicit_assignment_names,
+        record, model, cda, mapping, site,
     )
     _complete_linked_narratives(
         targets, assignments, explicit_assignment_names,

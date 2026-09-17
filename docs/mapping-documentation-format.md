@@ -1,16 +1,19 @@
 # Generated CDA mapping documentation
 
-This specification defines the four generated, human-facing CDA mapping
-reports. They apply to dataset-to-CDA mapping and are for reviewers who
-understand either the dataset or the CDA template but should not need to
-understand compiler internals.
+This specification defines the four generated, human-facing reports in a
+reviewed CDA mapping bundle. `build` additionally writes
+`cda-mapping.proposed.md`, which uses the unresolved-work format against the
+generated proposal and must not be confused with the reviewed bundle's
+`cda-mapping.md`. The reports are for reviewers who understand either the
+dataset or the CDA template but should not need to understand compiler internals.
 
 ## Source of truth and report purpose
 
 `cda-mapping.json` is the editable source of truth. `cda-mapping.md`,
 `cda-mapping-details.md`, `cda-mapping-trees.md`,
 `cda-mapping-trees-extended.md` and all XML-like fragments are generated
-explanations and may be replaced by the next build.
+explanations and may be replaced by `init-cda-mapping`. Build-side proposal
+reports may be replaced by the next build.
 
 The guide must say explicitly:
 
@@ -51,8 +54,10 @@ Together the reports should answer:
 Generate four reports with distinct roles:
 
 1. `cda-mapping.md`: document identity and coverage headline, the dataset tree
-   pruned to unresolved datapoints, the CDA tree pruned to evidence candidates
-   and possible targets, then one decision card per unresolved datapoint;
+   pruned to undecided datapoints, the CDA tree pruned to evidence candidates
+   and possible targets, then one decision card per undecided datapoint;
+   reviewed structured mappings, narrative-only decisions, and intentional
+   nulls are resolved and therefore omitted from this work queue;
 2. `cda-mapping-details.md`: the established section/entity presentation for
    every accepted mapping, selected configuration examples, contextual CDA
    previews, structural/default rules, then full scores, evidence chains and
@@ -74,7 +79,8 @@ Model: 120 datapoints · ✓ mapped 74 dp → 76 leaves · ! suggested 4 dp → 
 
 The categories mean:
 
-- **Mapped** — the datapoint has a selected executable mapping;
+- **Mapped** — the datapoint has a selected executable structured mapping or a
+  checked reviewed narrative-only rule;
 - **Suggested** — one or more unique, writable, non-prohibited CDA leaves are
   actionable candidates, or are runtime-compatible exact-name descendants in
   the mapped context without a formal bridge, but no executable mapping is
@@ -214,15 +220,27 @@ Use execution-oriented status labels:
   controls assignment;
 - **Presence rule** — a boolean activates an optional statement whose payload
   is fixed by the target template; false omits the statement;
+- **Narrative rule** — a checked `narratives[target].blocks` entry presents
+  reviewed source wording in that exact section text while the structured
+  `fields[path]` selection remains `null`;
 - **Rule** — another executable multi-target or fallback rule;
 - **Review required** — no executable mapping has been approved.
 
 An explicit `field_reviews[path]` entry with
 `status: intentionally_unmapped` changes the wording to **Intentionally
-unmapped** and prints its reason and decision reference. It does not turn the
-field into a mapping and does not hide candidate evidence. Coverage headlines
-count these separately as `= reviewed null`, so they are not simultaneously
-reported as unresolved suggestions or unreviewed no-target gaps.
+unmapped** in the details and exhaustive trees and prints its reason and
+decision reference there. It does not turn the field into a mapping. The main
+`cda-mapping.md` work queue omits it because the non-transmission decision is
+resolved. Coverage headlines count these separately as `= reviewed null`, so
+they are not simultaneously reported as unresolved suggestions or unreviewed
+no-target gaps.
+
+A narrative-only source counts as mapped to its selected section-narrative
+leaf and is omitted from review-required cards. The details report must show
+its `fact` or `for_each` behavior, label, reason, and decision reference. It
+must state that this preserves wording only and does not assert a structured
+CDA value. A repeated rule preserves and displays each source occurrence; it
+must not collapse equal wordings or imply a join with structured entries.
 
 Review-required candidates must distinguish an ordinary unselected leaf from a
 compound-datatype component whose normative companion is absent. For the latter,
@@ -590,7 +608,14 @@ Kinds are stable machine keys: `closure`, `containment`, `no_writable_leaf`,
 `ambiguous_target`, `datatype_component`, `structural_container`, `lossy_domain`, `no_association`,
 `shared_target`, `missing_companion`, and `no_candidate`. `reopens_with` contains
 only the smallest concrete request keys, targets/components, or competing field
-paths needed to reconsider the result.
+paths needed to reconsider the result. `association:<source-path>` is the stable
+request key when physical/type-compatible targets exist but no source-to-CDA
+association proves one of them. Human-readable reports render that key as
+`upstream association or reviewed semantic bridge`; they must not echo the
+current source path as if mentioning it supplied new evidence. In that case the
+gap trace also says that compatible writable targets are unproven inventory,
+not semantic evidence, and does not repeat the already reported structural
+context.
 
 Describe rules through observable behavior:
 

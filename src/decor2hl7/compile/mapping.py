@@ -57,6 +57,23 @@ _CDA_CANDIDATE_INFRASTRUCTURE = {
     "@contextControlCode",
 }
 _CDA_TARGET_CANDIDATE_POLICY = "cda-target-candidates-v2"
+_ASSOCIATION_REQUEST_PREFIX = "association:"
+
+
+def _association_request(path: str) -> str:
+    """Return the stable reopening key for missing source-to-CDA evidence."""
+    return f"{_ASSOCIATION_REQUEST_PREFIX}{path}"
+
+
+def gap_reopening_evidence_label(value: Any) -> str:
+    """Render a reopening key without repeating the current source path."""
+    text = str(value)
+    if (
+        text.startswith(_ASSOCIATION_REQUEST_PREFIX)
+        and text[len(_ASSOCIATION_REQUEST_PREFIX):]
+    ):
+        return "upstream association or reviewed semantic bridge"
+    return text
 
 
 def _norm(value: str) -> str:
@@ -1297,7 +1314,7 @@ def _gap_classification(
         if possible_items:
             return {
                 "gate": "semantic", "kind": "no_association",
-                "reopens_with": [path],
+                "reopens_with": [_association_request(path)],
             }
         return {
             "gate": "physical", "kind": "no_writable_leaf",
@@ -1312,7 +1329,7 @@ def _gap_classification(
         if reason == "structural_container_available" and possible_items:
             return {
                 "gate": "semantic", "kind": "no_association",
-                "reopens_with": [path],
+                "reopens_with": [_association_request(path)],
             }
         components: list[str] = []
         if cda is not None and isinstance(context_node, Mapping):
@@ -3288,7 +3305,7 @@ def _cda_mapping_analysis(
             detail.pop("gap", None)
 
     proposal: dict[str, Any] = {
-        "version": 9,
+        "version": 10,
         "model": {
             "dataset_id": model.get("meta", {}).get("dataset_id"),
             "transaction_id": model.get("meta", {}).get("transaction_id"),
@@ -3300,6 +3317,7 @@ def _cda_mapping_analysis(
         },
         "fields": fields,
         "field_reviews": {},
+        "narratives": {},
         "structures": structures,
         "defaults": {
             "required_unmapped": {"nullFlavor": "NI"},
@@ -3511,9 +3529,14 @@ def _cda_mapping_analysis(
         out += ["**Reason:**", "", reason_for(path, detail), ""]
         gap = detail.get("gap")
         if isinstance(gap, Mapping):
-            reopening = ", ".join(
-                f"`{item}`" for item in gap.get("reopens_with", [])
-            ) or "none currently recorded"
+            reopening_items = []
+            for item in gap.get("reopens_with", []):
+                label = gap_reopening_evidence_label(item)
+                reopening_items.append(
+                    label if label != str(item) else f"`{item}`"
+                )
+            reopening = ", ".join(dict.fromkeys(reopening_items)) \
+                or "none currently recorded"
             out += [
                 f"**Gap:** `{gap.get('gate')}:{gap.get('kind')}` — "
                 f"reopens with: {reopening}",
@@ -3640,7 +3663,9 @@ def _cda_mapping_analysis(
         "# CDA Mapping Details",
         "",
         "This is the evidence appendix for `cda-mapping.json`. Edit the JSON mapping,",
-        "not this generated report; the concise review workflow is in `cda-mapping.md`.",
+        "not this generated report. Review the generated proposal in "
+        "`cda-mapping.proposed.md` or the initialized reviewed bundle in "
+        "`cda-mapping.md`.",
         "",
         f"Target CDA template: `{cda.get('document_template', {}).get('id')}` @ "
         f"`{cda.get('document_template', {}).get('effective_date')}`",
@@ -4117,6 +4142,10 @@ def mapping_target_identities(
     for selection in mapping.get("fields", {}).values():
         for rule in mapping_rules(selection):
             remember(rule.get("target"), rule.get("cda_target"))
+    narratives = mapping.get("narratives", {})
+    if isinstance(narratives, Mapping):
+        for name in narratives:
+            remember(name)
     structures = mapping.get("structures", {})
     structure_items = (
         structures.values() if isinstance(structures, Mapping) else structures
@@ -4224,6 +4253,14 @@ def migrate_mapping_target_identities(
         for path, selection in list(fields.items()):
             fields[path] = migrate_selection(selection)
 
+    narratives = current.get("narratives", {})
+    if isinstance(narratives, dict):
+        for old_name in list(narratives):
+            new_name, _physical = migrate_reference(old_name)
+            if new_name != old_name:
+                narratives[new_name] = narratives.pop(old_name)
+                changed += 1
+
     structures = current.get("structures", {})
     structure_items = (
         structures.values() if isinstance(structures, Mapping) else structures
@@ -4280,7 +4317,8 @@ def migrate_mapping_target_identities(
             # losing the evidence would make a later unique migration harder.
             refreshed[str(name)] = dict(identity)
     current["target_identities"] = dict(sorted(refreshed.items()))
-    current["version"] = max(int(current.get("version") or 0), 9)
+    current.setdefault("narratives", {})
+    current["version"] = max(int(current.get("version") or 0), 10)
     return changed
 
 
@@ -4322,7 +4360,12 @@ def write_cda_mapping(
     cda_report = render_cda_mapping_markdown(
         model, enriched_cda, cda_proposal, audit
     )
-    (model_dir / "cda-mapping.md").write_text(cda_report, encoding="utf-8")
+    (model_dir / "cda-mapping.proposed.md").write_text(
+        cda_report, encoding="utf-8"
+    )
+    legacy_guide = model_dir / "cda-mapping.md"
+    if legacy_guide.is_file():
+        legacy_guide.unlink()
     tree_report = render_cda_mapping_trees_markdown(
         model, enriched_cda, cda_proposal, audit
     )

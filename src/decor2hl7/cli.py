@@ -606,7 +606,7 @@ def _mapping_decisions_differ(
         current.get(key, {}) != proposed.get(key, {})
         for key in (
             "fields", "structures", "defaults", "target_defaults",
-            "site_requirements", "field_reviews",
+            "site_requirements", "field_reviews", "narratives",
         )
     )
 
@@ -622,12 +622,20 @@ def _write_mapping_guides(
 ) -> None:
     """Write guides for the actual reviewed mapping, retaining proposal evidence."""
     if not _mapping_decisions_differ(mapping, proposal):
-        for guide_name in (
-            "cda-mapping.md", "cda-mapping-details.md",
-            "cda-mapping-trees.md", "cda-mapping-trees-extended.md",
-        ):
+        guide_sources = {
+            "cda-mapping.md": "cda-mapping.proposed.md",
+            "cda-mapping-details.md": "cda-mapping-details.md",
+            "cda-mapping-trees.md": "cda-mapping-trees.md",
+            "cda-mapping-trees-extended.md": "cda-mapping-trees-extended.md",
+        }
+        for guide_name, source_name in guide_sources.items():
+            source = model_dir / source_name
+            if guide_name == "cda-mapping.md" and not source.exists():
+                # Older generated workspaces used the reviewed-bundle filename
+                # for the proposal guide. Allow one refresh before the next build.
+                source = model_dir / "cda-mapping.md"
             _copy_generated_guide(
-                model_dir / guide_name, destination.parent / guide_name
+                source, destination.parent / guide_name
             )
         return
 
@@ -895,6 +903,7 @@ def _runtime_files(
 def cmd_check(args: argparse.Namespace) -> int:
     from . import validate
     from .bindings import required_unmapped_null_flavor
+    from .cda.narrative import narrative_blocks
     from .retrieval.fetch import verify_manifest
 
     root = _root(args)
@@ -915,6 +924,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     print(f"model datapoints: {len(model.get('fields', {}))}")
     print(f"CSV mapped: {sum(value is not None for value in csv_mapping.get('fields', {}).values())}")
     print(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
+    print(f"CDA narrative-only mapped: {len(narrative_blocks(cda_mapping))}")
     print(f"CDA target defaults: {len(cda_mapping.get('target_defaults', {}))}")
     try:
         completion_flavor = required_unmapped_null_flavor(cda_mapping)
@@ -940,6 +950,7 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
     from . import validate
     from .bindings import required_unmapped_null_flavor
     from .compile.site import code_mapping_defaults
+    from .cda.narrative import narrative_blocks
     from .testing import synthetic_site
 
     root = _root(args)
@@ -979,6 +990,7 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
     else:
         errors.append("mapping-lock.json is missing beside cda-mapping.json")
     print(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
+    print(f"CDA narrative-only mapped: {len(narrative_blocks(cda_mapping))}")
     print(f"CDA target defaults: {len(cda_mapping.get('target_defaults', {}))}")
     site_requirements = cda_mapping.get("site_requirements", {})
     site_requirements = (

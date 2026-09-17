@@ -370,7 +370,9 @@ class CliTests(unittest.TestCase):
             write_json(model / "cda.json", {"document": [], "targets": {}})
             write_json(model / "mapping-audit.json", {"fields": {}})
             (model / "cda-mapping.proposed.json").write_text('{"fields":{"a":"Doc.value"}}')
-            (model / "cda-mapping.md").write_text("# CDA guide", encoding="utf-8")
+            (model / "cda-mapping.proposed.md").write_text(
+                "# CDA guide", encoding="utf-8"
+            )
             (model / "cda-mapping-details.md").write_text("# CDA details", encoding="utf-8")
             (model / "cda-mapping-trees.md").write_text("# CDA trees", encoding="utf-8")
             (model / "cda-mapping-trees-extended.md").write_text(
@@ -422,7 +424,7 @@ class CliTests(unittest.TestCase):
             proposal = {"version": 7, "fields": {"a": None}}
             write_json(model_dir / "cda-mapping.proposed.json", proposal)
             for guide in (
-                "cda-mapping.md", "cda-mapping-details.md",
+                "cda-mapping.proposed.md", "cda-mapping-details.md",
                 "cda-mapping-trees.md", "cda-mapping-trees-extended.md",
             ):
                 (model_dir / guide).write_text("# guide", encoding="utf-8")
@@ -488,7 +490,9 @@ class CliTests(unittest.TestCase):
             write_json(model_dir / "model.json", model)
             write_json(model_dir / "cda.json", cda)
             write_json(model_dir / "cda-mapping.proposed.json", mapping)
-            (model_dir / "cda-mapping.md").write_text("# CDA guide", encoding="utf-8")
+            (model_dir / "cda-mapping.proposed.md").write_text(
+                "# CDA guide", encoding="utf-8"
+            )
             (model_dir / "cda-mapping-details.md").write_text("# CDA details", encoding="utf-8")
             (model_dir / "cda-mapping-trees.md").write_text("# CDA trees", encoding="utf-8")
             (model_dir / "cda-mapping-trees-extended.md").write_text(
@@ -615,7 +619,7 @@ class CliTests(unittest.TestCase):
             write_json(model_dir / "mapping-audit.json", {"fields": {}})
             write_json(model_dir / "cda-mapping.proposed.json", mapping)
             for guide in (
-                "cda-mapping.md", "cda-mapping-details.md",
+                "cda-mapping.proposed.md", "cda-mapping-details.md",
                 "cda-mapping-trees.md", "cda-mapping-trees-extended.md",
             ):
                 (model_dir / guide).write_text("# guide", encoding="utf-8")
