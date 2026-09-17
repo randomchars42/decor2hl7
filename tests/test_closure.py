@@ -18,7 +18,7 @@ from decor2hl7.transforms import cda_target_name, mapping_rules
 
 REFERENCE_RELEASE = "2026.1.2"
 REFERENCE_TRANSACTION = "notaufnahmeregister--60"
-# The reviewed terminology residue. The AKTIN referral-actions value set cannot
+# The reviewed terminology residue. The reference referral-actions value set cannot
 # be expanded while its intension code system stays waived (`DEC-004`,
 # `DEC-012`). Missing SPEC editor prototypes are reported separately and do not
 # degrade executable closure (`DEC-037`).

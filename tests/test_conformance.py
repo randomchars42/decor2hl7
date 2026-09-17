@@ -226,8 +226,8 @@ class ConformanceTests(unittest.TestCase):
                 (right, "machine-b/elsewhere", "20261004T091011"),
             ):
                 (directory / "rule.sch").write_text(
-                    '<assert see="http://aktin.art-decor.pub/file:///'
-                    f'{machine}/generated/aktin-html-{stamp}/{filename}" '
+                    '<assert see="https://source.example.invalid/file:///'
+                    f'{machine}/generated/main-html-{stamp}/{filename}" '
                     'test="true()"/>'
                     '<assert see="https://docs.art-decor.org/stable" '
                     'test="true()"/>',

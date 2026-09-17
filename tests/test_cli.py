@@ -18,11 +18,11 @@ from decor2hl7.workspace import (
     transaction_model_dir, transaction_site_dir, transaction_test_dir, write_json,
 )
 
-RELEASES = [{"key": "2026.1.2", "label": "2026.1.2", "date": "2026-04-27T18:50:33", "status": "final"}]
+RELEASES = [{"key": "release-v1", "label": "release-v1", "date": "2024-01-02T03:04:05", "status": "final"}]
 TRANSACTIONS = [{
-    "key": "notaufnahmeregister--60", "id": "2.16.840.1.113883.2.6.60.3.4.60",
-    "effective_date": "2026-03-25T00:00:00", "version_label": "2026",
-    "status": "active", "name": "Notaufnahmeregister Transitionsversion",
+    "key": "example--1", "id": "1.2.3.4.1",
+    "effective_date": "2024-01-01T00:00:00", "version_label": "v1",
+    "status": "active", "name": "Example transaction",
 }]
 
 
@@ -204,16 +204,16 @@ class CliTests(unittest.TestCase):
             root = Path(tmp)
             self.assertEqual(main(["--root", str(root), "init"]), 0)
             with patch("decor2hl7.retrieval.catalog.releases", return_value=RELEASES):
-                self.assertEqual(main(["--root", str(root), "set-version", "2026.1.2"]), 0)
+                self.assertEqual(main(["--root", str(root), "set-version", "release-v1"]), 0)
             settings = load_json(root / "decor2hl7.json")
-            self.assertEqual(settings["release"]["key"], "2026.1.2")
+            self.assertEqual(settings["release"]["key"], "release-v1")
             self.assertIsNone(settings["transaction"])
             with patch("decor2hl7.retrieval.catalog.transactions", return_value=TRANSACTIONS):
-                self.assertEqual(main(["--root", str(root), "set-transaction", "notaufnahmeregister--60"]), 0)
+                self.assertEqual(main(["--root", str(root), "set-transaction", "example--1"]), 0)
             settings = load_json(root / "decor2hl7.json")
-            self.assertEqual(settings["transaction"]["key"], "notaufnahmeregister--60")
+            self.assertEqual(settings["transaction"]["key"], "example--1")
             # Set commands still have no artifact-directory side effects.
-            self.assertFalse((root / "spec" / "2026.1.2").exists())
+            self.assertFalse((root / "spec" / "release-v1").exists())
 
 
     def test_selection_lists_put_key_first_and_use_verb_commands(self) -> None:
@@ -225,16 +225,16 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["--root", str(root), "list-versions"]), 0)
             lines = out.getvalue().splitlines()
             self.assertTrue(lines[0].startswith("KEY"))
-            self.assertTrue(lines[1].startswith("2026.1.2"))
+            self.assertTrue(lines[1].startswith("release-v1"))
 
             with patch("decor2hl7.retrieval.catalog.releases", return_value=RELEASES):
-                self.assertEqual(main(["--root", str(root), "set-version", "2026.1.2"]), 0)
+                self.assertEqual(main(["--root", str(root), "set-version", "release-v1"]), 0)
             out = StringIO()
             with patch("decor2hl7.retrieval.catalog.transactions", return_value=TRANSACTIONS), redirect_stdout(out):
                 self.assertEqual(main(["--root", str(root), "list-transactions"]), 0)
             lines = out.getvalue().splitlines()
             self.assertTrue(lines[0].startswith("KEY"))
-            self.assertTrue(lines[1].startswith("notaufnahmeregister--60"))
+            self.assertTrue(lines[1].startswith("example--1"))
 
     def test_keyboard_interrupt_exits_130_without_traceback(self) -> None:
         err = StringIO()
@@ -321,7 +321,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code_proposal["fields"]["aufnahme.triage"]["O"], "orange")
             self.assertFalse((model_dir / "cda-mapping.proposed.json").exists())
             self.assertEqual(main(["--root", str(root), "init-site-config"]), 0)
-            site = load_json(root / "site" / "2026.1.2" / "site.json")
+            site = load_json(root / "site" / "release-v1" / "site.json")
             self.assertEqual(site["input"]["case_source"], "cases")
             self.assertEqual(site["input"]["sources"]["cases"]["file"], "cases.csv")
             self.assertEqual(site["transport"]["adapter"], "http-post")
@@ -391,7 +391,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
             self.assertEqual(main(["--root", str(root), "init-site-config"]), 0)
             self.assertEqual(load_json(config), {"user": True})
-            self.assertTrue((root / "site" / "2026.1.2" / "site.json").exists())
+            self.assertTrue((root / "site" / "release-v1" / "site.json").exists())
             mapping_dir = transaction_mapping_dir(root)
             self.assertTrue((mapping_dir / "mapping-lock.json").exists())
             self.assertEqual((mapping_dir / "cda-mapping.md").read_text(), "# CDA guide")

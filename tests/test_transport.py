@@ -9,7 +9,8 @@ from decor2hl7 import transport
 
 
 class _Response:
-    status = 202
+    def __init__(self, status: int = 202) -> None:
+        self.status = status
 
     def __enter__(self) -> "_Response":
         return self
@@ -19,6 +20,9 @@ class _Response:
 
 
 class TransportTests(unittest.TestCase):
+    def test_adapter_names_expose_the_closed_built_in_set(self) -> None:
+        self.assertEqual(transport.adapter_names(), ("http-post",))
+
     def test_http_post_adapter_sends_one_xml_document(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             document = Path(tmp) / "document.xml"
@@ -57,6 +61,44 @@ class TransportTests(unittest.TestCase):
             ):
                 self.assertEqual(transport.send(document, site), (True, "HTTP 202"))
 
+    def test_http_post_reports_non_success_and_network_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            document = Path(tmp) / "document.xml"
+            document.write_bytes(b"<ClinicalDocument/>")
+            site = {"transport": {"url": "https://receiver.example/cda"}}
+
+            with patch(
+                "decor2hl7.transport.urllib.request.urlopen",
+                return_value=_Response(503),
+            ):
+                self.assertEqual(
+                    transport.send(document, site), (False, "HTTP 503")
+                )
+            with patch(
+                "decor2hl7.transport.urllib.request.urlopen",
+                side_effect=OSError("connection refused"),
+            ):
+                self.assertEqual(
+                    transport.send(document, site),
+                    (False, "connection refused"),
+                )
+
+    def test_http_post_defaults_are_normalized_before_dispatch(self) -> None:
+        adapter, config, error = transport._configured_adapter({
+            "transport": {
+                "url": "https://receiver.example/cda",
+                "headers": {"X-Retry": 2, "X-Enabled": True},
+            }
+        })
+        self.assertIsNotNone(adapter)
+        self.assertEqual(error, "")
+        self.assertEqual(config, {
+            "adapter": "http-post",
+            "url": "https://receiver.example/cda",
+            "timeout": 60,
+            "headers": {"X-Retry": "2", "X-Enabled": "True"},
+        })
+
     def test_unknown_adapter_is_rejected_before_io(self) -> None:
         missing = Path("does-not-exist.xml")
         with patch("decor2hl7.transport.urllib.request.urlopen") as urlopen:
@@ -83,10 +125,16 @@ class TransportTests(unittest.TestCase):
 
     def test_http_post_configuration_is_validated_before_io(self) -> None:
         cases = [
+            ({}, "transport.url is not configured"),
             ({"url": "file:///tmp/out"}, "absolute HTTP or HTTPS URL"),
             ({"url": "https://[invalid"}, "absolute HTTP or HTTPS URL"),
             ({"url": "https://receiver.example", "timeout": 0}, "positive integer"),
+            ({"url": "https://receiver.example", "timeout": True}, "positive integer"),
             ({"url": "https://receiver.example", "headers": []}, "must be an object"),
+            ({"url": "https://receiver.example", "headers": {"": "value"}}, "header names"),
+            ({"url": "https://receiver.example", "headers": {"X-Test\nInjected": "value"}}, "header names"),
+            ({"url": "https://receiver.example", "headers": {"X-Test": "value\r\nInjected"}}, "single-line value"),
+            ({"url": "https://receiver.example", "headers": {"X-Test": []}}, "scalar value"),
         ]
         for config, expected in cases:
             with self.subTest(config=config):
