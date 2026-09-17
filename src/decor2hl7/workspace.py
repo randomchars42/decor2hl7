@@ -19,7 +19,7 @@ import tempfile
 import re
 import unicodedata
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping, overload
 
 SETTINGS = "decor2hl7.json"
 # ``config`` is intentionally reserved for acquisition-wide configuration
@@ -61,7 +61,15 @@ def load_settings(root: Path) -> dict[str, Any]:
     return load_json(path)
 
 
-def init_workspace(root: Path, prefix: str = "aktin-", language: str = "de-DE") -> Path:
+def init_workspace(
+    root: Path,
+    prefix: str = "aktin-",
+    language: str = "de-DE",
+    output_language: str = "en",
+) -> Path:
+    from .i18n import normalize_output_language
+
+    output_language = normalize_output_language(output_language)
     root.mkdir(parents=True, exist_ok=True)
     for name in TOP_LEVEL:
         (root / name).mkdir(parents=True, exist_ok=True)
@@ -70,6 +78,10 @@ def init_workspace(root: Path, prefix: str = "aktin-", language: str = "de-DE") 
         current = load_json(path)
         current.setdefault("prefix", prefix)
         current.setdefault("language", language)
+        output = current.setdefault("output", {})
+        if not isinstance(output, dict):
+            raise ValueError("workspace output configuration must be an object")
+        output.setdefault("language", output_language)
         current.setdefault("network", {"ipv4": True})
         current.setdefault("api", {"base_url": "https://art-decor.org/exist/apps/api"})
         current.setdefault("release", None)
@@ -79,6 +91,7 @@ def init_workspace(root: Path, prefix: str = "aktin-", language: str = "de-DE") 
         current = {
             "prefix": prefix,
             "language": language,
+            "output": {"language": output_language},
             "network": {"ipv4": True},
             "api": {"base_url": "https://art-decor.org/exist/apps/api"},
             "release": None,
@@ -149,7 +162,30 @@ def transaction_key(name: str, oid: str) -> str:
     return f"{slug}--{digest}"
 
 
-def input_dir(root: Path, override: str | Path | None = None, *, required: bool = True) -> Path | None:
+@overload
+def input_dir(
+    root: Path,
+    override: str | Path | None = None,
+    *,
+    required: Literal[True] = True,
+) -> Path: ...
+
+
+@overload
+def input_dir(
+    root: Path,
+    override: str | Path | None = None,
+    *,
+    required: Literal[False],
+) -> Path | None: ...
+
+
+def input_dir(
+    root: Path,
+    override: str | Path | None = None,
+    *,
+    required: bool = True,
+) -> Path | None:
     """Resolve the external CSV input root.
 
     Command-line input wins over the optional deployment default in

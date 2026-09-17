@@ -957,9 +957,16 @@ def _permits_element_null_flavor(
     return False
 
 
-def _physical_target_name(
+def physical_target_name(
     cda: Mapping[str, Any], rule: Mapping[str, Any]
 ) -> str:
+    """Resolve one logical mapping target to its compiled physical CDA target.
+
+    A rule may repeat the physical target explicitly for portability, but that
+    declaration must agree with the compiled logical datapoint.  Keeping this
+    check at the shared mapping boundary ensures reports cannot describe a
+    rule that runtime construction would reject.
+    """
     logical = str(rule.get("target") or "")
     datapoint = cda.get("datapoints", {}).get(logical, {})
     modeled = str(datapoint.get("cda_target") or "") if isinstance(datapoint, Mapping) else ""
@@ -1570,7 +1577,7 @@ def build_assignments(
             if rule.get("structure"):
                 continue
             logical_name = str(rule["target"])
-            name = _physical_target_name(cda, rule)
+            name = physical_target_name(cda, rule)
             target = targets.get(name)
             presence = rule.get("mode") == "presence"
             valid_presence_target = bool(
@@ -1681,7 +1688,7 @@ def build_assignments(
             branches = [branch for branch in structure.get("branches", []) if isinstance(branch, Mapping)]
             if not branches:
                 continue
-            target_names = {_physical_target_name(cda, branch) for branch in branches}
+            target_names = {physical_target_name(cda, branch) for branch in branches}
             if len(target_names) != 1:
                 raise ValueError(
                     f"repeat_by_discriminator rule {rule_id!r} must use one shared CDA target"

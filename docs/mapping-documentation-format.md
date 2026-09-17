@@ -7,6 +7,14 @@ generated proposal and must not be confused with the reviewed bundle's
 `cda-mapping.md`. The reports are for reviewers who understand either the
 dataset or the CDA template but should not need to understand compiler internals.
 
+The report language is selected by `decor2hl7.json:output.language` or the
+global `--output-language` override. Localization changes only decor2hl7-owned
+prose. Stable technical terms such as `leaf`, `dataset`, `mapping`, `target`,
+and `template`, as well as owner and reviewer text, remain unchanged. Report
+language must not alter the JSON source of truth, coverage classification,
+target identity, or mapping lock. The complete policy is in
+[`topics/output-language.md`](topics/output-language.md).
+
 ## Source of truth and report purpose
 
 `cda-mapping.json` is the editable source of truth. `cda-mapping.md`,

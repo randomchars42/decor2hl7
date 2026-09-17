@@ -499,8 +499,8 @@ class CliTests(unittest.TestCase):
                 "# Extended CDA trees", encoding="utf-8"
             )
             self.assertEqual(main(["--root", str(root), "init-cda-mapping"]), 0)
-            with patch("decor2hl7.cli._compiler_inputs", return_value={"templates": []}), patch(
-                "decor2hl7.validate.verify_compiled_against_artdecor", return_value=[]
+            with patch(
+                "decor2hl7.cli._verify_compiled_sources", return_value=([], None)
             ):
                 self.assertEqual(main(["--root", str(root), "check-cda-mapping"]), 0)
             self.assertEqual(main(["--root", str(root), "setup-test"]), 0)
@@ -627,10 +627,7 @@ class CliTests(unittest.TestCase):
 
             output = StringIO()
             with redirect_stdout(output), patch(
-                "decor2hl7.cli._compiler_inputs", return_value={"templates": []}
-            ), patch(
-                "decor2hl7.validate.verify_compiled_against_artdecor",
-                return_value=[],
+                "decor2hl7.cli._verify_compiled_sources", return_value=([], None)
             ):
                 result = main(["--root", str(root), "check-cda-mapping"])
 

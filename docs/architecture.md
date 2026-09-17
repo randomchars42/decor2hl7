@@ -31,6 +31,10 @@ not a second copy of those semantic rules.
 src/decor2hl7/
 ├── cli.py                  command orchestration
 ├── workspace.py            selection and workspace paths
+├── i18n.py                 output locale, catalogs, and protected terminology
+├── text.py                 target-neutral matching normalization
+├── value_format.py         normalized quantity/range presentation structure
+├── xmlnames.py             namespace constants without source-parser coupling
 ├── retrieval/              ART-DECOR acquisition and closure
 │   ├── api.py              supported operations and URL construction
 │   ├── client.py           scoped HTTP behavior
@@ -60,6 +64,7 @@ src/decor2hl7/
 │   ├── terminology.py      target binding enforcement
 │   ├── semantics.py        CDA value compatibility
 │   ├── parity.py           published/compiled endpoint comparison
+│   ├── tree.py             shared compiled-tree indexing and locations
 │   ├── narrative.py        checked section-narrative rules and presentation IR
 │   └── render.py           representation-driven XML output
 ├── domain.py               target-neutral dataset value domains
@@ -176,6 +181,12 @@ Target-specific rules must not leak into site input configuration. Adding a
 future output target should introduce a target compiler, mapping specialization,
 renderer, and conformance gate without redesigning the normalized dataset
 pipeline.
+
+Output localization is a presentation boundary. The selected output language
+is threaded into Markdown renderers and CLI presentation; semantic JSON,
+mapping locks, runtime fingerprints, and CDA narrative language do not depend
+on it. Setup-time source verification and endpoint parity live under `cda/`
+rather than runtime-oriented `validate.py`.
 
 ## Intentional boundaries
 

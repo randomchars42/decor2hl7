@@ -21,6 +21,28 @@ from decor2hl7.compile.reports import (
 
 
 class MappingReportTests(unittest.TestCase):
+    def test_reports_reject_conflicting_logical_and_physical_targets(self) -> None:
+        model = {"fields": {"finding": {"name": "Finding"}}, "order": ["finding"]}
+        compiled = {
+            "document": [],
+            "document_template": {},
+            "datapoints": {
+                "Finding_right.value": {"cda_target": "Finding.value"},
+            },
+            "targets": {
+                "Finding.value": {"locations": ["0"], "writable": True},
+            },
+        }
+        mapping = {"fields": {"finding": {
+            "target": "Finding_right.value",
+            "cda_target": "Other.value",
+        }}}
+
+        with self.assertRaisesRegex(
+            ValueError, "resolves to 'Finding.value'.*specifies 'Other.value'",
+        ):
+            render_accepted_cda_mappings_markdown(model, compiled, mapping)
+
     def test_mapping_notes_only_report_configured_rules_in_selected_use(self) -> None:
         proposal = {"fields": {
             "field": "Attached.value",

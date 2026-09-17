@@ -50,6 +50,9 @@ products but does not revise either one.
   clinical decision.
 - Use generated models and reports for the exact selected identity; do not copy
   conclusions from another workspace.
+- Choose the CLI and generated-report language with `output.language`; this is
+  separate from ART-DECOR retrieval language and CDA document language. See
+  [Output language and technical terminology](../topics/output-language.md).
 
 References to organizations, profiles, or upstream projects identify artifact
 provenance only. They do not imply endorsement of decor2hl7 by those parties.

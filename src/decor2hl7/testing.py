@@ -20,6 +20,7 @@ from typing import Any, Iterable, Mapping
 from .compile.site import code_mapping_defaults
 from .data import field_value, ingest
 from .domain import accepted_values
+from .i18n import localize_markdown
 from .cda.model import ValueRepresentationKind
 from .cda.narrative import narrative_blocks, narrative_source_rules
 from .workspace import load_json, write_json
@@ -885,6 +886,8 @@ def run_fixture(
     model: Mapping[str, Any],
     cda: Mapping[str, Any],
     cda_mapping: Mapping[str, Any],
+    *,
+    output_language: str = "en",
 ) -> tuple[dict[str, Any], int]:
     """Run an isolated fixture and write machine- and human-readable results."""
     from .cda.render import emit
@@ -1047,5 +1050,13 @@ def run_fixture(
         "binding, and CDA rendering code.",
         "It does not write production state and never invokes transport.", "",
     ])
-    (out_dir / "results.md").write_text("\n".join(lines), encoding="utf-8")
+    (out_dir / "results.md").write_text(
+        localize_markdown(
+            "\n".join(lines), output_language,
+            protected_values=(
+                model, cda, cda_mapping, expected, result, errors, test_warnings,
+            ),
+        ),
+        encoding="utf-8",
+    )
     return result, 0 if result["status"] == "PASS" else 1

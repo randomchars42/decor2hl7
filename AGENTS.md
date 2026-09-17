@@ -108,3 +108,9 @@ For a semantic or architectural change, update in the same pull request:
 Use [`.github/pull_request_template.md`](.github/pull_request_template.md) as
 the completion checklist. Record verification commands and do not leave policy
 only in chat or an unmerged branch.
+
+`make check-unit` is the repository-contained developer suite.
+`make check-reference` requires the exact sibling companion workspace and fails
+closed when it is absent or identity-mismatched; it also runs the end-to-end
+mapping fixture. `make check` runs both tiers. A green full gate must never rely
+on skipped reference-workspace tests.

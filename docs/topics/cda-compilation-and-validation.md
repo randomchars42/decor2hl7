@@ -94,12 +94,26 @@ evaluator runs after the complete CDA tree exists; unsupported error-level
 expressions fail closed, while warning-level results are reported. The original
 expressions are also emitted as Schematron.
 
+`check` and `check-cda-mapping` run setup-time source verification from
+`cda/parity.py`. They compare explicit source constraints with the compiled
+model and report declared endpoint parity for the selected physical document
+closure. Fixed structural attributes and reviewed branch replacements are
+classified separately; an unexpected missing endpoint is an error. Runtime
+validation does not import the ART-DECOR parser.
+
 `validate-cda` verifies package and validator identity, validates against the
 complete CDA/SDTC schema graph, and runs the exact generated Schematron. For a
 reviewed foreign-namespace profile extension, it first checks compiled physical
 paths and applies the base XSD to a projection with only those foreign nodes
 removed; this is not presented as validation against an unavailable extension
 schema.
+
+The generated validator checksum records integrity between
+`validator-manifest.json` and the exact stylesheet on disk. It is not a
+cross-run reproducibility promise because Saxon-generated validator bytes are
+not stable across independent compilations. The assembled source and generated
+Schematron remain deterministically pinned, while validator behavior is checked
+with valid and invalid documents.
 
 Mapping coverage and CDA conformance remain independent. A legal leaf does not
 prove clinical meaning, and a reviewed mapping does not prove that the complete

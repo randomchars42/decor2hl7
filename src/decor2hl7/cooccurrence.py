@@ -4,42 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
+from .cda.tree import document_index, parse_location
+
 
 _ASSUMED_NON_NULL = object()
 _TRANSPARENT = {"include", "template", "choice", "datatype_choice"}
 _STRUCTURAL_TRANSPARENT = {"include", "template", "choice"}
-
-
-def _location(value: Any) -> tuple[int, ...] | None:
-    try:
-        result = tuple(int(part) for part in str(value).split("."))
-    except (TypeError, ValueError):
-        return None
-    return result or None
-
-
-def _document_index(
-    cda: Mapping[str, Any],
-) -> dict[tuple[int, ...], Mapping[str, Any]]:
-    result: dict[tuple[int, ...], Mapping[str, Any]] = {}
-
-    def walk(nodes: Any, prefix: tuple[int, ...] = ()) -> None:
-        if not isinstance(nodes, list):
-            return
-        for index, node in enumerate(nodes):
-            if not isinstance(node, Mapping):
-                continue
-            here = prefix + (index,)
-            result[here] = node
-            attributes = node.get("attributes", [])
-            if isinstance(attributes, list):
-                for attribute_index, attribute in enumerate(attributes):
-                    if isinstance(attribute, Mapping):
-                        result[here + (100000 + attribute_index,)] = attribute
-            walk(node.get("children", []), here)
-
-    walk(cda.get("document", []))
-    return result
 
 
 def _required_direct_children(node: Mapping[str, Any]) -> set[str]:
@@ -180,7 +150,7 @@ def datatype_cooccurrence_problems(
         or not isinstance(targets, Mapping)
     ):
         return []
-    index = _document_index(cda)
+    index, _parents = document_index(cda)
     problems: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for target_name, value in assignments.items():
@@ -190,7 +160,7 @@ def datatype_cooccurrence_problems(
         locations = list(target.get("locations", []))
         if len(locations) != 1:
             continue
-        selected = _location(locations[0])
+        selected = parse_location(locations[0])
         if selected is None:
             continue
         for depth in range(1, len(selected) + 1):
@@ -279,7 +249,7 @@ def constrained_datatype_components(cda: Mapping[str, Any]) -> set[str]:
         or not isinstance(targets, Mapping)
     ):
         return set()
-    index = _document_index(cda)
+    index, _parents = document_index(cda)
     alternatives: dict[tuple[int, ...], set[str]] = {}
     for owner, node in index.items():
         clauses = rules.get(str(node.get("datatype") or ""), [])
@@ -291,7 +261,10 @@ def constrained_datatype_components(cda: Mapping[str, Any]) -> set[str]:
             if not isinstance(target, Mapping) or not target.get("writable"):
                 continue
             target_locations = list(target.get("locations", []))
-            if len(target_locations) != 1 or _location(target_locations[0]) != owner:
+            if (
+                len(target_locations) != 1
+                or parse_location(target_locations[0]) != owner
+            ):
                 continue
             representations.update(
                 _representation_presence(target, _ASSUMED_NON_NULL)
@@ -328,7 +301,7 @@ def constrained_datatype_components(cda: Mapping[str, Any]) -> set[str]:
         ):
             continue
         locations = list(target.get("locations", []))
-        selected = _location(locations[0]) if len(locations) == 1 else None
+        selected = parse_location(locations[0]) if len(locations) == 1 else None
         if selected is None:
             continue
         for depth in range(1, len(selected) + 1):

@@ -9,12 +9,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 from xml.sax.saxutils import escape, quoteattr
 
-from ..bindings import (required_construction_gap_targets,
+from ..bindings import (physical_target_name, required_construction_gap_targets,
                         required_construction_gaps,
                         required_unmapped_null_flavor,
                         site_requirement_targets)
 from ..cda.narrative import narrative_blocks, narrative_source_rules
-from ..transforms import cda_target_name, mapping_rules
+from ..cda.tree import document_index, parse_location
+from ..i18n import localize_markdown
+from ..transforms import mapping_rules
 from .mapping import gap_reopening_evidence_label
 
 
@@ -44,35 +46,6 @@ def _audit_targets(audit: Mapping[str, Any]) -> dict[str, list[str]]:
 
 def _leaf(value: Any) -> str:
     return str(value or "").split("/")[-1].split(":")[-1].split("[", 1)[0]
-
-
-def _location(value: Any) -> tuple[int, ...] | None:
-    try:
-        return tuple(int(part) for part in str(value).split("."))
-    except ValueError:
-        return None
-
-
-def _document_index(
-    cda: Mapping[str, Any],
-) -> tuple[dict[tuple[int, ...], Mapping[str, Any]], dict[tuple[int, ...], tuple[int, ...]]]:
-    nodes: dict[tuple[int, ...], Mapping[str, Any]] = {}
-    parents: dict[tuple[int, ...], tuple[int, ...]] = {}
-
-    def walk(items: list[Mapping[str, Any]], prefix: tuple[int, ...] = ()) -> None:
-        for index, node in enumerate(items):
-            here = prefix + (index,)
-            nodes[here] = node
-            for attribute_index, attribute in enumerate(node.get("attributes", [])):
-                attribute_location = here + (100000 + attribute_index,)
-                nodes[attribute_location] = attribute
-                parents[attribute_location] = here
-            for child_index, _ in enumerate(node.get("children", [])):
-                parents[here + (child_index,)] = here
-            walk(list(node.get("children", [])), here)
-
-    walk(list(cda.get("document", [])))
-    return nodes, parents
 
 
 def _section_of(
@@ -107,7 +80,7 @@ def _section_label(
 def _mapping_view(
     model: Mapping[str, Any], cda: Mapping[str, Any], mapping: Mapping[str, Any]
 ) -> dict[str, Any]:
-    nodes, parents = _document_index(cda)
+    nodes, parents = document_index(cda)
     sections = [
         location for location, node in nodes.items()
         if _leaf(node.get("name")) == "section"
@@ -117,13 +90,14 @@ def _mapping_view(
 
     for dataset_path, selection in mapping.get("fields", {}).items():
         for rule in mapping_rules(selection):
-            physical_name = cda_target_name(rule)
+            physical_name = physical_target_name(cda, rule)
             target = cda.get("targets", {}).get(physical_name, {})
             locations = list(target.get("locations", []))
-            if len(locations) != 1 or _location(locations[0]) is None:
+            if len(locations) != 1:
                 continue
-            location = _location(locations[0])
-            assert location is not None
+            location = parse_location(locations[0])
+            if location is None:
+                continue
             structure_name = str(rule.get("structure") or "")
             structure = structures.get(structure_name, {}) if isinstance(structures, Mapping) else {}
             rows_by_section[_section_of(location, nodes, parents)].append({
@@ -148,10 +122,11 @@ def _mapping_view(
         physical_name = str(block.get("section_target") or "")
         target = cda.get("targets", {}).get(physical_name, {})
         locations = list(target.get("locations", []))
-        if not dataset_path or len(locations) != 1 or _location(locations[0]) is None:
+        if not dataset_path or len(locations) != 1:
             continue
-        location = _location(locations[0])
-        assert location is not None
+        location = parse_location(locations[0])
+        if location is None:
+            continue
         rule = {
             "target": physical_name,
             "mode": "narrative",
@@ -332,19 +307,6 @@ def _dataset_coverage_tree(
 
     render(None)
     return lines + ["```"]
-
-
-def _physical_target_name(
-    cda: Mapping[str, Any], rule: Mapping[str, Any],
-) -> str:
-    """Resolve a reviewable logical occurrence to its physical CDA leaf."""
-    name = cda_target_name(rule)
-    if name in cda.get("targets", {}):
-        return name
-    datapoint = cda.get("datapoints", {}).get(name, {})
-    if isinstance(datapoint, Mapping) and datapoint.get("cda_target"):
-        return str(datapoint["cda_target"])
-    return name
 
 
 def _plain(value: Any) -> str:
@@ -584,7 +546,7 @@ def _extended_dataset_coverage_tree(
             if rule.get("mode") != "fallback"
         ]
         for index, rule in enumerate(rules, 1):
-            physical = _physical_target_name(cda, rule)
+            physical = physical_target_name(cda, rule)
             target = cda.get("targets", {}).get(physical, {})
             label = "T" if len(rules) == 1 else f"T{index}"
             logical = str(rule.get("target") or physical)
@@ -727,10 +689,11 @@ def _cda_coverage_tree(
     for name in included:
         target = cda.get("targets", {}).get(name, {})
         locations = list(target.get("locations", []))
-        if len(locations) != 1 or _location(locations[0]) is None:
+        if len(locations) != 1:
             continue
-        location = _location(locations[0])
-        assert location is not None
+        location = parse_location(locations[0])
+        if location is None:
+            continue
         selected_paths = selected_sources.get(name, [])
         suggested_paths = suggested_sources.get(name, [])
         if not selected_paths and not suggested_paths and _reportable_cda_target(target):
@@ -838,7 +801,7 @@ def _extended_cda_coverage_tree(
             for rule in mapping_rules(configured.get(path)):
                 if rule.get("mode") == "fallback":
                     continue
-                physical = _physical_target_name(cda, rule)
+                physical = physical_target_name(cda, rule)
                 selected[physical].append({
                     "path": path,
                     "logical": str(rule.get("target") or physical),
@@ -875,7 +838,7 @@ def _extended_cda_coverage_tree(
         for logical, value in configured_values.items():
             if not isinstance(value, Mapping):
                 continue
-            physical = _physical_target_name(cda, {"target": str(logical)})
+            physical = physical_target_name(cda, {"target": str(logical)})
             result[physical].append((str(logical), value))
         return result
 
@@ -899,10 +862,11 @@ def _extended_cda_coverage_tree(
     for name in included:
         target = cda.get("targets", {}).get(name, {})
         locations = list(target.get("locations", []))
-        if len(locations) != 1 or _location(locations[0]) is None:
+        if len(locations) != 1:
             continue
-        location = _location(locations[0])
-        assert location is not None
+        location = parse_location(locations[0])
+        if location is None:
+            continue
         selected_rows = selected.get(name, [])
         suggested_paths = suggested.get(name, [])
         if not selected_rows and not suggested_paths and _reportable_cda_target(target):
@@ -1066,7 +1030,7 @@ def coverage_headline_counts(
     no_source = sum(
         _reportable_cda_target(target)
         and str(name) not in covered_targets
-        and _location(target.get("locations", [""])[0]) is not None
+        and parse_location(target.get("locations", [""])[0]) is not None
         for name, target in cda.get("targets", {}).items()
     )
     return {
@@ -1497,11 +1461,14 @@ def _contextual_xml(
             if not isinstance(constant_target, Mapping):
                 continue
             locations = constant_target.get("locations", [])
-            if len(locations) != 1 or _location(locations[0]) is None:
+            if len(locations) != 1:
+                continue
+            location = parse_location(locations[0])
+            if location is None:
                 continue
             constant_row = {
                 **dict(row), "target": constant_name, "cda_target": constant_name,
-                "target_model": constant_target, "location": _location(locations[0]),
+                "target_model": constant_target, "location": location,
             }
             _add_preview_path(tree, constant_row, view, fixed=value)
     lines: list[str] = []
@@ -1720,7 +1687,7 @@ def _review_target_rows(
     for row in combined.values():
         row["fields"] = list(dict.fromkeys(row["fields"]))
     return sorted(combined.values(), key=lambda row: (
-        _location(row["target"].get("locations", [""])[0]) or (999999,),
+        parse_location(row["target"].get("locations", [""])[0]) or (999999,),
         str(row["name"]),
     ))
 
@@ -1733,7 +1700,7 @@ def _review_cda_tree(
     rows = _review_target_rows(review_rows, cda)
     by_section: dict[tuple[int, ...] | None, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        location = _location(row["target"].get("locations", [""])[0])
+        location = parse_location(row["target"].get("locations", [""])[0])
         if location is None:
             continue
         row["location"] = location
@@ -2381,6 +2348,7 @@ def _structural_and_completion_lines(
 
 def render_accepted_cda_mappings_markdown(
     model: Mapping[str, Any], cda: Mapping[str, Any], mapping: Mapping[str, Any],
+    *, output_language: str = "en",
 ) -> str:
     """Render the accepted mappings in the former concise-guide presentation."""
     view = _mapping_view(model, cda, mapping)
@@ -2510,7 +2478,10 @@ def render_accepted_cda_mappings_markdown(
                 lines.extend(_contextual_xml(entity_rows, view, cda))
                 lines += ["```", ""]
     lines.extend(_structural_and_completion_lines(mapping, cda))
-    return "\n".join(lines).rstrip() + "\n"
+    return localize_markdown(
+        "\n".join(lines).rstrip() + "\n", output_language,
+        protected_values=(model, cda, mapping),
+    )
 
 
 def render_cda_mapping_markdown(
@@ -2518,6 +2489,8 @@ def render_cda_mapping_markdown(
     cda: Mapping[str, Any],
     mapping: Mapping[str, Any],
     audit: Mapping[str, Any],
+    *,
+    output_language: str = "en",
 ) -> str:
     """Render the human review workbench for unresolved mappings only."""
     view = _mapping_view(model, cda, mapping)
@@ -2564,7 +2537,10 @@ def render_cda_mapping_markdown(
     lines += ["", "## Decisions", ""]
     if not review_rows:
         lines += ["No dataset datapoints currently require target selection.", ""]
-        return "\n".join(lines).rstrip() + "\n"
+        return localize_markdown(
+            "\n".join(lines).rstrip() + "\n", output_language,
+            protected_values=(model, cda, mapping, audit),
+        )
 
     lines += [
         "Every card corresponds to an explicit `null` entry in `cda-mapping.json`. "
@@ -2654,7 +2630,10 @@ def render_cda_mapping_markdown(
                 "```",
                 "",
             ]
-    return "\n".join(lines).rstrip() + "\n"
+    return localize_markdown(
+        "\n".join(lines).rstrip() + "\n", output_language,
+        protected_values=(model, cda, mapping, audit),
+    )
 
 
 def render_cda_mapping_trees_markdown(
@@ -2662,6 +2641,8 @@ def render_cda_mapping_trees_markdown(
     cda: Mapping[str, Any],
     mapping: Mapping[str, Any],
     audit: Mapping[str, Any],
+    *,
+    output_language: str = "en",
 ) -> str:
     """Render the exhaustive dataset and reportable CDA coverage trees."""
     view = _mapping_view(model, cda, mapping)
@@ -2718,7 +2699,10 @@ def render_cda_mapping_trees_markdown(
         *cda_tree,
         "",
     ]
-    return "\n".join(lines).rstrip() + "\n"
+    return localize_markdown(
+        "\n".join(lines).rstrip() + "\n", output_language,
+        protected_values=(model, cda, mapping, audit),
+    )
 
 
 def render_cda_mapping_extended_trees_markdown(
@@ -2726,8 +2710,10 @@ def render_cda_mapping_extended_trees_markdown(
     cda: Mapping[str, Any],
     mapping: Mapping[str, Any],
     audit: Mapping[str, Any],
+    *,
+    output_language: str = "en",
 ) -> str:
-    """Render AKTIN-facing coverage trees with stable traceability evidence."""
+    """Render reviewer-facing coverage trees with stable traceability evidence."""
     view = _mapping_view(model, cda, mapping)
     coverage = _coverage_index(model, cda, mapping, audit)
     cda_tree, physical_no_source = _extended_cda_coverage_tree(
@@ -2782,7 +2768,10 @@ def render_cda_mapping_extended_trees_markdown(
         *cda_tree,
         "",
     ]
-    return "\n".join(lines).rstrip() + "\n"
+    return localize_markdown(
+        "\n".join(lines).rstrip() + "\n", output_language,
+        protected_values=(model, cda, mapping, audit),
+    )
 
 
 def _constraint_xml(
@@ -2845,6 +2834,8 @@ def write_readable_cda(
     model_dir: Path,
     cda: Mapping[str, Any],
     mapping_audit: Mapping[str, Any],
+    *,
+    output_language: str = "en",
 ) -> tuple[Path, Path]:
     """Write an annotated effective template in XML and concise Markdown."""
     template = cda.get("document_template", {})
@@ -2888,5 +2879,11 @@ def write_readable_cda(
         "",
     ]
     markdown_path = model_dir / "cda-expanded-readable.md"
-    markdown_path.write_text("\n".join(lines), encoding="utf-8")
+    markdown_path.write_text(
+        localize_markdown(
+            "\n".join(lines), output_language,
+            protected_values=(cda, mapping_audit),
+        ),
+        encoding="utf-8",
+    )
     return xml_path, markdown_path

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Iterable, Mapping
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..workspace import load_json, write_json

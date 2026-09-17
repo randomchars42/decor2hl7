@@ -12,6 +12,12 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from .value_format import (
+    preferred_mapping_value,
+    range_quantities,
+    scalar_quantity,
+)
+
 OMIT = object()
 
 
@@ -107,29 +113,21 @@ def _table_value(table: Mapping[Any, Any], key: Any) -> tuple[bool, Any]:
 def _wording(value: Any) -> Any:
     """Return the portable human wording of one normalized scalar value."""
     if isinstance(value, Mapping):
-        if "low" in value or "high" in value:
-            low = value.get("low", {})
-            high = value.get("high", {})
-            if isinstance(low, Mapping) and isinstance(high, Mapping):
-                low_value = low.get("value")
-                high_value = high.get("value")
-                unit = low.get("unit") or high.get("unit")
-                if low_value is not None and high_value is not None:
-                    return (
-                        f"{low_value}-{high_value}"
-                        + (f" {unit}" if unit else "")
-                    )
-        if "value" in value:
-            scalar = value.get("value")
-            if scalar is not None:
-                unit = value.get("unit")
-                return f"{scalar}" + (f" {unit}" if unit else "")
-        return next((
-            value.get(key) for key in (
+        bounds = range_quantities(value)
+        if bounds is not None:
+            low, high = bounds
+            if low is not None and high is not None:
+                unit = low[1] or high[1]
+                return f"{low[0]}-{high[0]}" + (f" {unit}" if unit else "")
+        scalar = scalar_quantity(value)
+        if scalar is not None:
+            return f"{scalar[0]}" + (f" {scalar[1]}" if scalar[1] else "")
+        return preferred_mapping_value(
+            value,
+            (
                 "raw", "canonical", "displayName", "display_name", "code",
-            )
-            if value.get(key) not in (None, "")
-        ), None)
+            ),
+        )
     if isinstance(value, bool):
         return "true" if value else "false"
     return value

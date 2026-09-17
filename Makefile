@@ -1,9 +1,17 @@
-.PHONY: baseline check mypy-report testrun
+.PHONY: baseline check check-unit check-reference mypy-report testrun
 
-check:
+UNIT_TEST_MODULES := $(patsubst %.py,%,$(subst /,.,$(filter-out tests/test_closure.py,$(wildcard tests/test_*.py))))
+
+check: check-unit check-reference
+
+check-unit:
 	python3 scripts/check_docs.py
 	python3 -m mypy src tests
-	python3 -m unittest discover -s tests
+	python3 -m unittest $(UNIT_TEST_MODULES)
+
+check-reference:
+	python3 -m unittest tests.test_closure
+	$(MAKE) testrun
 
 baseline:
 	python3 scripts/update_reference_baseline.py

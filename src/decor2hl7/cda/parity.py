@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+import xml.etree.ElementTree as ET
 
-from ..retrieval.xml import local
+from ..retrieval.xml import local, parse_file
 from .compile import collect_templates
 
 
@@ -143,3 +144,248 @@ def declared_endpoint_parity(
         "reviewed_branch_replacements": reviewed_branch_replacements,
         "unexpected_missing": missing,
     }
+
+
+def endpoint_parity_errors(parity: Mapping[str, Any]) -> list[str]:
+    """Render unexpected declared endpoint losses as check errors."""
+    errors: list[str] = []
+    missing = parity.get("unexpected_missing", [])
+    for item in missing if isinstance(missing, list) else ():
+        if not isinstance(item, Mapping):
+            continue
+        errors.append(
+            "source parity: declared endpoint "
+            f"{item.get('template_id') or '?'}:{item.get('element_id') or '?'} "
+            "is missing from the compiled CDA surface"
+        )
+    return errors
+
+
+def verify_compiled_against_artdecor(
+    cda: Mapping[str, Any], xml_paths: Iterable[Path],
+) -> list[str]:
+    """Check explicit ART-DECOR constraints against the compiled CDA model.
+
+    This is a setup-time source check.  It intentionally lives beside the
+    endpoint parity logic so the runtime validation module never needs to
+    import ART-DECOR parsing helpers.
+    """
+    source_by_id: dict[tuple[str, str, str, str], ET.Element[str]] = {}
+    source_rules: dict[
+        tuple[str, str, str, str, str, str, str], dict[str, str]
+    ] = {}
+    templates: set[tuple[str, str]] = set()
+    for path in sorted(set(xml_paths)):
+        try:
+            root, _ = parse_file(path)
+        except (ET.ParseError, OSError):
+            continue
+        for template in root.iter():
+            if local(template.tag) != "template" or not template.get("id"):
+                continue
+            tid = template.get("id") or ""
+            effective = template.get("effectiveDate") or ""
+            templates.add((tid, effective))
+
+            def collect(
+                parent: ET.Element[str], parent_path: tuple[str, ...] = (),
+            ) -> None:
+                for node in list(parent):
+                    kind = local(node.tag)
+                    current_path = parent_path
+                    if kind == "element":
+                        current_path = parent_path + (
+                            node.get("name") or "element",
+                        )
+                    elif kind == "attribute" and node.get("name"):
+                        current_path = parent_path + (
+                            "@" + (node.get("name") or "attribute"),
+                        )
+                    physical_path = "/".join(current_path)
+                    if kind in {"element", "attribute"} and node.get("id"):
+                        source_by_id[
+                            (tid, effective, node.get("id") or "", physical_path)
+                        ] = node
+                    if kind == "element":
+                        lets = {
+                            child.get("name") or "": child.get("value") or ""
+                            for child in list(node)
+                            if local(child.tag) == "let"
+                            and child.get("name")
+                            and child.get("value")
+                        }
+                        for rule in list(node):
+                            rule_kind = local(rule.tag)
+                            if (
+                                rule_kind not in {"assert", "report"}
+                                or not rule.get("test")
+                            ):
+                                continue
+                            key = (
+                                tid,
+                                effective,
+                                node.get("id") or "",
+                                physical_path,
+                                rule_kind,
+                                rule.get("test") or "",
+                                rule.get("role") or "error",
+                            )
+                            source_rules[key] = lets
+                    collect(node, current_path)
+
+            collect(template)
+
+    errors: list[str] = []
+    document = cda.get("document_template", {})
+    document_key = (
+        str(document.get("id") or ""),
+        str(document.get("effective_date") or ""),
+    )
+    if document_key not in templates:
+        errors.append(
+            "source verification: document template "
+            f"{document_key[0]}@{document_key[1]} not found"
+        )
+    targets = cda.get("targets", {})
+    for name, target in targets.items() if isinstance(targets, Mapping) else ():
+        if not isinstance(target, Mapping):
+            continue
+        element_id = str(target.get("element_id") or "")
+        if not element_id:
+            continue
+        key = (
+            str(target.get("template_id") or ""),
+            str(target.get("template_effective_date") or ""),
+            element_id,
+            str(target.get("path") or ""),
+        )
+        source = source_by_id.get(key)
+        if source is None:
+            continue
+        explicit_type = source.get("datatype")
+        target_type = str(target.get("datatype") or "")
+        typed_alternative = bool(
+            target.get("polymorphic")
+            and str(target.get("declared_datatype") or "") == explicit_type
+            and any(
+                item.get("source") == "hl7-datatype-choice"
+                and str(item.get("datatype") or "") == explicit_type
+                and str(item.get("datatype_part") or "") == target_type
+                for item in target.get("provenance", [])
+                if isinstance(item, Mapping)
+            )
+        )
+        if explicit_type and target_type != explicit_type and not typed_alternative:
+            errors.append(
+                f"source verification: {name} datatype "
+                f"{target.get('datatype')!r} != explicit {explicit_type!r}"
+            )
+        if local(source.tag) == "element":
+            if source.get("conformance") == "NP" and not target.get("prohibited"):
+                errors.append(
+                    f"source verification: {name} ignores explicit NP conformance"
+                )
+            fixed_text = None
+            fixed: dict[str, str] = {}
+            for child in list(source):
+                if local(child.tag) == "text":
+                    text = "".join(child.itertext()).strip()
+                    if text:
+                        fixed_text = text
+                elif (
+                    local(child.tag) == "attribute"
+                    and child.get("name")
+                    and child.get("value")
+                ):
+                    fixed[child.get("name") or ""] = child.get("value") or ""
+            if fixed_text is not None and target.get("fixed_text") != fixed_text:
+                errors.append(
+                    f"source verification: {name} lost explicit fixed text "
+                    f"{fixed_text!r}"
+                )
+            target_fixed = target.get("fixed", {})
+            target_fixed = target_fixed if isinstance(target_fixed, Mapping) else {}
+            for attribute_name, attribute_value in fixed.items():
+                if str(target_fixed.get(attribute_name) or "") != attribute_value:
+                    errors.append(
+                        f"source verification: {name} lost fixed "
+                        f"@{attribute_name}={attribute_value!r}"
+                    )
+        elif local(source.tag) == "attribute":
+            source_value = source.get("value")
+            if source_value is None:
+                codes = {
+                    str(node.get("code"))
+                    for node in list(source)
+                    if local(node.tag) == "vocabulary"
+                    and node.get("code") is not None
+                }
+                source_value = next(iter(codes)) if len(codes) == 1 else None
+            target_fixed = target.get("fixed", {})
+            target_fixed = target_fixed if isinstance(target_fixed, Mapping) else {}
+            if (
+                source_value is not None
+                and str(target_fixed.get("value") or "") != str(source_value)
+            ):
+                errors.append(
+                    f"source verification: {name} lost fixed attribute value "
+                    f"{source_value!r}"
+                )
+
+    compiled_by_source: dict[
+        tuple[str, str, str, str], list[Mapping[str, Any]]
+    ] = defaultdict(list)
+
+    def structural(nodes: list[Mapping[str, Any]]) -> None:
+        for node in nodes:
+            for source in node.get("sources", []):
+                if not isinstance(source, Mapping):
+                    continue
+                source_key = (
+                    str(source.get("template_id") or ""),
+                    str(source.get("template_effective_date") or ""),
+                    str(source.get("element_id") or ""),
+                    str(source.get("path") or ""),
+                )
+                if source_key[2]:
+                    compiled_by_source[source_key].append(node)
+            structural([
+                child for child in node.get("children", [])
+                if isinstance(child, Mapping)
+            ])
+
+    structural([
+        node for node in cda.get("document", []) if isinstance(node, Mapping)
+    ])
+    for rule_key, source_lets in source_rules.items():
+        source_key = rule_key[:4]
+        compiled_nodes = compiled_by_source.get(source_key, [])
+        if not compiled_nodes:
+            continue
+        match = next((
+            node
+            for node in compiled_nodes
+            if any(
+                str(item.get("kind") or "assert") == rule_key[4]
+                and str(item.get("test") or "") == rule_key[5]
+                and str(item.get("role") or "error") == rule_key[6]
+                for item in node.get("validation_rules", [])
+                if isinstance(item, Mapping)
+            )
+        ), None)
+        if match is None:
+            errors.append(
+                f"source verification: lost ART-DECOR {rule_key[4]} "
+                f"{rule_key[5]!r} from {rule_key[0]}@"
+                f"{rule_key[1]}:{rule_key[2]}"
+            )
+            continue
+        compiled_lets = match.get("lets", {})
+        compiled_lets = compiled_lets if isinstance(compiled_lets, Mapping) else {}
+        for let_name, let_value in source_lets.items():
+            if str(compiled_lets.get(let_name) or "") != let_value:
+                errors.append(
+                    "source verification: ART-DECOR assert "
+                    f"{rule_key[5]!r} lost let ${let_name}={let_value!r}"
+                )
+    return errors

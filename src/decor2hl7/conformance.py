@@ -26,6 +26,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Collection, Iterable, Mapping, Sequence
 
 from .cda.core import CORE_REVISION
+from .i18n import localize_markdown
 from .workspace import write_json
 
 
@@ -1249,6 +1250,7 @@ def write_conformance_report(
     diagnostics: Sequence[Mapping[str, Any]],
     stages: Sequence[Mapping[str, Any]],
     policy: str,
+    output_language: str = "en",
 ) -> dict[str, Any]:
     summary = _summary(diagnostics)
     if summary["error"] or any(stage.get("status") == "failed" for stage in stages):
@@ -1324,7 +1326,13 @@ def write_conformance_report(
             ]
     else:
         lines += ["No conformance diagnostics were emitted.", ""]
-    destination.with_suffix(".md").write_text("\n".join(lines), encoding="utf-8")
+    destination.with_suffix(".md").write_text(
+        localize_markdown(
+            "\n".join(lines), output_language,
+            protected_values=(scope, diagnostics, stages, policy),
+        ),
+        encoding="utf-8",
+    )
     return result
 
 
@@ -1336,6 +1344,8 @@ def build_conformance_artifacts(
     transaction: Mapping[str, Any],
     selected_templates: Collection[str] | None = None,
     selected_template_revisions: Collection[tuple[str, str]] | None = None,
+    *,
+    output_language: str = "en",
 ) -> dict[str, Any]:
     """Run report-only source checks and compile the exact transaction validator."""
     destination = model_dir / "conformance-validation"
@@ -1350,6 +1360,7 @@ def build_conformance_artifacts(
         return write_conformance_report(
             destination / "build-conformance", scope="build", diagnostics=[],
             stages=stages, policy="report-only",
+            output_language=output_language,
         )
 
     evidence = release_dir / "project-evidence.xml"
@@ -1428,6 +1439,7 @@ def build_conformance_artifacts(
     return write_conformance_report(
         destination / "build-conformance", scope="build", diagnostics=diagnostics,
         stages=stages, policy="report-only",
+        output_language=output_language,
     )
 
 
@@ -1436,6 +1448,8 @@ def validate_cda_documents(
     model_dir: Path,
     documents: Sequence[Path],
     report_base: Path,
+    *,
+    output_language: str = "en",
 ) -> dict[str, Any]:
     if not validation_packages_available(release_dir):
         raise ValueError("validation packages are unavailable; run `decor2hl7 fetch`")
@@ -1545,4 +1559,5 @@ def validate_cda_documents(
     return write_conformance_report(
         report_base, scope="generated CDA", diagnostics=diagnostics,
         stages=stages, policy="enforced",
+        output_language=output_language,
     )

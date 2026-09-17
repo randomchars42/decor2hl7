@@ -24,7 +24,6 @@ import unicodedata
 import xml.etree.ElementTree as ET
 
 from ..retrieval.xml import (
-    KNOWN_PREFIXES,
     child_text,
     clean,
     local,
@@ -33,6 +32,7 @@ from ..retrieval.xml import (
 )
 from ..assertions import schematron
 from ..workspace import write_json
+from ..xmlnames import KNOWN_PREFIXES
 from .art_decor import inspect_template_constructs, require_supported_constructs
 from .datatypes import (
     POLYMORPHIC_COMPLEX_ROOTS,
@@ -3604,7 +3604,7 @@ def compile_cda(
         return elements, attributes
     element_count, attribute_count = constraint_counts(document)
     return {
-        "version": 5,
+        "version": 6,
         "format": "cda",
         "document_template": {
             "id": template_id,
@@ -3634,7 +3634,6 @@ def compile_cda(
             "definitions": len(definitions),
             "source": "HL7 CDA R2 normative XSD" if definitions else None,
         },
-        "compiled_defaults": 0,
         "stats": {
             "reachable_templates": len(reachable),
             "reviewed_extensions": len(applied_extensions),

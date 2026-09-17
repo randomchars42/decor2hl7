@@ -41,6 +41,7 @@ class WorkspaceTests(unittest.TestCase):
             settings["prefix"] = "custom-"
             settings["custom"] = {"kept": True}
             settings.pop("network")
+            settings["output"] = {}
             workspace.write_json(path, settings)
 
             self.assertEqual(init_workspace(root, prefix="ignored-"), path)
@@ -48,6 +49,7 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(reloaded["prefix"], "custom-")
             self.assertEqual(reloaded["custom"], {"kept": True})
             self.assertEqual(reloaded["network"], {"ipv4": True})
+            self.assertEqual(reloaded["output"], {"language": "en"})
 
     def test_selection_guards_and_json_object_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

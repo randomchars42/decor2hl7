@@ -4,23 +4,14 @@ from __future__ import annotations
 
 import csv
 import difflib
-import re
-import unicodedata
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping
 
 from ..domain import accepted_values
+from ..i18n import localize_markdown
+from ..text import normalize_match_text as _norm
 from ..workspace import write_json
-
-
-def _norm(value: str) -> str:
-    value = (
-        unicodedata.normalize("NFKD", value)
-        .encode("ascii", "ignore")
-        .decode("ascii")
-    )
-    return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
 def _headers(input_dir: Path | None) -> dict[str, list[str]]:
@@ -77,6 +68,8 @@ def csv_mapping_proposal(
     model: Mapping[str, Any],
     input_dir: Path | None,
     join_column: str,
+    *,
+    output_language: str = "en",
 ) -> tuple[dict[str, Any], str]:
     headers = _headers(input_dir)
     fields: dict[str, Any] = {}
@@ -197,7 +190,10 @@ def csv_mapping_proposal(
         "until a user chooses a source column.",
         "",
     ]
-    return proposal, "\n".join(lines) + "\n"
+    return proposal, localize_markdown(
+        "\n".join(lines) + "\n", output_language,
+        protected_values=(model, headers, proposal),
+    )
 
 
 def _read_column_values(input_dir: Path | None, locator: str) -> set[str]:
@@ -294,6 +290,8 @@ def codes_mapping_proposal(
     model: Mapping[str, Any],
     csv_mapping: Mapping[str, Any],
     input_dir: Path | None,
+    *,
+    output_language: str = "en",
 ) -> tuple[dict[str, Any], str]:
     proposal = code_mapping_defaults(model)
     fields: dict[str, dict[str, str | None]] = {
@@ -373,12 +371,23 @@ def codes_mapping_proposal(
             lines.append("No aliases require configuration.")
         lines.append("")
 
-    return {"version": 1, "fields": fields}, "\n".join(lines) + "\n"
+    result = {"version": 1, "fields": fields}
+    return result, localize_markdown(
+        "\n".join(lines) + "\n", output_language,
+        protected_values=(model, csv_mapping, result),
+    )
 
 
-def write_code_mapping(model_dir: Path, model: Mapping[str, Any]) -> dict[str, Any]:
+def write_code_mapping(
+    model_dir: Path,
+    model: Mapping[str, Any],
+    *,
+    output_language: str = "en",
+) -> dict[str, Any]:
     """Write the model-derived code mapping before any CSV inspection."""
-    proposal, report = codes_mapping_proposal(model, {"fields": {}}, None)
+    proposal, report = codes_mapping_proposal(
+        model, {"fields": {}}, None, output_language=output_language
+    )
     write_json(model_dir / "codes-mapping.proposed.json", proposal)
     (model_dir / "codes-mapping.md").write_text(report, encoding="utf-8")
     return proposal
@@ -390,11 +399,14 @@ def write_input_mappings(
     model: Mapping[str, Any],
     *,
     join_column: str = "patient_id",
+    output_language: str = "en",
 ) -> dict[str, Any]:
     """Inspect one CSV snapshot and write only input-side mapping proposals."""
-    csv_proposal, csv_report = csv_mapping_proposal(model, input_dir, join_column)
+    csv_proposal, csv_report = csv_mapping_proposal(
+        model, input_dir, join_column, output_language=output_language
+    )
     code_proposal, code_report = codes_mapping_proposal(
-        model, csv_proposal, input_dir
+        model, csv_proposal, input_dir, output_language=output_language
     )
     write_json(output_dir / "csv-mapping.proposed.json", csv_proposal)
     write_json(output_dir / "codes-mapping.proposed.json", code_proposal)

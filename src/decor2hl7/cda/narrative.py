@@ -10,9 +10,19 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Mapping
 
-from ..bindings import for_each_target_positions, is_fallback_if_active, structure_rules
+from ..bindings import (
+    for_each_target_positions,
+    is_fallback_if_active,
+    physical_target_name,
+    structure_rules,
+)
 from ..data import field_value
-from ..transforms import OMIT, apply_transform, cda_target_name, mapping_rules
+from ..transforms import OMIT, apply_transform, mapping_rules
+from ..value_format import (
+    preferred_mapping_value,
+    range_quantities,
+    scalar_quantity,
+)
 
 
 def narrative_blocks(mapping: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -206,28 +216,35 @@ def _wording(value: Any, language: str) -> str:
             return "Ja" if value else "Nein"
         return "Yes" if value else "No"
     if isinstance(value, Mapping):
-        if "low" in value or "high" in value:
+        bounds = range_quantities(value)
+        if bounds is not None:
+            low_bound, high_bound = bounds
+            if (
+                low_bound is not None
+                and high_bound is not None
+                and low_bound[1] == high_bound[1]
+            ):
+                unit = low_bound[1]
+                return (
+                    f"{low_bound[0]}–{high_bound[0]}"
+                    + (f" {unit}" if unit else "")
+                )
             low = value.get("low")
             high = value.get("high")
-            if isinstance(low, Mapping) and isinstance(high, Mapping):
-                low_value = low.get("value")
-                high_value = high.get("value")
-                low_unit = str(low.get("unit") or "")
-                high_unit = str(high.get("unit") or "")
-                if low_value is not None and high_value is not None and low_unit == high_unit:
-                    return f"{low_value}–{high_value}" + (f" {low_unit}" if low_unit else "")
             low_text = _wording(low, language) if low is not None else ""
             high_text = _wording(high, language) if high is not None else ""
             if low_text and high_text:
                 return f"{low_text}–{high_text}"
             return low_text or high_text
-        if value.get("value") is not None:
-            scalar = str(value.get("value"))
-            unit = str(value.get("unit") or "").strip()
-            return scalar + (f" {unit}" if unit else "")
-        for key in ("displayName", "display_name", "raw", "canonical", "code"):
-            if value.get(key) not in (None, ""):
-                return str(value[key])
+        scalar = scalar_quantity(value)
+        if scalar is not None:
+            unit = scalar[1].strip()
+            return str(scalar[0]) + (f" {unit}" if unit else "")
+        preferred = preferred_mapping_value(
+            value, ("displayName", "display_name", "raw", "canonical", "code")
+        )
+        if preferred is not None:
+            return str(preferred)
         return ""
     return "" if value in (None, "") else str(value)
 
@@ -281,13 +298,6 @@ def _section_index(cda: Mapping[str, Any]) -> tuple[list[dict[str, Any]], dict[s
 
     walk(list(cda.get("document", [])))
     return sections, target_sections
-
-
-def _physical_target(cda: Mapping[str, Any], rule: Mapping[str, Any]) -> str:
-    logical = str(rule.get("target") or "")
-    datapoint = cda.get("datapoints", {}).get(logical, {})
-    modeled = str(datapoint.get("cda_target") or "") if isinstance(datapoint, Mapping) else ""
-    return modeled or cda_target_name(rule)
 
 
 def _coalesce_winners(
@@ -466,7 +476,7 @@ def build_section_narratives(
             continue
         label = str(field.get("name") or str(source).rsplit(".", 1)[-1])
         for rule in mapping_rules(selection):
-            target_name = _physical_target(cda, rule)
+            target_name = physical_target_name(cda, rule)
             section_id = target_sections.get(target_name)
             if section_id is None or target_name not in explicit_names:
                 continue

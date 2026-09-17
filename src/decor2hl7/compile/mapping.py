@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from ..retrieval.xml import child_text, local, parse_file
+from ..text import normalize_match_text as _norm
+from ..i18n import localize_markdown
 from ..workspace import write_json
 from ..domain import accepted_values, logical_values
 from ..cda.semantics import (
@@ -74,11 +76,6 @@ def gap_reopening_evidence_label(value: Any) -> str:
     ):
         return "upstream association or reviewed semantic bridge"
     return text
-
-
-def _norm(value: str) -> str:
-    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
 def _names_agree(left: str | None, right: str | None) -> bool:
@@ -3875,10 +3872,28 @@ def _cda_mapping_analysis(
 
 
 def cda_mapping_audit(
-    model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: Iterable[Path]
+    model: Mapping[str, Any],
+    cda: Mapping[str, Any],
+    xml_paths: Iterable[Path],
+    *,
+    output_language: str = "en",
 ) -> tuple[dict[str, Any], dict[str, Any], str, str]:
     """Return proposal, complete structured audit and both reports."""
-    return _cda_mapping_analysis(model, cda, xml_paths)
+    proposal, audit, report, details = _cda_mapping_analysis(
+        model, cda, xml_paths
+    )
+    return (
+        proposal,
+        audit,
+        localize_markdown(
+            report, output_language,
+            protected_values=(model, cda, proposal, audit),
+        ),
+        localize_markdown(
+            details, output_language,
+            protected_values=(model, cda, proposal, audit),
+        ),
+    )
 
 
 def mapping_field_delta(
@@ -4327,10 +4342,12 @@ def write_cda_mapping(
     model_dir: Path,
     model: Mapping[str, Any],
     cda: Mapping[str, Any],
+    *,
+    output_language: str = "en",
 ) -> dict[str, Any]:
     """Write the ART-DECOR/model-to-CDA proposal without inspecting CSV input."""
     cda_proposal, audit, _, cda_details = cda_mapping_audit(
-        model, cda, xml_paths
+        model, cda, xml_paths, output_language=output_language
     )
     cda_proposal["target_identities"] = mapping_target_identities(
         cda, cda_proposal
@@ -4340,7 +4357,7 @@ def write_cda_mapping(
     )
     enriched_cda = dict(cda)
     enriched_cda["datapoints"] = cda_datapoints(cda, cda_proposal)
-    enriched_cda["version"] = 5
+    enriched_cda["version"] = 6
     enriched_cda["stats"] = {
         **dict(cda.get("stats", {})),
         "datapoints": len(enriched_cda["datapoints"]),
@@ -4358,7 +4375,8 @@ def write_cda_mapping(
         write_readable_cda,
     )
     cda_report = render_cda_mapping_markdown(
-        model, enriched_cda, cda_proposal, audit
+        model, enriched_cda, cda_proposal, audit,
+        output_language=output_language,
     )
     (model_dir / "cda-mapping.proposed.md").write_text(
         cda_report, encoding="utf-8"
@@ -4367,18 +4385,22 @@ def write_cda_mapping(
     if legacy_guide.is_file():
         legacy_guide.unlink()
     tree_report = render_cda_mapping_trees_markdown(
-        model, enriched_cda, cda_proposal, audit
+        model, enriched_cda, cda_proposal, audit,
+        output_language=output_language,
     )
     (model_dir / "cda-mapping-trees.md").write_text(
         tree_report, encoding="utf-8"
     )
     extended_tree_report = render_cda_mapping_extended_trees_markdown(
-        model, enriched_cda, cda_proposal, audit
+        model, enriched_cda, cda_proposal, audit,
+        output_language=output_language,
     )
     (model_dir / "cda-mapping-trees-extended.md").write_text(
         extended_tree_report, encoding="utf-8"
     )
-    write_readable_cda(model_dir, enriched_cda, audit)
+    write_readable_cda(
+        model_dir, enriched_cda, audit, output_language=output_language
+    )
     return cda_proposal
 
 
@@ -4387,6 +4409,11 @@ def write_mapping_model(
     model_dir: Path,
     model: Mapping[str, Any],
     cda: Mapping[str, Any],
+    *,
+    output_language: str = "en",
 ) -> dict[str, Any]:
     """Compiler-boundary name for writing mapping artifacts."""
-    return write_cda_mapping(evidence, model_dir, model, cda)
+    return write_cda_mapping(
+        evidence, model_dir, model, cda,
+        output_language=output_language,
+    )

@@ -20,7 +20,7 @@ from decor2hl7.compile.structural import (
 from decor2hl7.cda.compile import compile_cda
 from decor2hl7.cda import render as cda
 from decor2hl7.cda.datatypes import value_representation
-from decor2hl7.cda.parity import declared_endpoint_parity
+from decor2hl7.cda.parity import declared_endpoint_parity, endpoint_parity_errors
 from decor2hl7.compile.reports import render_accepted_cda_mappings_markdown
 from decor2hl7.cda.semantics import direct_compatibility
 from decor2hl7.workspace import load_json
@@ -1808,6 +1808,23 @@ class MappingInferenceTests(unittest.TestCase):
                 [item["element_id"] for item in parity["compiler_only"]],
                 ["decor2hl7-extension:x"],
             )
+            self.assertEqual(
+                endpoint_parity_errors(parity),
+                [
+                    "source parity: declared endpoint t:missing is missing "
+                    "from the compiled CDA surface"
+                ],
+            )
+
+    def test_endpoint_parity_errors_ignores_malformed_diagnostics(self) -> None:
+        self.assertEqual(endpoint_parity_errors({"unexpected_missing": {}}), [])
+        self.assertEqual(
+            endpoint_parity_errors({"unexpected_missing": [None, {}]}),
+            [
+                "source parity: declared endpoint ?:? is missing from the "
+                "compiled CDA surface"
+            ],
+        )
 
     def test_declared_endpoint_parity_accepts_reviewed_spec_replacement(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

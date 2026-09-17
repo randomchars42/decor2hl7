@@ -3,7 +3,7 @@
 The runtime intentionally stays standard-library only.  The evaluator supports
 boolean ``and/or/not``, ``count(...)`` comparisons, attribute comparisons and
 nested child/descendant selectors with predicates.  It also implements the one
-XQuery-style uniqueness assertion currently used by the AKTIN MDRO template.
+XQuery-style uniqueness assertion used by a selected MDRO template.
 All original expressions are additionally emitted as Schematron so an external
 standards validator can apply the authoritative expression unchanged.
 """
@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from html import escape
 from typing import Any, Mapping
 
-from .retrieval.xml import KNOWN_PREFIXES
+from .xmlnames import KNOWN_PREFIXES
 
 HL7 = "urn:hl7-org:v3"
 
@@ -153,7 +153,7 @@ def _eval(
     expr = _strip_outer(re.sub(r"\s+", " ", expr.strip()))
     if not expr:
         return True
-    # AKTIN's XQuery uniqueness assertion for the MDRO value sequence.
+    # The profile's XQuery uniqueness assertion for the MDRO value sequence.
     if expr.startswith("empty($") and "index-of(" in expr and "@code|$" in expr and "/@nullFlavor" in expr:
         var = re.match(r"empty\(\$([A-Za-z_][A-Za-z0-9_-]*)", expr)
         if not var or var.group(1) not in variables:

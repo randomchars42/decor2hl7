@@ -11,6 +11,12 @@ from decor2hl7.transforms import OMIT, apply_transform
 
 
 class DataPipelineTests(unittest.TestCase):
+    def test_occurrence_builder_rejects_invalid_internal_shape(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least one repeat"):
+            data._ensure_occurrence({}, [], [], "records", 1)
+        with self.assertRaisesRegex(ValueError, "keys must match"):
+            data._ensure_occurrence({}, ["encounters"], [], "records", 1)
+
     def test_quantity_unit_accepts_german_hour_label_for_ucum_h(self) -> None:
         field = {"type": "quantity", "unit": "Stunden"}
         target = {

@@ -8,7 +8,7 @@ resolved state.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Iterable
+from typing import Iterable
 
 from .api import publications_url, transactions_url
 from .client import DEFAULT_API_BASE, get

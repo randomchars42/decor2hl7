@@ -62,6 +62,40 @@ def complete_fixture_value_targets(cda_model: Mapping[str, Any]) -> None:
 
 
 class ConstructionTests(unittest.TestCase):
+    def test_construction_rejects_conflicting_logical_and_physical_targets(self) -> None:
+        model: dict[str, Any] = {"fields": {"finding": {}}}
+        compiled = {
+            "datapoints": {
+                "Finding_right.value": {"cda_target": "Finding.value"},
+            },
+            "targets": {
+                "Finding.value": {
+                    "writable": True,
+                    "locations": ["0"],
+                    "value_representation": {
+                        "kind": "text",
+                        "logical_types": ["text"],
+                    },
+                    "logical_types": ["text"],
+                },
+            },
+        }
+        mapping = {"fields": {"finding": {
+            "target": "Finding_right.value",
+            "cda_target": "Other.value",
+        }}}
+
+        with self.assertRaisesRegex(
+            ValueError, "resolves to 'Finding.value'.*specifies 'Other.value'",
+        ):
+            build_assignments(
+                {"values": {"finding": "present"}},
+                model,
+                compiled,
+                mapping,
+                {},
+            )
+
     def test_cda_renderer(self) -> None:
         compiled = {
             "targets": {"Doc.value": {"element_id": None, "renderable": True, "locations": ["0.0"]}},

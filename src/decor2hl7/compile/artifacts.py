@@ -12,6 +12,7 @@ from ..retrieval.artifacts import (
     closure_records, form_paths, transaction_record,
 )
 from ..cda.extensions import CdaExtension, normalize_extensions
+from ..i18n import localize_markdown
 from ..workspace import load_json, write_json
 from ..retrieval.xml import local
 
@@ -472,6 +473,8 @@ def write_build_diagnostics(
     inputs: Mapping[str, Any],
     cda: Mapping[str, Any],
     model: Mapping[str, Any] | None = None,
+    *,
+    output_language: str = "en",
 ) -> dict[str, Any]:
     """Persist the exact omissions made by a tolerant compiler run."""
     unavailable = list(inputs.get("unavailable_artifacts", []))
@@ -614,6 +617,10 @@ def write_build_diagnostics(
     if not crawl_degraded and not unresolved and not unresolved_prototypes:
         lines += ["No dependency gaps were detected.", ""]
     (model_dir / "build-diagnostics.md").write_text(
-        "\n".join(lines), encoding="utf-8"
+        localize_markdown(
+            "\n".join(lines), output_language,
+            protected_values=(inputs, cda, model or {}, diagnostics),
+        ),
+        encoding="utf-8",
     )
     return diagnostics

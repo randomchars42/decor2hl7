@@ -38,6 +38,7 @@ these groups and helps readers choose the correct workflow.
 | How are dataset concepts, terminology, and quantities compiled? | [`topics/dataset-and-terminology.md`](topics/dataset-and-terminology.md) |
 | How are CDA constraints, datatypes, assertions, and validators compiled? | [`topics/cda-compilation-and-validation.md`](topics/cda-compilation-and-validation.md) |
 | How are mapping candidates, reviewed rules, defaults, and documentation produced? | [`topics/mapping-and-construction.md`](topics/mapping-and-construction.md) |
+| How is the CLI and generated-report language selected? | [`topics/output-language.md`](topics/output-language.md) |
 | How do site input, occurrences, runtime state, and delivery work? | [`topics/input-runtime-and-delivery.md`](topics/input-runtime-and-delivery.md) |
 | How does the complete setup-time pipeline work internally? | [`specification-to-mapping-pipeline.md`](specification-to-mapping-pipeline.md) |
 | What has been decided for the selected reference transaction? | [`reference-transaction.md`](reference-transaction.md) |

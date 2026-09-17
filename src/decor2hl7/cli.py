@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import argparse
+from contextvars import ContextVar
 import hashlib
 import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from . import __version__
+from .i18n import (
+    Translator,
+    configured_output_language,
+    localize_markdown,
+    localize_ui,
+)
 from .workspace import (
     copy_if_missing,
     init_workspace,
@@ -34,8 +41,36 @@ from .workspace import (
 )
 
 
+_OUTPUT_LANGUAGE: ContextVar[str] = ContextVar(
+    "decor2hl7_output_language", default="en"
+)
+
+
+class _LocalizedArgumentParser(argparse.ArgumentParser):
+    """Apply the selected locale to argparse-owned help text."""
+
+    def __init__(
+        self, *args: Any, output_language: str | None = None, **kwargs: Any,
+    ) -> None:
+        self._output_language = output_language
+        super().__init__(*args, **kwargs)
+
+    def _language(self) -> str:
+        return self._output_language or _OUTPUT_LANGUAGE.get()
+
+    def format_help(self) -> str:
+        return localize_ui(super().format_help(), self._language())
+
+    def format_usage(self) -> str:
+        return localize_ui(super().format_usage(), self._language())
+
+
 def _say(message: str) -> None:
-    print(message, file=sys.stderr)
+    print(localize_ui(message, _OUTPUT_LANGUAGE.get()), file=sys.stderr)
+
+
+def _out(message: str) -> None:
+    print(localize_ui(message, _OUTPUT_LANGUAGE.get()))
 
 
 def _root(args: argparse.Namespace) -> Path:
@@ -116,8 +151,12 @@ def _network(root: Path, ipv6_override: bool = False) -> tuple[str, str, bool, s
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    path = init_workspace(_root(args), args.prefix, args.language)
-    _say(f"workspace initialized: {path}")
+    path = init_workspace(
+        _root(args), args.prefix, args.language, args.output_language
+    )
+    _say(Translator(args.output_language).text(
+        "cli.workspace_initialized", path=path
+    ))
     return 0
 
 
@@ -130,13 +169,21 @@ def _filter(rows: list[dict[str, str]], needle: str | None) -> list[dict[str, st
 
 def _print_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
     """Print a compact terminal table with visibly separated columns."""
-    widths = [len(header) for header in headers]
+    localized_headers = [
+        localize_ui(header, _OUTPUT_LANGUAGE.get()) for header in headers
+    ]
+    widths = [len(header) for header in localized_headers]
     for row in rows:
         for index, value in enumerate(row):
             widths[index] = max(widths[index], len(value))
-    print("  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)))
+    print("  ".join(
+        header.ljust(widths[index])
+        for index, header in enumerate(localized_headers)
+    ))
     for row in rows:
-        print("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
+        print("  ".join(
+            value.ljust(widths[index]) for index, value in enumerate(row)
+        ))
 
 
 def cmd_list_versions(args: argparse.Namespace) -> int:
@@ -329,7 +376,9 @@ def cmd_build(args: argparse.Namespace) -> int:
         ],
     }
     write_json(model_dir / "model.json", model)
-    code_mapping = write_code_mapping(model_dir, model)
+    code_mapping = write_code_mapping(
+        model_dir, model, output_language=args.output_language
+    )
     cda = write_cda_model(
         inputs["templates"], model_dir, model,
         core_definition_paths=core_paths(release_spec_dir(root, release)),
@@ -343,6 +392,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         release_spec_dir(root, release), model_dir, inputs, release, transaction,
         selected_closure_templates(cda),
         selected_closure_template_revisions(cda),
+        output_language=args.output_language,
     )
     from .compile.schematron import attach_constraints
     if any(
@@ -370,9 +420,13 @@ def cmd_build(args: argparse.Namespace) -> int:
             },
         }
     cda_mapping = write_mapping_model(
-        inputs["mapping_evidence"], model_dir, model, cda
+        inputs["mapping_evidence"], model_dir, model, cda,
+        output_language=args.output_language,
     )
-    diagnostics = write_build_diagnostics(model_dir, inputs, cda, model)
+    diagnostics = write_build_diagnostics(
+        model_dir, inputs, cda, model,
+        output_language=args.output_language,
+    )
     model["meta"]["artifact_closure"].update({
         "degraded": diagnostics["status"] == "degraded",
         "build_degraded": [
@@ -467,7 +521,8 @@ def cmd_validate_cda(args: argparse.Namespace) -> int:
         if args.report else model_dir / "conformance-validation" / "cda-validation"
     )
     result = validate_cda_documents(
-        release_spec_dir(root, release), model_dir, documents, report
+        release_spec_dir(root, release), model_dir, documents, report,
+        output_language=args.output_language,
     )
     summary = result["summary"]
     print(json.dumps({
@@ -488,8 +543,6 @@ def cmd_propose_input(args: argparse.Namespace) -> int:
     model_dir = transaction_model_dir(root, release, transaction)
     model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build` first"))
     source_root = input_dir(root, args.input, required=True)
-    if source_root is None:
-        raise ValueError("input directory is required")
     proposal_dir, _, _, _ = _site_paths(
         root, release, transaction, getattr(args, "site_config", None)
     )
@@ -499,6 +552,7 @@ def cmd_propose_input(args: argparse.Namespace) -> int:
         source_root,
         model,
         join_column=args.join_column or "patient_id",
+        output_language=args.output_language,
     )
     _say(f"CSV mapped proposal: {sum(value is not None for value in proposals['csv']['fields'].values())}/{len(model.get('fields', {}))}")
     _say(f"input mapping proposals written to: {proposal_dir}")
@@ -587,14 +641,24 @@ def _merge_code_mapping_defaults(source: Path, destination: Path) -> int:
     return added
 
 
-def _copy_generated_guide(source: Path, destination: Path) -> None:
+def _copy_generated_guide(
+    source: Path,
+    destination: Path,
+    *,
+    output_language: str = "en",
+    protected_values: Iterable[Any] = (),
+) -> None:
     """Keep generated, read-only guidance beside the configuration it explains."""
     source = _require(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if source.resolve() == destination.resolve():
+    original = source.read_text(encoding="utf-8")
+    content = localize_markdown(
+        original, output_language, protected_values=protected_values
+    )
+    if source.resolve() == destination.resolve() and content == original:
         _say("kept    " + str(destination))
         return
-    destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    destination.write_text(content, encoding="utf-8")
     _say("updated " + str(destination))
 
 
@@ -619,6 +683,8 @@ def _write_mapping_guides(
     mapping: Mapping[str, Any],
     proposal: Mapping[str, Any],
     audit: Mapping[str, Any],
+    *,
+    output_language: str = "en",
 ) -> None:
     """Write guides for the actual reviewed mapping, retaining proposal evidence."""
     if not _mapping_decisions_differ(mapping, proposal):
@@ -635,7 +701,9 @@ def _write_mapping_guides(
                 # for the proposal guide. Allow one refresh before the next build.
                 source = model_dir / "cda-mapping.md"
             _copy_generated_guide(
-                source, destination.parent / guide_name
+                source, destination.parent / guide_name,
+                output_language=output_language,
+                protected_values=(model, cda, mapping, audit),
             )
         return
 
@@ -648,33 +716,46 @@ def _write_mapping_guides(
 
     rendered = {
         "cda-mapping.md": render_cda_mapping_markdown(
-            model, cda, mapping, audit
+            model, cda, mapping, audit, output_language=output_language
         ),
         "cda-mapping-trees.md": render_cda_mapping_trees_markdown(
-            model, cda, mapping, audit
+            model, cda, mapping, audit, output_language=output_language
         ),
         "cda-mapping-trees-extended.md": render_cda_mapping_extended_trees_markdown(
-            model, cda, mapping, audit
+            model, cda, mapping, audit, output_language=output_language
         ),
     }
     generated_details = _require(
         model_dir / "cda-mapping-details.md"
     ).read_text(encoding="utf-8")
-    accepted_start = generated_details.find("# Accepted mappings\n")
-    analysis_start = generated_details.find("# Datapoint analysis\n")
+    accepted_start = max(
+        generated_details.find("# Accepted mappings\n"),
+        generated_details.find("# Akzeptierte mappings\n"),
+    )
+    analysis_candidates = [
+        generated_details.find("# Datapoint analysis\n"),
+        generated_details.find("# Datapoint-Analyse\n"),
+    ]
+    analysis_start = next(
+        (index for index in analysis_candidates if index >= 0), -1
+    )
     if 0 <= accepted_start < analysis_start:
         accepted = render_accepted_cda_mappings_markdown(
-            model, cda, mapping
+            model, cda, mapping, output_language=output_language
         ).rstrip()
-        rendered["cda-mapping-details.md"] = (
-            generated_details[:accepted_start]
-            + accepted
-            + "\n\n# Generated proposal evidence\n\n"
-            + "The following audit explains what the compiler could establish "
-              "without reviewer decisions. It may therefore show a reviewed "
-              "mapping above as unselected or non-executable in the generated "
-              "proposal.\n\n"
-            + generated_details[analysis_start:]
+        rendered["cda-mapping-details.md"] = localize_markdown(
+            (
+                generated_details[:accepted_start]
+                + accepted
+                + "\n\n# Generated proposal evidence\n\n"
+                + "The following audit explains what the compiler could establish "
+                "without reviewer decisions. It may therefore show a reviewed "
+                "mapping above as unselected or non-executable in the generated "
+                "proposal.\n\n"
+                + generated_details[analysis_start:]
+            ),
+            output_language,
+            protected_values=(model, cda, mapping, proposal, audit),
         )
     else:
         rendered["cda-mapping-details.md"] = generated_details
@@ -827,7 +908,8 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         else {"fields": {}, "groups": {}}
     )
     _write_mapping_guides(
-        model_dir, destination, model, cda, mapping, proposal, audit
+        model_dir, destination, model, cda, mapping, proposal, audit,
+        output_language=args.output_language,
     )
     lock = destination.parent / "mapping-lock.json"
     if reset or not lock.exists():
@@ -846,6 +928,8 @@ def cmd_init_site_config(args: argparse.Namespace) -> int:
         root, release, transaction, getattr(args, "site_config", None)
     )
     model_dir = transaction_model_dir(root, release, transaction)
+    model_path = model_dir / "model.json"
+    model = load_json(model_path) if model_path.is_file() else {}
     proposal_dir.mkdir(parents=True, exist_ok=True)
     for name, destination in (
         ("csv-mapping", csv_destination), ("codes-mapping", codes_destination)
@@ -865,7 +949,12 @@ def cmd_init_site_config(args: argparse.Namespace) -> int:
         guide_source = proposal_dir / f"{name}.md"
         if name == "codes-mapping" and not guide_source.exists():
             guide_source = model_dir / "codes-mapping.md"
-        _copy_generated_guide(guide_source, destination.with_suffix(".md"))
+        _copy_generated_guide(
+            guide_source,
+            destination.with_suffix(".md"),
+            output_language=args.output_language,
+            protected_values=(model, load_json(source)),
+        )
     if not site.exists():
         csv_proposal = load_json(proposal_dir / "csv-mapping.proposed.json")
         write_json(site, _site_scaffold(root, release, transaction, csv_proposal))
@@ -900,6 +989,43 @@ def _runtime_files(
     return model, cda, csv_mapping, codes_mapping, cda_mapping, site
 
 
+def _verify_compiled_sources(
+    root: Path, cda: Mapping[str, Any],
+) -> tuple[list[str], dict[str, Any] | None]:
+    """Run setup-time source checks without importing them into runtime validation."""
+    from .cda.parity import (
+        declared_endpoint_parity,
+        endpoint_parity_errors,
+        verify_compiled_against_artdecor,
+    )
+    from .compile.artifacts import selected_closure_templates
+
+    try:
+        inputs = _compiler_inputs(root)
+        template_paths = inputs["templates"]
+        errors = verify_compiled_against_artdecor(cda, template_paths)
+        parity = declared_endpoint_parity(
+            template_paths, cda, selected_closure_templates(cda)
+        )
+        errors.extend(endpoint_parity_errors(parity))
+        return errors, parity
+    except ValueError as error:
+        return [str(error)], None
+
+
+def _print_source_parity(parity: Mapping[str, Any] | None) -> None:
+    if parity is None:
+        _out("CDA source endpoint parity: unavailable")
+        return
+    _out(
+        "CDA source endpoint parity: "
+        f"{parity.get('compiled', 0)}/{parity.get('declared', 0)} compiled; "
+        f"{len(parity.get('fixed_structural_attributes', []))} fixed structural; "
+        f"{len(parity.get('reviewed_branch_replacements', []))} reviewed replacements; "
+        f"{len(parity.get('unexpected_missing', []))} unexpected missing"
+    )
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     from . import validate
     from .bindings import required_unmapped_null_flavor
@@ -914,34 +1040,30 @@ def cmd_check(args: argparse.Namespace) -> int:
     errors = verify_manifest(release_spec_dir(root, release))
     errors.extend(validate.verify_compiled_cda(cda))
     errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
-    try:
-        inputs = _compiler_inputs(root)
-        errors.extend(
-            validate.verify_compiled_against_artdecor(cda, inputs["templates"])
-        )
-    except ValueError as verification_error:
-        errors.append(str(verification_error))
-    print(f"model datapoints: {len(model.get('fields', {}))}")
-    print(f"CSV mapped: {sum(value is not None for value in csv_mapping.get('fields', {}).values())}")
-    print(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
-    print(f"CDA narrative-only mapped: {len(narrative_blocks(cda_mapping))}")
-    print(f"CDA target defaults: {len(cda_mapping.get('target_defaults', {}))}")
+    source_errors, parity = _verify_compiled_sources(root, cda)
+    errors.extend(source_errors)
+    _out(f"model datapoints: {len(model.get('fields', {}))}")
+    _out(f"CSV mapped: {sum(value is not None for value in csv_mapping.get('fields', {}).values())}")
+    _out(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
+    _out(f"CDA narrative-only mapped: {len(narrative_blocks(cda_mapping))}")
+    _out(f"CDA target defaults: {len(cda_mapping.get('target_defaults', {}))}")
     try:
         completion_flavor = required_unmapped_null_flavor(cda_mapping)
     except ValueError:
         completion_flavor = "invalid"
-    print(f"required unmapped CDA leaves: nullFlavor={completion_flavor}")
-    print(f"CDA unresolved templates: {len(cda.get('unresolved_templates', []))}")
+    _out(f"required unmapped CDA leaves: nullFlavor={completion_flavor}")
+    _out(f"CDA unresolved templates: {len(cda.get('unresolved_templates', []))}")
+    _print_source_parity(parity)
     closure = model.get("meta", {}).get("artifact_closure", {})
     unavailable = closure.get("unavailable_artifacts", []) if isinstance(closure, Mapping) else []
     if unavailable:
-        print(f"build warning: {len(unavailable)} unavailable dependency artifacts")
+        _out(f"build warning: {len(unavailable)} unavailable dependency artifacts")
     if errors:
-        print("configuration errors:")
+        _out("configuration errors:")
         for message in errors:
-            print(f"  - {message}")
+            _out(f"  - {message}")
         return 1
-    print("configuration: OK")
+    _out("configuration: OK")
     return 0
 
 
@@ -972,11 +1094,8 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
         model, cda, neutral_csv, cda_mapping, code_mapping_defaults(model), site,
         require_site_configuration=False,
     ))
-    try:
-        inputs = _compiler_inputs(root)
-        errors.extend(validate.verify_compiled_against_artdecor(cda, inputs["templates"]))
-    except ValueError as error:
-        errors.append(str(error))
+    source_errors, parity = _verify_compiled_sources(root, cda)
+    errors.extend(source_errors)
     lock_path = mapping_path.parent / "mapping-lock.json"
     if lock_path.exists():
         lock = load_json(lock_path)
@@ -989,32 +1108,33 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
             errors.append("mapping-lock.json names a different transaction OID")
     else:
         errors.append("mapping-lock.json is missing beside cda-mapping.json")
-    print(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
-    print(f"CDA narrative-only mapped: {len(narrative_blocks(cda_mapping))}")
-    print(f"CDA target defaults: {len(cda_mapping.get('target_defaults', {}))}")
+    _out(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
+    _out(f"CDA narrative-only mapped: {len(narrative_blocks(cda_mapping))}")
+    _out(f"CDA target defaults: {len(cda_mapping.get('target_defaults', {}))}")
+    _print_source_parity(parity)
     site_requirements = cda_mapping.get("site_requirements", {})
     site_requirements = (
         site_requirements if isinstance(site_requirements, Mapping) else {}
     )
-    print(f"CDA site requirements: {len(site_requirements)}")
+    _out(f"CDA site requirements: {len(site_requirements)}")
     for name, rule in sorted(site_requirements.items()):
         channel = (
             str(rule.get("channel") or "?")
             if isinstance(rule, Mapping) else "?"
         )
-        print(f"site config required: cda.{channel}[{name!r}]")
+        _out(f"site config required: cda.{channel}[{name!r}]")
     try:
         completion_flavor = required_unmapped_null_flavor(cda_mapping)
     except ValueError:
         completion_flavor = "invalid"
-    print(f"required unmapped CDA leaves: nullFlavor={completion_flavor}")
-    print(f"mapping: {mapping_path}")
+    _out(f"required unmapped CDA leaves: nullFlavor={completion_flavor}")
+    _out(f"mapping: {mapping_path}")
     if errors:
-        print("CDA mapping errors:")
+        _out("CDA mapping errors:")
         for message in errors:
-            print(f"  - {message}")
+            _out(f"  - {message}")
         return 1
-    print("CDA mapping: OK")
+    _out("CDA mapping: OK")
     return 0
 
 
@@ -1063,7 +1183,10 @@ def cmd_test_cda_mapping(args: argparse.Namespace) -> int:
     )
     _require(test_dir / "expected.json", "run `decor2hl7 setup-test` first")
     out_dir = _explicit_path(args.out) if args.out else test_dir / "out"
-    result, status = run_fixture(test_dir, out_dir, model, cda, cda_mapping)
+    result, status = run_fixture(
+        test_dir, out_dir, model, cda, cda_mapping,
+        output_language=args.output_language,
+    )
     print(json.dumps({
         "status": result["status"],
         "documents": len(result["documents"]),
@@ -1077,27 +1200,26 @@ def cmd_check_input(args: argparse.Namespace) -> int:
 
     root = _root(args)
     source_root = input_dir(root, args.input, required=True)
-    assert source_root is not None
     model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(
         root, args.cda_mapping, args.site_config
     )
     errors = validate.verify_compiled_cda(cda)
     errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
     if errors:
-        print("configuration errors:")
+        _out("configuration errors:")
         for error in errors:
-            print(f"  - {error}")
+            _out(f"  - {error}")
         return 1
     records = data.ingest(source_root, model, csv_mapping, codes_mapping, site)
     summary = validate.validate_records(records, model)
-    print(f"input: {source_root}")
-    print(f"records: {summary['records']}")
-    print(f"errors: {summary['errors']}")
-    print(f"warnings: {summary['warnings']}")
+    _out(f"input: {source_root}")
+    _out(f"records: {summary['records']}")
+    _out(f"errors: {summary['errors']}")
+    _out(f"warnings: {summary['warnings']}")
     for record in records:
         for problem in record.get("problems", []):
             key = record.get("key", "?")
-            print(f"  {problem.get('severity', 'error')}: {key}: {problem.get('path', '')}: {problem.get('message', '')}")
+            _out(f"  {problem.get('severity', 'error')}: {key}: {problem.get('path', '')}: {problem.get('message', '')}")
     return 0 if summary["errors"] == 0 else 1
 
 
@@ -1197,7 +1319,6 @@ def _transform(
     if config_errors:
         raise ValueError("configuration is invalid:\n" + "\n".join("  " + item for item in config_errors))
     source_root = input_dir(root, input_override, required=True)
-    assert source_root is not None
     records = data.ingest(source_root, model, csv_mapping, codes_mapping, site)
     validation = validate.validate_records(records, model)
     out_dir = transaction_out_dir(root, release, transaction)
@@ -1345,184 +1466,218 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def _add_network_override(parser: argparse.ArgumentParser) -> None:
+def _add_network_override(
+    parser: argparse.ArgumentParser, translator: Translator,
+) -> None:
     parser.add_argument(
         "--ipv6", action="store_true",
-        help="diagnostic override; ART-DECOR uses IPv4 by default",
+        help=translator.text("cli.ipv6_help"),
     )
 
 
 def _add_runtime_config_overrides(
-    parser: argparse.ArgumentParser, *, cda: bool = True, site: bool = True
+    parser: argparse.ArgumentParser,
+    translator: Translator,
+    *,
+    cda: bool = True,
+    site: bool = True,
 ) -> None:
     if cda:
         parser.add_argument(
             "--cda-mapping",
-            help="cda-mapping.json (or its directory); overrides the selected workspace bundle",
+            help=translator.text("cli.cda_mapping_help"),
         )
     if site:
         parser.add_argument(
             "--site-config",
-            help="site config bundle directory (or site.json); CSV/code mappings are read beside it",
+            help=translator.text("cli.site_config_help"),
         )
 
 
-def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="decor2hl7")
+def parser(output_language: str = "en") -> argparse.ArgumentParser:
+    translator = Translator(output_language)
+    t = translator.text
+    p = _LocalizedArgumentParser(
+        prog="decor2hl7", output_language=output_language
+    )
     p.add_argument("--version", action="version", version=__version__)
-    p.add_argument("--root", default=".", help="workspace root (default: current directory)")
+    p.add_argument("--root", default=".", help=t("cli.root_help"))
+    p.add_argument(
+        "--output-language",
+        metavar="LANG",
+        help=t("cli.output_language_help"),
+    )
     sub = p.add_subparsers(dest="command", required=True)
 
-    q = sub.add_parser("init", help="create the workspace skeleton")
-    q.add_argument("--prefix", default="aktin-")
-    q.add_argument("--language", default="de-DE")
+    q = sub.add_parser("init", help=t("cli.init_help"))
+    q.add_argument("--prefix", default="aktin-", help=t("cli.prefix_help"))
+    q.add_argument(
+        "--language", default="de-DE", help=t("cli.init_source_language_help")
+    )
     q.set_defaults(func=cmd_init)
 
-    q = sub.add_parser("list-versions", help="list ART-DECOR project release keys")
-    q.add_argument("filter", nargs="?", help="optional text filter")
-    _add_network_override(q)
+    q = sub.add_parser("list-versions", help=t("cli.list_versions_help"))
+    q.add_argument("filter", nargs="?", help=t("cli.filter_help"))
+    _add_network_override(q, translator)
     q.set_defaults(func=cmd_list_versions)
 
-    q = sub.add_parser("set-version", help="select an ART-DECOR release by KEY from `list-versions`")
-    q.add_argument("identifier")
-    _add_network_override(q)
+    q = sub.add_parser("set-version", help=t("cli.set_version_help"))
+    q.add_argument("identifier", help=t("cli.identifier_help"))
+    _add_network_override(q, translator)
     q.set_defaults(func=cmd_set_version)
 
-    q = sub.add_parser("list-transactions", help="list transaction keys for the selected release")
-    q.add_argument("filter", nargs="?", help="optional text filter")
-    _add_network_override(q)
+    q = sub.add_parser("list-transactions", help=t("cli.list_transactions_help"))
+    q.add_argument("filter", nargs="?", help=t("cli.filter_help"))
+    _add_network_override(q, translator)
     q.set_defaults(func=cmd_list_transactions)
 
-    q = sub.add_parser("set-transaction", help="select a transaction by KEY from `list-transactions`")
-    q.add_argument("identifier")
-    _add_network_override(q)
+    q = sub.add_parser("set-transaction", help=t("cli.set_transaction_help"))
+    q.add_argument("identifier", help=t("cli.identifier_help"))
+    _add_network_override(q, translator)
     q.set_defaults(func=cmd_set_transaction)
 
-    q = sub.add_parser("fetch", help="fetch the selected transaction specification to closure")
+    q = sub.add_parser("fetch", help=t("cli.fetch_help"))
     fetch_network = q.add_mutually_exclusive_group()
-    fetch_network.add_argument("--retry-missing", action="store_true")
+    fetch_network.add_argument(
+        "--retry-missing", action="store_true", help=t("cli.retry_missing_help")
+    )
     fetch_network.add_argument(
         "--offline", action="store_true",
-        help="use cached specification files only; make no HTTP requests",
+        help=t("cli.offline_help"),
     )
-    q.add_argument("--max-requests", type=int, default=1500)
+    q.add_argument(
+        "--max-requests", type=int, default=1500,
+        help=t("cli.max_requests_help"),
+    )
     q.add_argument(
         "--fail-on-degraded", action="store_true",
-        help=(
-            "return nonzero when the retrieval closure is degraded; the crawl "
-            "cannot yet tell which gaps a build consumes, so use "
-            "`build --fail-on-degraded` to gate on that"
-        ),
+        help=t("cli.fetch_degraded_help"),
     )
-    _add_network_override(q)
+    _add_network_override(q, translator)
     q.set_defaults(func=cmd_fetch)
 
-    q = sub.add_parser("build", help="compile ART-DECOR models and CDA mapping proposal")
+    q = sub.add_parser("build", help=t("cli.build_help"))
     q.add_argument(
         "--fail-on-degraded", action="store_true",
-        help=(
-            "return nonzero when a degraded artifact is consulted by this build "
-            "(build-diagnostics.json `build_degraded`)"
-        ),
+        help=t("cli.build_degraded_help"),
     )
     q.add_argument(
         "--strict-specializations", action="store_true",
-        help=(
-            "reject a CDA template whose explicit constraints weaken a declared "
-            "SPEC parent"
-        ),
+        help=t("cli.strict_specializations_help"),
     )
     q.set_defaults(func=cmd_build)
 
-    q = sub.add_parser("propose-input", help="inspect CSV input and propose CSV/code mappings")
-    q.add_argument("--input", help="CSV input directory; overrides decor2hl7.json input.directory")
-    q.add_argument("--join-column", default="patient_id")
-    _add_runtime_config_overrides(q, cda=False)
+    q = sub.add_parser("propose-input", help=t("cli.propose_input_help"))
+    q.add_argument("--input", help=t("cli.input_help"))
+    q.add_argument(
+        "--join-column", default="patient_id", help=t("cli.join_column_help")
+    )
+    _add_runtime_config_overrides(q, translator, cda=False)
     q.set_defaults(func=cmd_propose_input)
 
-    q = sub.add_parser("init-cda-mapping", help="initialize the shareable dataset-to-CDA mapping bundle")
-    _add_runtime_config_overrides(q, site=False)
+    q = sub.add_parser("init-cda-mapping", help=t("cli.init_mapping_help"))
+    _add_runtime_config_overrides(q, translator, site=False)
     q.add_argument(
         "--reset", action="store_true",
-        help=(
-            "replace the reviewed mapping with the current generated proposal "
-            "and refresh its model lock"
-        ),
+        help=t("cli.reset_help"),
     )
     q.set_defaults(func=cmd_init_cda_mapping)
 
-    q = sub.add_parser("init-site-config", help="initialize local CSV/code/site configuration")
-    _add_runtime_config_overrides(q, cda=False)
+    q = sub.add_parser("init-site-config", help=t("cli.init_site_help"))
+    _add_runtime_config_overrides(q, translator, cda=False)
     q.set_defaults(func=cmd_init_site_config)
 
-    q = sub.add_parser("check", help="check downloads, compiled models and configuration")
-    _add_runtime_config_overrides(q)
+    q = sub.add_parser("check", help=t("cli.check_help"))
+    _add_runtime_config_overrides(q, translator)
     q.set_defaults(func=cmd_check)
 
-    q = sub.add_parser("check-cda-mapping", help="validate a shareable CDA mapping without site input")
-    _add_runtime_config_overrides(q, site=False)
+    q = sub.add_parser("check-cda-mapping", help=t("cli.check_mapping_help"))
+    _add_runtime_config_overrides(q, translator, site=False)
     q.set_defaults(func=cmd_check_cda_mapping)
 
     q = sub.add_parser(
         "setup-test",
-        help="prepare isolated generated or authored CSV/config mapping test input",
+        help=t("cli.setup_test_help"),
     )
-    q.add_argument("--test-dir", help="test fixture directory; defaults to test/<release>/<transaction>")
+    q.add_argument("--test-dir", help=t("cli.test_dir_help"))
     q.add_argument(
         "--scenario",
-        help="authored scenario-set directory containing scenario.json and input/",
+        help=t("cli.scenario_help"),
     )
-    q.add_argument("--force", action="store_true", help="replace generated input/config/expected files")
-    _add_runtime_config_overrides(q, site=False)
+    q.add_argument("--force", action="store_true", help=t("cli.force_help"))
+    _add_runtime_config_overrides(q, translator, site=False)
     q.set_defaults(func=cmd_setup_test)
 
-    q = sub.add_parser("test-cda-mapping", help="run the isolated CDA mapping fixture")
-    q.add_argument("--test-dir", help="test fixture directory; defaults to test/<release>/<transaction>")
-    q.add_argument("--out", help="result directory; defaults to the fixture's out directory")
-    _add_runtime_config_overrides(q, site=False)
+    q = sub.add_parser("test-cda-mapping", help=t("cli.test_mapping_help"))
+    q.add_argument("--test-dir", help=t("cli.test_dir_help"))
+    q.add_argument("--out", help=t("cli.out_help"))
+    _add_runtime_config_overrides(q, translator, site=False)
     q.set_defaults(func=cmd_test_cda_mapping)
 
     q = sub.add_parser(
         "validate-cda",
-        help="validate CDA XML against the pinned CDA/SDTC XSD and generated Schematron",
+        help=t("cli.validate_cda_help"),
     )
-    q.add_argument("files", nargs="+", help="CDA XML document(s) to validate")
-    q.add_argument("--report", help="report path without extension; defaults below model/")
+    q.add_argument("files", nargs="+", help=t("cli.files_help"))
+    q.add_argument("--report", help=t("cli.report_help"))
     q.set_defaults(func=cmd_validate_cda)
 
-    q = sub.add_parser("check-input", help="validate the external CSV input snapshot without emitting CDA")
-    q.add_argument("--input", help="CSV input directory; overrides decor2hl7.json input.directory")
-    _add_runtime_config_overrides(q)
+    q = sub.add_parser("check-input", help=t("cli.check_input_help"))
+    q.add_argument("--input", help=t("cli.input_help"))
+    _add_runtime_config_overrides(q, translator)
     q.set_defaults(func=cmd_check_input)
 
-    q = sub.add_parser("transform", help="read, normalize, validate and emit changed documents")
-    q.add_argument("--input", help="CSV input directory; overrides decor2hl7.json input.directory")
-    _add_runtime_config_overrides(q)
+    q = sub.add_parser("transform", help=t("cli.transform_help"))
+    q.add_argument("--input", help=t("cli.input_help"))
+    _add_runtime_config_overrides(q, translator)
     q.set_defaults(func=cmd_transform)
 
-    q = sub.add_parser("send", help="send emitted documents not already recorded as sent")
+    q = sub.add_parser("send", help=t("cli.send_help"))
     q.add_argument("files", nargs="*")
-    _add_runtime_config_overrides(q, cda=False)
+    _add_runtime_config_overrides(q, translator, cda=False)
     q.set_defaults(func=cmd_send)
 
-    q = sub.add_parser("run", help="perform the runtime pipeline")
-    q.add_argument("--input", help="CSV input directory; overrides decor2hl7.json input.directory")
-    q.add_argument("--send", action="store_true")
-    _add_runtime_config_overrides(q)
+    q = sub.add_parser("run", help=t("cli.run_help"))
+    q.add_argument("--input", help=t("cli.input_help"))
+    q.add_argument("--send", action="store_true", help=t("cli.send_flag_help"))
+    _add_runtime_config_overrides(q, translator)
     q.set_defaults(func=cmd_run)
 
-    q = sub.add_parser("status", help="show sent/pending document state")
+    q = sub.add_parser("status", help=t("cli.status_help"))
     q.set_defaults(func=cmd_status)
     return p
 
 
+def _bootstrap_output_language(argv: Sequence[str] | None) -> str:
+    values = list(sys.argv[1:] if argv is None else argv)
+    bootstrap = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    bootstrap.add_argument("--root", default=".")
+    bootstrap.add_argument("--output-language")
+    known, _unknown = bootstrap.parse_known_args(values)
+    root = Path(known.root).resolve()
+    path = root / "decor2hl7.json"
+    settings = load_json(path) if path.is_file() else None
+    return configured_output_language(settings, known.output_language)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    args = parser().parse_args(argv)
     try:
-        return int(args.func(args))
-    except KeyboardInterrupt:
-        _say("aborted by user")
-        return 130
+        output_language = _bootstrap_output_language(argv)
     except (OSError, ValueError) as error:
-        _say(f"error: {error}")
+        _say(Translator().text("cli.error", message=error))
         return 2
+    token = _OUTPUT_LANGUAGE.set(output_language)
+    try:
+        args = parser(output_language).parse_args(argv)
+        args.output_language = output_language
+        translator = Translator(output_language)
+        try:
+            return int(args.func(args))
+        except KeyboardInterrupt:
+            _say(translator.text("cli.aborted"))
+            return 130
+        except (OSError, ValueError) as error:
+            _say(translator.text("cli.error", message=error))
+            return 2
+    finally:
+        _OUTPUT_LANGUAGE.reset(token)

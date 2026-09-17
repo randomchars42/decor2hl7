@@ -14,3 +14,6 @@ Describe the observable change and its scope.
 ## Verification
 
 List the checks and tests run.
+
+- [ ] Repository-contained checks passed (`make check-unit`)
+- [ ] Companion reference checks passed (`make check-reference`), or the change is explicitly not ready for the full gate

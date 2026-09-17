@@ -645,20 +645,28 @@ def _ensure_occurrence(
     source: str,
     row_number: int,
 ) -> dict[str, Any]:
+    if not chain:
+        raise ValueError("an occurrence chain must contain at least one repeat")
+    if len(keys) != len(chain):
+        raise ValueError("occurrence keys must match the repeat chain")
     current = instances
-    selected: dict[str, Any] | None = None
+    selected: dict[str, Any] = {}
     for depth, repeat in enumerate(chain):
         key = keys[depth]
         bucket = current.setdefault(str(repeat), [])
-        selected = next((item for item in bucket if str(item.get("key") or "") == key), None)
-        if selected is None:
+        existing = next(
+            (item for item in bucket if str(item.get("key") or "") == key),
+            None,
+        )
+        if existing is None:
             selected = {
                 "key": key, "source": source, "row": row_number,
                 "values": {}, "instances": {},
             }
             bucket.append(selected)
+        else:
+            selected = existing
         current = selected.setdefault("instances", {})
-    assert selected is not None
     return selected
 
 def ingest(

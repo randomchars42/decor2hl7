@@ -16,6 +16,7 @@ from decor2hl7.cda.datatypes import (
 )
 from decor2hl7.cda.compile import compile_cda
 from decor2hl7.cda.core import index_definitions
+from decor2hl7.cda.parity import verify_compiled_against_artdecor
 from decor2hl7.compile.mapping import cda_mapping_audit
 from decor2hl7.bindings import (
     non_null_requirement_problems,
@@ -1525,7 +1526,7 @@ class CdaDatatypeTests(unittest.TestCase):
             section_text_name, _ = target_at(
                 compiled, "/hl7:section/hl7:text"
             )
-            self.assertEqual(compiled["version"], 5)
+            self.assertEqual(compiled["version"], 6)
             self.assertEqual(text_target["content_role"], "linked_narrative")
             self.assertEqual(
                 text_target["narrative_link"],
@@ -1706,7 +1707,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 {tuple(target["locations"]): target["fixed"]["root"] for target in template_ids},
                 {("0.0.0",): "branch-a", ("0.1.0",): "branch-b"},
             )
-            self.assertEqual(validate.verify_compiled_against_artdecor(compiled, [source]), [])
+            self.assertEqual(verify_compiled_against_artdecor(compiled, [source]), [])
 
     def test_value_set_versions_and_cda_binding_identity_are_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2228,7 +2229,7 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertTrue(target["writable"])
             self.assertEqual(target["value_representation"]["xsi_type"], "ST")
             self.assertEqual(
-                validate.verify_compiled_against_artdecor(compiled, [source]), []
+                verify_compiled_against_artdecor(compiled, [source]), []
             )
 
             payload, problems = cda.emit(

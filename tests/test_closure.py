@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -34,11 +35,10 @@ EXPECTED_UNRESOLVED_TEMPLATES = 0
 EXPECTED_UNRESOLVED_PROTOTYPES = 6
 ASSEMBLED_SHA256 = "deb0b22a7ec2b53c1d4af8f73f9e023abe8316539e242624677b1b509e11fc0b"
 SCHEMATRON_SHA256 = "517ba6a4dc62ea02de3d71946ea38520b3073528264872de75229c269f224e55"
-VALIDATOR_SHA256 = "abbadf9200e0d6519308281a1c76692672c645298d40b9b4d22dccde7c93cbb7"
 
 
 class ReferenceClosureTests(unittest.TestCase):
-    """Regression guards for the optional local companion reference workspace."""
+    """Fail-closed regression guards for the companion reference workspace."""
 
     workspace: Path
     model_dir: Path
@@ -57,12 +57,13 @@ class ReferenceClosureTests(unittest.TestCase):
             cls.model_dir / "mapping-audit.json",
             cls.model_dir / "cda-mapping.proposed.json",
             cls.model_dir / "model.json",
+            cls.model_dir / "conformance-validation" / "cda-template.xsl",
             cls.model_dir / "conformance-validation" / "validator-manifest.json",
         ]
         missing = [str(path) for path in required if not path.is_file()]
         if missing:
-            raise unittest.SkipTest(
-                "local companion reference workspace is unavailable: "
+            raise RuntimeError(
+                "required companion reference workspace is unavailable: "
                 + ", ".join(missing)
             )
         selection = cls._load(cls.workspace / "decor2hl7.json")
@@ -71,7 +72,7 @@ class ReferenceClosureTests(unittest.TestCase):
             or selection.get("transaction", {}).get("key")
             != REFERENCE_TRANSACTION
         ):
-            raise unittest.SkipTest(
+            raise RuntimeError(
                 "local companion workspace has a different selected release/transaction"
             )
 
@@ -246,7 +247,11 @@ class ReferenceClosureTests(unittest.TestCase):
         self.assertEqual(definitions, selected)
         self.assertEqual(manifest.get("assembled_sha256"), ASSEMBLED_SHA256)
         self.assertEqual(manifest.get("schematron_sha256"), SCHEMATRON_SHA256)
-        self.assertEqual(manifest.get("validator_sha256"), VALIDATOR_SHA256)
+        validator = (
+            self.model_dir / "conformance-validation" / "cda-template.xsl"
+        )
+        validator_sha256 = hashlib.sha256(validator.read_bytes()).hexdigest()
+        self.assertEqual(manifest.get("validator_sha256"), validator_sha256)
 
     def test_validator_generation_message_ceiling(self) -> None:
         manifest = self._load(
