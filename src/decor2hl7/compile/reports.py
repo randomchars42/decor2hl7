@@ -46,7 +46,8 @@ def _audit_targets(audit: Mapping[str, Any]) -> dict[str, list[str]]:
 
 
 def _leaf(value: Any) -> str:
-    return str(value or "").split("/")[-1].split(":")[-1].split("[", 1)[0]
+    segment = str(value or "").split("/")[-1].split("[", 1)[0]
+    return segment.split(":")[-1]
 
 
 def _section_of(

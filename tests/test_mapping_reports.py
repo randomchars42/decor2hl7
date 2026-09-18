@@ -11,6 +11,7 @@ from decor2hl7.compile.transaction import compile_model
 from decor2hl7.compile.artifacts import write_build_diagnostics
 from decor2hl7.compile.reports import (
     _gap_trace,
+    _leaf,
     coverage_headline_counts,
     format_coverage_headline,
     render_accepted_cda_mappings_markdown,
@@ -21,6 +22,12 @@ from decor2hl7.compile.reports import (
 
 
 class MappingReportTests(unittest.TestCase):
+    def test_leaf_label_ignores_namespaces_inside_xpath_predicates(self) -> None:
+        self.assertEqual(
+            _leaf("hl7:observation/hl7:effectiveTime[not(@xsi:type)]"),
+            "effectiveTime",
+        )
+
     def test_reports_reject_conflicting_logical_and_physical_targets(self) -> None:
         model = {"fields": {"finding": {"name": "Finding"}}, "order": ["finding"]}
         compiled = {
