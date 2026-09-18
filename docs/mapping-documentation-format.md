@@ -192,8 +192,13 @@ adds only applicable indented traceability lines:
 - `S:` gives the source concept OID, stable dataset path, type and cardinality;
 - `T:` gives the owning template and revision, explicitly template-relative
   XPath, CDA datatype/cardinality/conformance, and required ValueSet;
+- `A:` preserves the exact ART-DECOR `Beschreibung` on the target node or an
+  ancestor from the same owning template, together with that annotation's
+  template-relative path. It is owner-authored review evidence, not executable
+  mapping semantics;
 - `R:` explains non-trivial executable behavior: transforms, structural rules,
-  exact target defaults, and site-owned requirements;
+  active required-leaf completion, exact target defaults, and site-owned
+  requirements;
 - `G:` records an intentional non-transmission decision or the audit gate and
   smallest evidence that can reopen an unresolved mapping.
 

@@ -21,6 +21,7 @@ from ..bindings import (
     is_fallback_if_active,
     non_null_requirement_problems,
     required_unmapped_null_flavor,
+    resolve_required_unmapped_null_flavor,
     target_default_values,
     unwrap_fallback_if_active,
 )
@@ -1548,19 +1549,8 @@ def _render_node_once(
         # renderer may use it in place of required child content.
         target = completion_target
         if target is not None:
-            legal_values = [
-                str(value)
-                for value in target.get("null_flavor_exceptions", [])
-                if str(value) in NULL_FLAVORS
-            ]
-            selected_flavor = next(
-                (
-                    value for value in (
-                        null_flavor, "UNK", "NAV", "NI", "OTH",
-                    )
-                    if value in legal_values
-                ),
-                legal_values[0] if legal_values else null_flavor,
+            selected_flavor = resolve_required_unmapped_null_flavor(
+                target, null_flavor,
             )
             _write_value(
                 element, {"nullFlavor": selected_flavor}, target, node,

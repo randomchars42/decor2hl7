@@ -110,6 +110,12 @@ class MappingReportTests(unittest.TestCase):
         unused = element("hl7:text", datatype="ST", targets=["Referral.unused"])
         section = element(
             "hl7:section", [candidate, unused], target="Referral.section", min=1,
+            description="Referral information supplied by the sender.",
+            origin={
+                "template_id": "referral-template",
+                "template_effective_date": "2026-01-01",
+                "path": "hl7:section",
+            },
         )
         document = element(
             "hl7:ClinicalDocument",
@@ -149,12 +155,16 @@ class MappingReportTests(unittest.TestCase):
                     "locations": ["0.1.0.0"], "path": "hl7:section/hl7:code",
                     "datatype": "CE", "kind": "element", "description": "Referral code",
                     "template_name": "Referral", "template_display_name": "Referral",
+                    "template_id": "referral-template",
+                    "template_effective_date": "2026-01-01",
                     "writable": True, "fixed": {}, "system_value": None,
                 },
                 "Referral.unused": {
                     "locations": ["0.1.0.1"], "path": "hl7:section/hl7:text",
                     "datatype": "ST", "kind": "element", "description": "Unused text",
                     "template_name": "Referral", "template_display_name": "Referral",
+                    "template_id": "referral-template",
+                    "template_effective_date": "2026-01-01",
                     "writable": True, "fixed": {}, "system_value": None,
                     "min": 1, "mandatory": True,
                 },
@@ -224,6 +234,27 @@ class MappingReportTests(unittest.TestCase):
             extended_trees,
         )
         self.assertIn("## Complete physical CDA coverage tree", extended_trees)
+        self.assertIn(
+            "A: hl7:section — Referral information supplied by the sender.",
+            extended_trees,
+        )
+        unused["mandatory"] = False
+        cda_model["targets"]["Referral.unused"].update({
+            "mandatory": False,
+            "permits_null_flavor": True,
+            "null_flavor_exceptions": ["UNK"],
+        })
+        completion_trees = render_cda_mapping_extended_trees_markdown(
+            model, cda_model, mapping_cfg, audit
+        )
+        self.assertIn(
+            'R: defaults.required_unmapped → nullFlavor="UNK"',
+            completion_trees,
+        )
+        unused["mandatory"] = True
+        cda_model["targets"]["Referral.unused"]["mandatory"] = True
+        cda_model["targets"]["Referral.unused"].pop("permits_null_flavor")
+        cda_model["targets"]["Referral.unused"].pop("null_flavor_exceptions")
         logical_mapping = {
             "fields": {
                 **mapping_cfg["fields"],

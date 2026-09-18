@@ -12,6 +12,7 @@ from xml.sax.saxutils import escape, quoteattr
 from ..bindings import (physical_target_name, required_construction_gap_targets,
                         required_construction_gaps,
                         required_unmapped_null_flavor,
+                        resolve_required_unmapped_null_flavor,
                         site_requirement_targets)
 from ..cda.narrative import narrative_blocks, narrative_source_rules
 from ..cda.tree import document_index, parse_location
@@ -379,6 +380,41 @@ def _target_trace(
     if binding:
         parts.append(binding)
     return " · ".join(parts) or "compiled CDA target metadata unavailable"
+
+
+def _annotation_traces(
+    location: tuple[int, ...],
+    target: Mapping[str, Any],
+    nodes: Mapping[tuple[int, ...], Mapping[str, Any]],
+    parents: Mapping[tuple[int, ...], tuple[int, ...]],
+) -> list[tuple[str, str]]:
+    """Return exact owner-template descriptions applying to one physical leaf."""
+    template_id = str(target.get("template_id") or "")
+    effective_date = str(target.get("template_effective_date") or "")
+    if not template_id:
+        return []
+
+    traces: list[tuple[str, str]] = []
+    current: tuple[int, ...] | None = location
+    while current is not None:
+        node = nodes.get(current, {})
+        origin = node.get("origin", {})
+        if not isinstance(origin, Mapping):
+            origin = {}
+        owner = str(origin.get("template_id") or "")
+        revision = str(origin.get("template_effective_date") or "")
+        description = " ".join(str(node.get("description") or "").split())
+        if (
+            description
+            and owner == template_id
+            and (not effective_date or not revision or revision == effective_date)
+        ):
+            path = str(origin.get("path") or node.get("name") or "")
+            trace = (path, description)
+            if trace not in traces:
+                traces.append(trace)
+        current = parents.get(current)
+    return traces
 
 
 def _scalar_summary(value: Any) -> str:
@@ -957,6 +993,15 @@ def _extended_cda_coverage_tree(
                 lines.append(
                     f"   {leaf_stem}T: {_target_trace(row['target'], include_template=False)}"
                 )
+                annotations = _annotation_traces(
+                    row["location"], row["target"], nodes, parents,
+                )
+                for index, (path, description) in enumerate(annotations, 1):
+                    label = "A" if len(annotations) == 1 else f"A{index}"
+                    location_note = f"{path} — " if path else ""
+                    lines.append(
+                        f"   {leaf_stem}{label}: {location_note}{description}"
+                    )
                 source_rows = selected_rows + [
                     {"path": path, "logical": row["name"], "rule": {}}
                     for path in suggested_paths
@@ -978,6 +1023,23 @@ def _extended_cda_coverage_tree(
                 ))
                 for trace in traces:
                     lines.append(f"   {leaf_stem}R: {trace}")
+                target = row["target"]
+                if (
+                    not selected_rows
+                    and not suggested_paths
+                    and not defaults.get(row["name"])
+                    and not site_requirements.get(row["name"])
+                    and int(target.get("min") or 0) >= 1
+                    and not target.get("mandatory")
+                    and target.get("permits_null_flavor")
+                ):
+                    completion_flavor = resolve_required_unmapped_null_flavor(
+                        target, required_unmapped_null_flavor(mapping),
+                    )
+                    lines.append(
+                        f"   {leaf_stem}R: defaults.required_unmapped → "
+                        f'nullFlavor="{completion_flavor}"'
+                    )
                 for logical, default in defaults.get(row["name"], []):
                     value = _scalar_summary(default)
                     reason = _plain(default.get("reason"))
@@ -2739,7 +2801,10 @@ def render_cda_mapping_extended_trees_markdown(
         "- `S:` source concept OID, stable dataset path, logical type and cardinality;",
         "- `T:` owning template/revision, template-relative XPath, CDA datatype, "
         "cardinality, conformance and required ValueSet where available;",
-        "- `R:` executable transform, structural rule, reviewed default or site responsibility;",
+        "- `A:` exact ART-DECOR Beschreibung on the target or an owner-template "
+        "ancestor, with its template-relative path;",
+        "- `R:` executable transform, structural rule, active required-leaf "
+        "completion policy, reviewed default or site responsibility;",
         "- `G:` reviewed non-transmission or unresolved evidence gate and reopening condition.",
         "",
         "Status: `✓` mapped; `!` suggested but not selected; `×` no approved "

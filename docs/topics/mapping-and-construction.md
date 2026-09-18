@@ -148,7 +148,7 @@ The canonical generated products are:
 - `cda-mapping-trees.md`: exhaustive dataset and CDA coverage.
 - `cda-mapping-trees-extended.md`: exhaustive clinical and template-review
   coverage with source concept OIDs, template revisions, template-relative
-  XPaths and rule/gap annotations.
+  XPaths, exact ART-DECOR descriptions and rule/gap annotations.
 
 `init-cda-mapping` creates or refreshes the portable mapping bundle without
 overwriting reviewer choices. `--reset` explicitly replaces reviewed state with

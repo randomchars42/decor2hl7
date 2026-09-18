@@ -538,6 +538,24 @@ def required_unmapped_null_flavor(mapping: Mapping[str, Any]) -> str:
     return flavor
 
 
+def resolve_required_unmapped_null_flavor(
+    target: Mapping[str, Any], configured: str,
+) -> str:
+    """Resolve the actual legal nullFlavor used for one required target."""
+    legal_values = [
+        str(value)
+        for value in target.get("null_flavor_exceptions", [])
+        if str(value) in NULL_FLAVORS
+    ]
+    return next(
+        (
+            value for value in (configured, "UNK", "NAV", "NI", "OTH")
+            if value in legal_values
+        ),
+        legal_values[0] if legal_values else configured,
+    )
+
+
 def _physical_default_target(cda: Mapping[str, Any], configured: str) -> str:
     datapoint = cda.get("datapoints", {}).get(configured, {})
     if isinstance(datapoint, Mapping) and datapoint.get("cda_target"):
