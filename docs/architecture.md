@@ -31,7 +31,8 @@ not a second copy of those semantic rules.
 src/decor2hl7/
 ├── cli.py                  command orchestration
 ├── workspace.py            selection and workspace paths
-├── i18n.py                 output locale, catalogs, and protected terminology
+├── i18n.py                 locale loading, validation, and protected terminology
+├── locales/                packaged stable-ID English and German catalogs
 ├── text.py                 target-neutral matching normalization
 ├── value_format.py         normalized quantity/range presentation structure
 ├── xmlnames.py             namespace constants without source-parser coupling

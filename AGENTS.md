@@ -81,6 +81,10 @@ durable fixes in this repository.
 - Never infer joins, independent repeated-occurrence alignment, lossy
   terminology crosswalks, clinical timestamps, or mapping choices without
   sufficient evidence and a reviewable rule.
+- Keep decor2hl7-owned translatable text in the packaged locale catalogs under
+  `src/decor2hl7/locales/`, addressed by stable namespaced message IDs. Do not
+  add inline language dictionaries or repurpose an existing ID for a different
+  meaning.
 - Do not copy generated coverage counts, test totals, or temporary commit state
   into durable prose. Keep volatile measurements in generated artifacts and
   regression fixtures.

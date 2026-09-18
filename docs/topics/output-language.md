@@ -69,7 +69,28 @@ Output language affects presentation only. Changing it must not change
 runtime fingerprints, or generated CDA content. Generated Markdown keeps its
 existing filenames and is replaced in the selected language.
 
-The English catalog defines the complete message-key set. Other catalogs must
-use the same keys and formatting placeholders. Missing messages, placeholder
-drift, unsupported languages, and translation of protected technical terms are
-test failures.
+## Catalogs and stable message IDs
+
+Translations are data files rather than Python source:
+
+- `src/decor2hl7/locales/en.json` is the canonical catalog;
+- `src/decor2hl7/locales/de.json` supplies the German messages.
+
+Both files are packaged with the application. Every entry has a stable,
+namespaced message ID: `cli.*` for complete command messages and help,
+`ui.*` for composed terminal output, and `markdown.*` for generated report
+prose. Code and compatibility localization resolve messages through these IDs;
+English source text is not a catalog key. Changing the wording or translation
+does not require changing its ID. An existing ID must not be renamed or reused
+for a different meaning merely because its wording changes.
+
+New decor2hl7-owned text belongs in both locale files, not in an inline Python
+translation table. Prefer a short semantic ID that describes the message's
+role and remains meaningful when its wording changes. Avoid ordinal suffixes
+or IDs derived solely from the entire English sentence.
+
+The English catalog defines the complete message-ID set. Other catalogs must
+use the same IDs and formatting placeholders. Duplicate replacement source
+text within a namespace, invalid IDs, missing messages, placeholder drift,
+unsupported languages, and translation of protected technical terms are test
+failures.

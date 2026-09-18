@@ -7,7 +7,9 @@ from decor2hl7.i18n import (
     Translator,
     catalog_problems,
     configured_output_language,
+    load_catalog,
     localize_markdown,
+    message_ids,
     normalize_output_language,
 )
 
@@ -20,6 +22,19 @@ class I18nTests(unittest.TestCase):
             Translator("de").text(key)
             for key in ("cli.build_help", "cli.init_mapping_help")
         ))
+
+    def test_packaged_catalogs_use_stable_namespaced_message_ids(self) -> None:
+        self.assertIn("cli.workspace_initialized", message_ids("cli"))
+        self.assertIn("ui.usage", message_ids("ui"))
+        self.assertIn(
+            "markdown.dataset_to_cda_mapping_decisions",
+            message_ids("markdown"),
+        )
+        self.assertEqual(set(load_catalog("de")), set(message_ids()))
+        self.assertEqual(
+            load_catalog("de")["markdown.complete_dataset_tree"],
+            "## Vollständiger dataset tree",
+        )
 
     def test_output_language_normalizes_supported_bcp47_variants(self) -> None:
         self.assertEqual(normalize_output_language("de-DE"), "de")
