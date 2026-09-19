@@ -378,7 +378,7 @@ class ReferenceClosureTests(unittest.TestCase):
                 "generated_mapped_fields": 89,
                 "reviewed_mapped_fields": 120,
                 "reviewed_narrative_fields": 2,
-                "field_override_count": 36,
+                "field_override_count": 38,
                 "narrative_target_count": 1,
                 "structure_override_count": 3,
                 "field_review_override_count": 5,

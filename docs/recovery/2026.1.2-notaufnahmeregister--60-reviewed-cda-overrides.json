@@ -17,7 +17,7 @@
     "generated_mapped_fields": 89,
     "reviewed_mapped_fields": 120,
     "reviewed_narrative_fields": 2,
-    "field_override_count": 36,
+    "field_override_count": 38,
     "narrative_target_count": 1,
     "structure_override_count": 3,
     "field_review_override_count": 5,
@@ -76,6 +76,8 @@
         "reason": "AKTIN confirmed that the emergency-department collection time may populate the Allergy Concern Act start; this reviewed mapping uses Aufnahmezeitpunkt and must not activate an otherwise absent allergy branch."
       }
     ],
+    "administrative_aufnahmeinformationen.fallnummer": "CDAEncompassingEncounter.id_1",
+    "administrative_aufnahmeinformationen.episodennummer": "CDAEncompassingEncounter.id_2",
     "administrative_aufnahmeinformationen.transport.ankunftszeit": "Transportmethod.high",
     "administrative_verlegungsentlassungsinformationen.zeitpunkt_patient_verlegungs_entlassungsfahig": [
       "zeitpunkt_patient_verlegungs__entlassungsfahig.value",
