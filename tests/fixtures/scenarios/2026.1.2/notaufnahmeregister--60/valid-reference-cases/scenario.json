@@ -39,6 +39,10 @@
         "file": "cases.csv",
         "cardinality": "1:1"
       },
+      "extensions": {
+        "file": "extensions.csv",
+        "cardinality": "1:1"
+      },
       "diagnoses": {
         "file": "diagnoses.csv",
         "cardinality": "1:n",
@@ -109,6 +113,13 @@
     }
   },
   "codes": {
+    "hauptkostentrager.versicherungsverhaltnis.weitere_versichertenstatuskodierung": {
+      "LOCAL-A": {
+        "code": "LOCAL-A",
+        "codeSystem": "1.2.276.0.76.999.2",
+        "displayName": "Lokaler Versichertenstatus A"
+      }
+    },
     "administrative_verlegungsentlassungsinformationen.typ_verlegung": {
       "Intensivstation": "intern: Überwachung (ICU / IMC / Chest-Pain-Unit / Stroke)",
       "Überwachungsstation": "intern: Überwachung (ICU / IMC / Chest-Pain-Unit / Stroke)"

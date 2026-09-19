@@ -66,6 +66,14 @@ Open the generated documents in this order:
 Edit only `cda-mapping.json`. The Markdown reports, XML previews, compiled
 models, and proposal are generated evidence and may be replaced.
 
+If the approved source concept is absent from the published dataset, add it to
+the workspace root's reviewed `model_extensions` block before rebuilding. Use
+an existing dataset group, an explicit reason, and an exact complete ValueSet
+revision for coded fields. Do not add a CDA target there: after `build`, select
+that separately in `cda-mapping.json`. The extended tree marks the field as a
+reviewed model extension so downstream reviewers can distinguish it from
+ART-DECOR-owned concepts.
+
 For every unresolved datapoint, decide whether to:
 
 - select a supported target;

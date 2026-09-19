@@ -1580,6 +1580,7 @@ def build_assignments(
     assignments: dict[str, Any] = {}
     fallback_assignments: list[tuple[str, Any]] = []
     active_fallback_assignments: list[tuple[str, Any]] = []
+    conditional_assignments: list[tuple[str, Any, str]] = []
     problems: list[str] = []
     structures = structure_rules(mapping)
     for path, selected in mapping.get("fields", {}).items():
@@ -1631,6 +1632,10 @@ def build_assignments(
                 fallback_assignments.append((name, prepared))
             elif rule.get("mode") == "fallback_if_active":
                 active_fallback_assignments.append((name, prepared))
+            elif rule.get("mode") == "if_active":
+                conditional_assignments.append((
+                    name, prepared, str(rule.get("active_if") or ""),
+                ))
             else:
                 _assign(assignments, name, prepared)
 
@@ -1766,6 +1771,14 @@ def build_assignments(
     for name, value in active_fallback_assignments:
         if not _present(assignments.get(name)) and _present(value):
             assignments[name] = fallback_if_active_value(value)
+    for name, value, active_if in conditional_assignments:
+        guard = assignments.get(active_if)
+        if (
+            _present(guard)
+            and not is_fallback_if_active(guard)
+            and _present(value)
+        ):
+            _assign(assignments, name, value)
     _expand_quantity_range_assignments(assignments, targets, problems)
     return assignments, problems
 

@@ -62,6 +62,64 @@ def complete_fixture_value_targets(cda_model: Mapping[str, Any]) -> None:
 
 
 class ConstructionTests(unittest.TestCase):
+    def test_quarter_end_transform(self) -> None:
+        self.assertEqual(
+            apply_transform(
+                "2026-02-17T14:30:00+01:00", {"type": "quarter_end"},
+            ),
+            "2026-03-31",
+        )
+        self.assertEqual(
+            apply_transform("2024-11-09", {"type": "quarter_end"}),
+            "2024-12-31",
+        )
+
+    def test_if_active_uses_an_exact_guard_independent_of_mapping_order(self) -> None:
+        model = {"fields": {
+            "admission": {"type": "datetime", "repeat_chain": []},
+            "payer_id": {"type": "text", "repeat_chain": []},
+        }}
+        compiled = {"targets": {
+            "Payer.time.high": {
+                "writable": True, "renderable": True, "locations": ["0.0.0"],
+                "repeat_ancestors": [], "logical_types": ["date", "datetime"],
+                "value_representation": {
+                    "kind": "xml_attribute", "attribute": "value",
+                    "logical_types": ["date", "datetime"],
+                },
+            },
+            "Payer.id": {
+                "writable": True, "renderable": True, "locations": ["0.1"],
+                "repeat_ancestors": [], "logical_types": ["text"],
+                "value_representation": {
+                    "kind": "xml_text", "logical_types": ["text"],
+                },
+            },
+        }}
+        mapping = {"fields": {
+            "admission": {
+                "target": "Payer.time.high", "mode": "if_active",
+                "active_if": "Payer.id",
+                "transform": {"type": "quarter_end"},
+                "reason": "The reviewed payer period exists only with its id.",
+            },
+            "payer_id": "Payer.id",
+        }}
+
+        assignments, problems = build_assignments(
+            {"values": {"admission": "2026-02-01", "payer_id": "A"}},
+            model, compiled, mapping, {},
+        )
+        self.assertEqual(problems, [])
+        self.assertEqual(assignments["Payer.time.high"], "2026-03-31")
+
+        assignments, problems = build_assignments(
+            {"values": {"admission": "2026-02-01"}},
+            model, compiled, mapping, {},
+        )
+        self.assertEqual(problems, [])
+        self.assertNotIn("Payer.time.high", assignments)
+
     def test_construction_rejects_conflicting_logical_and_physical_targets(self) -> None:
         model: dict[str, Any] = {"fields": {"finding": {}}}
         compiled = {

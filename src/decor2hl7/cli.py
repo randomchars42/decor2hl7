@@ -348,6 +348,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     from .compile.transaction import write_transaction_model
 
     root = _root(args)
+    settings = load_settings(root)
     release = selected_release(root)
     transaction = selected_transaction(root)
     inputs = _compiler_inputs(root)
@@ -359,6 +360,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         inputs["model_resources"],
         inputs["terminology_resources"],
         model_dir,
+        model_extensions=settings.get("model_extensions"),
     )
     model.setdefault("meta", {})["configured_source_rules"] = (
         configured_source_rules(inputs)

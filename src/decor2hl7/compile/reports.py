@@ -325,7 +325,10 @@ def _cardinality(model: Mapping[str, Any]) -> str:
 
 def _source_trace(path: str, field: Mapping[str, Any]) -> str:
     parts: list[str] = []
-    if field.get("concept"):
+    extension = field.get("model_extension")
+    if isinstance(extension, Mapping):
+        parts.append("reviewed model extension")
+    elif field.get("concept"):
         parts.append(f"concept {field['concept']}")
     parts.append(path)
     if field.get("type"):
@@ -333,6 +336,8 @@ def _source_trace(path: str, field: Mapping[str, Any]) -> str:
     cardinality = _cardinality(field)
     if cardinality:
         parts.append(cardinality)
+    if isinstance(extension, Mapping) and extension.get("reason"):
+        parts.append(_plain(extension["reason"]))
     return " · ".join(parts)
 
 
@@ -489,6 +494,11 @@ def _rule_trace(
         parts.append(f"reviewed narrative-only {kind} [{decision}]")
     elif mode == "fallback_if_active":
         parts.append("fallback_if_active; fills only an already-active CDA branch")
+    elif mode == "if_active":
+        parts.append(
+            "if_active; writes only when target "
+            f"{rule.get('active_if') or '?'} has a mapped value"
+        )
     elif mode == "presence":
         parts.append("presence rule")
     elif mode and mode != "value":
@@ -1149,6 +1159,8 @@ def _mapping_status(row: Mapping[str, Any]) -> str:
         return "Presence rule"
     if isinstance(rule, Mapping) and rule.get("mode") == "fallback_if_active":
         return "Active-branch fallback"
+    if isinstance(rule, Mapping) and rule.get("mode") == "if_active":
+        return "Active-branch value"
     if isinstance(rule, Mapping) and rule.get("transform"):
         return "Transform"
     return "Mapped" if isinstance(row.get("selection"), str) else "Rule"
@@ -1181,6 +1193,12 @@ def _configuration_instruction(row: Mapping[str, Any]) -> str:
             f"In `cda-mapping.json`, review the rule stored at "
             f"`fields[\"{path}\"]`; it fills `\"{target}\"` from **{name}** "
             "only when another mapped value has already activated the target branch."
+        )
+    if isinstance(rule, Mapping) and rule.get("mode") == "if_active":
+        return (
+            f"In `cda-mapping.json`, review the rule stored at "
+            f"`fields[\"{path}\"]`; it writes `\"{target}\"` from **{name}** "
+            f"only when `\"{rule.get('active_if') or '?'}\"` has a mapped value."
         )
     return (
         f"In `cda-mapping.json`, review the rule stored at "

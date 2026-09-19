@@ -222,6 +222,11 @@ def transformed_compatibility(
     elif kind == "not":
         if str(field.get("type") or "") != "boolean" or "boolean" not in logical_types:
             reasons.append("not transform requires boolean dataset and CDA values")
+    elif kind == "quarter_end":
+        if str(field.get("type") or "") not in {"date", "datetime"}:
+            reasons.append("quarter_end transform requires a date/datetime dataset value")
+        if not ({"date", "datetime"} & logical_types):
+            reasons.append("quarter_end transform requires a date/datetime CDA target")
     elif kind == "code_system":
         if (
             str(field.get("type") or "") != "code"

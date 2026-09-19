@@ -25,6 +25,81 @@ RELEASE = {"key": "release-v1", "label": "release-v1", "date": "2024-01-02T03:04
 
 
 class DatasetCompilationTests(unittest.TestCase):
+    def test_reviewed_model_extensions_compile_with_exact_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transaction = Path(tmp) / "transaction.xml"
+            transaction.write_text('''
+<dataset id="d">
+  <valueSet id="1.2.3" effectiveDate="2026-01-01">
+    <concept code="A" codeSystem="9.8.7"><name>Alpha</name></concept>
+  </valueSet>
+  <concept type="group" shortName="encounter" id="g"
+           minimumMultiplicity="0" maximumMultiplicity="*">
+    <name>Encounter</name>
+  </concept>
+</dataset>''', encoding="utf-8")
+            extension = {
+                "version": 1,
+                "status": "reviewed",
+                "collision_policy": "error",
+                "fields": {
+                    "encounter.local_status": {
+                        "name": "Local status",
+                        "parent": "encounter",
+                        "type": "code",
+                        "min": 0,
+                        "max": 1,
+                        "value_set": {
+                            "id": "1.2.3",
+                            "effective_date": "2026-01-01",
+                        },
+                        "reason": "The reviewed CDA contract requires it.",
+                    }
+                },
+            }
+
+            model = compile_model(transaction, model_extensions=extension)
+
+            field = model["fields"]["encounter.local_status"]
+            self.assertEqual(field["concept"], "model-extension:encounter.local_status")
+            self.assertEqual(field["repeat_chain"], ["encounter"])
+            self.assertEqual(field["formal_terminology"]["status"], "bound")
+            self.assertEqual(field["accepted_values"]["Alpha"]["code"], "A")
+            self.assertEqual(field["model_extension"]["status"], "reviewed")
+            self.assertEqual(model["meta"]["model_extensions"]["field_count"], 1)
+            self.assertEqual(len(model["meta"]["model_extensions"]["sha256"]), 64)
+
+    def test_model_extensions_reject_collisions_and_inexact_value_sets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transaction = Path(tmp) / "transaction.xml"
+            transaction.write_text('''
+<dataset><concept type="group" shortName="group" id="g">
+  <concept type="item" shortName="existing" id="i"><name>Existing</name></concept>
+</concept></dataset>''', encoding="utf-8")
+            base = {
+                "version": 1,
+                "status": "reviewed",
+                "collision_policy": "error",
+                "fields": {
+                    "group.existing": {
+                        "name": "Collision", "parent": "group", "type": "text",
+                        "reason": "Review reason.",
+                    }
+                },
+            }
+            with self.assertRaisesRegex(ValueError, "collides"):
+                compile_model(transaction, model_extensions=base)
+
+            base["fields"] = {
+                "group.code": {
+                    "name": "Code", "parent": "group", "type": "code",
+                    "value_set": {"id": "1.2.3", "effective_date": "2026"},
+                    "reason": "Review reason.",
+                }
+            }
+            with self.assertRaisesRegex(ValueError, "unavailable ValueSet revision"):
+                compile_model(transaction, model_extensions=base)
+
     def test_codesystem_and_concept_context_references_are_typed(self) -> None:
         root = ET.fromstring('''<valueSet id="vs">
           <sourceCodeSystem id="1.2.3" effectiveDate="2020-01-01" prefix="term-"/>

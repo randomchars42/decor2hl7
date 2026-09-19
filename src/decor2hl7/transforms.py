@@ -10,6 +10,8 @@ CDA constraints (for example ``negationInd`` plus ``nullFlavor``).
 """
 from __future__ import annotations
 
+import calendar
+from datetime import date
 from typing import Any, Mapping
 
 from .value_format import (
@@ -245,6 +247,18 @@ def _scalar(value: Any, transform: Mapping[str, Any]) -> Any:
         if isinstance(value, bool):
             return not value
         raise ValueError("not transform requires a boolean value")
+    if kind == "quarter_end":
+        raw = _selected_value(value, {**dict(transform), "select": "value"})
+        text = str(raw or "").strip()
+        try:
+            source_date = date.fromisoformat(text[:10])
+        except ValueError as exc:
+            raise ValueError(
+                f"quarter_end transform requires an ISO date/datetime, got {raw!r}"
+            ) from exc
+        month = ((source_date.month - 1) // 3 + 1) * 3
+        day = calendar.monthrange(source_date.year, month)[1]
+        return date(source_date.year, month, day).isoformat()
     if kind == "code_system":
         code_system = str(transform.get("code_system") or "")
         if not code_system:
@@ -380,7 +394,7 @@ def validate_transform(transform: Any) -> list[str]:
     if kind not in {
         "identity", "enum", "ordinal", "not", "code_system",
         "coded_fallback", "coded_only", "coded_or_original_text",
-        "narrative", "reviewed_coded_map",
+        "narrative", "reviewed_coded_map", "quarter_end",
     }:
         return [f"unknown transform type {kind!r}"]
     if kind in {"enum", "ordinal"} and not isinstance(transform.get("map"), Mapping):

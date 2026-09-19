@@ -1,7 +1,7 @@
-case_id,occurrence_1,abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose,abschlussdiagnosen.abschlussdiagnose.fuhrende_abschlussdiagnoseq_sequenznummer,abschlussdiagnosen.abschlussdiagnose.icd10,abschlussdiagnosen.abschlussdiagnose.icd10_sekundardiagnose,abschlussdiagnosen.abschlussdiagnose.zusatzkennzeichen
-SCENARIO-01,diagnosis-1,"Kreislaufstillstand, erfolgreich reanimiert",1,I46.9,,gesicherte Diagnose
-SCENARIO-02,diagnosis-1,Akute schwere Asthmaexazerbation,1,J45.901,,gesicherte Diagnose
-SCENARIO-03,diagnosis-1,Erstmaliger generalisierter Krampfanfall,1,R56.8,,gesicherte Diagnose
-SCENARIO-04,diagnosis-1,Verletzung des linken Unterschenkels,1,S89.92,,gesicherte Diagnose
-SCENARIO-05,diagnosis-1,Oberflächlicher Fremdkörper am rechten Auge,1,T15.91,,gesicherte Diagnose
-SCENARIO-06,diagnosis-1,Akute Gastroenteritis,1,A09.9,,gesicherte Diagnose
+case_id,occurrence_1,abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose,abschlussdiagnosen.abschlussdiagnose.fuhrende_abschlussdiagnoseq_sequenznummer,abschlussdiagnosen.abschlussdiagnose.icd10,abschlussdiagnosen.abschlussdiagnose.icd10_sekundardiagnose,abschlussdiagnosen.abschlussdiagnose.zusatzkennzeichen,abschlussdiagnosen.abschlussdiagnose.lateralitat
+SCENARIO-01,diagnosis-1,"Kreislaufstillstand, erfolgreich reanimiert",1,I46.9,,gesicherte Diagnose,Unbekannt
+SCENARIO-02,diagnosis-1,Akute schwere Asthmaexazerbation,1,J45.901,,gesicherte Diagnose,Unbekannt
+SCENARIO-03,diagnosis-1,Erstmaliger generalisierter Krampfanfall,1,R56.8,,gesicherte Diagnose,Unbekannt
+SCENARIO-04,diagnosis-1,Verletzung des linken Unterschenkels,1,S89.92,,gesicherte Diagnose,Left
+SCENARIO-05,diagnosis-1,Oberflächlicher Fremdkörper am rechten Auge,1,T15.91,,gesicherte Diagnose,Right
+SCENARIO-06,diagnosis-1,Akute Gastroenteritis,1,A09.9,,gesicherte Diagnose,Unbekannt

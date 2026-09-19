@@ -6,7 +6,8 @@ contains concise executable selections and review metadata.
 
 Related decisions: DEC-007, DEC-008, DEC-009, DEC-011, DEC-015, DEC-016,
 DEC-017, DEC-018, DEC-020, DEC-023, DEC-024, DEC-025, DEC-029, DEC-030,
-DEC-033, DEC-035, DEC-038, DEC-040, DEC-041, DEC-042, DEC-043, and DEC-044.
+DEC-033, DEC-035, DEC-038, DEC-040, DEC-041, DEC-042, DEC-043, DEC-044,
+and DEC-046.
 
 ## Evidence and gates
 
@@ -34,7 +35,11 @@ not establish this equivalence.
 
 The scalar vocabulary is deliberately small: `identity`, `enum`, `ordinal`,
 `not`, `code_system`, `coded_fallback`, `reviewed_coded_map`, `coded_only`,
-`coded_or_original_text`, and `narrative`.
+`coded_or_original_text`, `narrative`, and `quarter_end`.
+
+`quarter_end` accepts an ISO date or datetime and returns the final calendar
+date of its containing quarter. It is intended for an explicitly reviewed
+derived date rule; it does not infer whether the target branch should exist.
 
 `coded_fallback` is available only for an explicitly open source domain below
 an established container, one exact resolved target ValueSet containing the
@@ -84,6 +89,10 @@ The following are field-assignment modes under `fields`, not entries in
 - `fallback_if_active` fills a required leaf only after another assignment has
   activated its optional branch. It never activates a branch or creates a
   repeat.
+- `if_active` writes an optional derived leaf only when its exact `active_if`
+  guard target has a mapped value in the same occurrence shape. The guarded
+  value may create datatype wrappers below that already-selected branch; the
+  rule requires a review reason.
 - `presence` lets a boolean activate one optional statement only when exact
   owner evidence fixes its complete payload.
 

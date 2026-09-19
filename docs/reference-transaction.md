@@ -10,7 +10,7 @@ Organization and profile names in source artifacts identify provenance only;
 they do not imply endorsement of decor2hl7 by an artifact publisher.
 
 Related decisions: DEC-008, DEC-009, DEC-018, DEC-029, DEC-033, DEC-036,
-DEC-038, DEC-041, DEC-042, DEC-043, DEC-044, and DEC-045.
+DEC-038, DEC-041, DEC-042, DEC-043, DEC-044, DEC-045, and DEC-046.
 
 ## Evidence boundary
 
@@ -130,6 +130,21 @@ explicit per-medication source discriminator. Start/stop times do not establish
 mood or lifecycle state.
 
 ## Other reviewed construction
+
+The reference workspace uses reviewed inline model extensions for source values
+that the CDA profile expects but the selected dataset omits: primary, GKV, and
+additional insurance-status coding; KV-case status; transport arrival time;
+diagnosis-scoped laterality; and receiving department. Insurance identity is
+written to both payer participant templates. The generic payer's quarter end is
+derived from admission time only when that participant is active.
+
+The reviewed time correspondences are admission → service-event start,
+discharge-ready → first-performer end, and actual transfer/discharge → both
+service-event and encompassing-encounter end. An exact isolation reason of
+`multiresistenter Keim` additionally emits the generic `AMRO` assertion; it
+does not infer organism specificity, suspicion, or absence. The former request
+to map the whole performer interval was withdrawn, so its parent is satisfied
+only through the independently mapped low/high leaves.
 
 - The three EDIS metadata entries are attached to the open Addendum section by
   exact reviewed profile overlays until upstream containment exists.

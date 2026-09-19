@@ -1,6 +1,6 @@
 {
-  "version": 4,
-  "decision": "DEC-038, DEC-043, DEC-044, DEC-045",
+  "version": 5,
+  "decision": "DEC-038, DEC-043, DEC-044, DEC-045, DEC-046",
   "release": {
     "key": "2026.1.2",
     "date": "2026-04-27T18:50:33"
@@ -11,13 +11,13 @@
     "effective_date": "2026-03-25T00:00:00"
   },
   "base": "model/<release>/<transaction>/cda-mapping.proposed.json",
-  "merge_semantics": "Shallow-merge field_overrides into fields, narrative_overrides into narratives, structure_overrides into structures, field_review_overrides into field_reviews, target_default_overrides into target_defaults, and site_requirement_overrides into site_requirements; preserve all other generated keys.",
+  "merge_semantics": "Shallow-merge field_overrides into fields, including reviewed replacements whose selected target set differs from the generated proposal; merge narrative_overrides into narratives, structure_overrides into structures, field_review_overrides into field_reviews, target_default_overrides into target_defaults, and site_requirement_overrides into site_requirements; preserve all other generated keys.",
   "expected": {
-    "dataset_fields": 120,
-    "generated_mapped_fields": 84,
-    "reviewed_mapped_fields": 113,
+    "dataset_fields": 127,
+    "generated_mapped_fields": 89,
+    "reviewed_mapped_fields": 120,
     "reviewed_narrative_fields": 2,
-    "field_override_count": 29,
+    "field_override_count": 36,
     "narrative_target_count": 1,
     "structure_override_count": 3,
     "field_review_override_count": 5,
@@ -25,8 +25,8 @@
     "site_requirement_override_count": 6
   },
   "identity": {
-    "model_sha256": "f7c0553265727af0d3b7951e143ecbff9f58a699f17fc0b61e5e4c367c7d7ac2",
-    "cda_sha256": "f753e53fe6224db75c0f9c05262bce38925578bdb6633f44467dd32b6c13ec74"
+    "model_sha256": "764c833a9676ed5646c55cf1a1e7d8918e35f2b073932f32a6fa10dc0988e949",
+    "cda_sha256": "c25d6c350640acf06946f31dbf470078803304d8f7480697aaa2485d5883a6ec"
   },
   "target_alias_migrations": {
     "CDAEncompassingEncounter.componentOf.encompassingEncounter.effectiveTime.low@20160601": "CDAEncompassingEncounter.low",
@@ -49,13 +49,42 @@
   "field_overrides": {
     "patient.anschrift.postleitzahl": "CDArecordTargetnnar.recordTarget.patientRole.addr.postalCode",
     "patient.identifikatoren.patienten_id": "PatientIdentifier.id",
+    "hauptkostentrager.kostentrager.name": [
+      "hauptkostentrager.name",
+      "HeaderParticipantKostentraeger.scopingOrganization::OrganizationElements.name"
+    ],
+    "hauptkostentrager.versicherungsverhaltnis.identifikation": [
+      "hauptkostentrager.participant_templateId_root_1.2.276.0.76.3.1.195.10.4.associatedEntity.id",
+      "HeaderParticipantKostentraeger.participant_templateId_root_1.2.276.0.76.10.2022.associatedEntity.id"
+    ],
+    "hauptkostentrager.versicherungsverhaltnis.weitere_versichertenstatuskodierung": "HeaderParticipantKostentraeger.translation",
     "administrative_aufnahmeinformationen.aufnahmezeitpunkt": [
       "CDAEncompassingEncounter.low",
+      "CDADocumentationOf.documentationOf.serviceEvent.effectiveTime.low",
+      {
+        "target": "HeaderParticipantKostentraeger.participant_templateId_root_1.2.276.0.76.10.2022.time.high",
+        "mode": "if_active",
+        "active_if": "HeaderParticipantKostentraeger.participant_templateId_root_1.2.276.0.76.10.2022.associatedEntity.id",
+        "transform": {
+          "type": "quarter_end"
+        },
+        "reason": "AKTIN approved deriving the insurance-period quarter end from Aufnahmezeitpunkt; the value is emitted only when another mapping activates the generic Kostenträger participant."
+      },
       {
         "target": "Allergyconcernact.low",
         "mode": "fallback_if_active",
         "reason": "AKTIN confirmed that the emergency-department collection time may populate the Allergy Concern Act start; this reviewed mapping uses Aufnahmezeitpunkt and must not activate an otherwise absent allergy branch."
       }
+    ],
+    "administrative_aufnahmeinformationen.transport.ankunftszeit": "Transportmethod.high",
+    "administrative_verlegungsentlassungsinformationen.zeitpunkt_patient_verlegungs_entlassungsfahig": [
+      "zeitpunkt_patient_verlegungs__entlassungsfahig.value",
+      "CDADocumentationOf.documentationOf.serviceEvent.performer.time.high"
+    ],
+    "administrative_verlegungsentlassungsinformationen.zeitpunkt_patient_verlegt_entlassen_nach": [
+      "zeitpunkt_patient_verlegt__entlassen_nach.value",
+      "CDADocumentationOf.documentationOf.serviceEvent.effectiveTime.high",
+      "CDAEncompassingEncounter.high"
     ],
     "administrative_verlegungsentlassungsinformationen.typ_verlegung": {
       "target": "Referralto.act.code",
@@ -126,6 +155,24 @@
     "notfallanamnese.beschwerden_bei_vorstellung.ereigniseintritt": "Problemconcernactcedis.low",
     "abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose": "Problemobservationeddiagnosis.originalText",
     "abschlussdiagnosen.abschlussdiagnose.icd10": "Problemobservationeddiagnosis.observation.value",
+    "masnahmen.isolation.isolation_begrundung": [
+      "Isolationindication.value",
+      {
+        "target": "ProblemobservationMDRO.observation.value",
+        "transform": {
+          "type": "enum",
+          "select": "raw",
+          "map": {
+            "multiresistenter Keim": {
+              "code": "AMRO",
+              "codeSystem": "1.2.276.0.76.5.441",
+              "displayName": "Multiresistenter Keim"
+            }
+          }
+        },
+        "reason": "AKTIN approved deriving the generic AMRO assertion only from the exact isolation reason 'multiresistenter Keim'; other isolation reasons do not create an MDRO observation."
+      }
+    ],
     "masnahmen.medikamentose_therapie.medikation.medikament.chargennummer": "UVMedicationInformationsimple.lotNumberText",
     "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname": [
       {

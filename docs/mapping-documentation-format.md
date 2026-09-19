@@ -190,6 +190,8 @@ alternatives and long evidence chains.
 adds only applicable indented traceability lines:
 
 - `S:` gives the source concept OID, stable dataset path, type and cardinality;
+  reviewed local additions instead say `reviewed model extension` and include
+  their review reason;
 - `T:` gives the owning template and revision, explicitly template-relative
   XPath, CDA datatype/cardinality/conformance, and required ValueSet;
 - `A:` preserves the exact ART-DECOR `Beschreibung` on the target node or an

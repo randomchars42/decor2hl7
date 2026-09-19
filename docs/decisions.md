@@ -293,6 +293,20 @@ contract does not select the uncontained detail sibling, infer a code system or
 strength ratio, or assert a structured CDA ingredient or instruction target.
 See [`reference-transaction.md`](reference-transaction.md#medication).
 
+### DEC-046 — Reviewed local model extensions and AKTIN CDA supplements
+
+When a clinically approved CDA requirement is absent from the selected
+ART-DECOR dataset, a versioned `decor2hl7.json:model_extensions` block may add
+one collision-checked, target-neutral scalar field under an existing group.
+Coded additions require an exact complete local ValueSet revision. The CDA
+assignment or derivation remains a separate reviewed mapping decision. For the
+reference transaction, the approved payer, transport-arrival, diagnosis-
+laterality, receiving-department, time, and exact AMRO rules are retained by
+the hash-bound recovery overlay. See
+[`topics/dataset-and-terminology.md`](topics/dataset-and-terminology.md#reviewed-local-model-extensions),
+[`topics/mapping-and-construction.md`](topics/mapping-and-construction.md#declarative-transforms),
+and [`reference-transaction.md`](reference-transaction.md#other-reviewed-construction).
+
 ## Runtime and delivery
 
 ### DEC-034 — Bounded receiver transport adapters

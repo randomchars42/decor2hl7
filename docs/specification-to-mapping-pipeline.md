@@ -147,6 +147,13 @@ It produces target-neutral groups and fields with:
 - terminology associations and provenance;
 - repeat owner and complete repeat chain.
 
+After compiling the owner dataset, it applies the optional reviewed
+`decor2hl7.json:model_extensions` supplement. Added fields must use an existing
+parent group, cannot collide with owner paths, inherit repeat identity, and may
+bind only to an exact complete local ValueSet revision. Their explicit source,
+reason, status, and configuration hash remain in `model.json`; this does not
+put CDA targets into the target-neutral model.
+
 Source-side code proposals are generated from this model. CSV inspection is a
 separate `propose-input` step and cannot affect `model.json`.
 

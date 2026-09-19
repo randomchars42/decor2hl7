@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, cast
 import xml.etree.ElementTree as ET
@@ -38,6 +40,11 @@ TYPE_NAMES = {
     "ordinal": "ordinal",
     "duration": "duration",
 }
+MODEL_EXTENSION_TYPES = frozenset(TYPE_NAMES.values())
+MODEL_EXTENSION_KEYS = frozenset({
+    "name", "description", "comment", "parent", "type", "min", "max",
+    "value_set", "reason",
+})
 
 LEADING_OPTION_RANK = re.compile(
     r"^\s*([0-9]+)(?![0-9-])(?:\s*(?:punkte?|score))?\b",
@@ -1175,6 +1182,221 @@ def _formal_domain_status(
     }
 
 
+def _model_extension_repeat_chain(
+    parent: str, groups: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    """Return the inherited dataset occurrence identity for an added field."""
+    chain: list[str] = []
+    current = parent
+    visited: set[str] = set()
+    while current:
+        if current in visited:
+            raise ValueError(
+                f"model_extensions: cyclic parent chain at {current!r}"
+            )
+        visited.add(current)
+        group = groups.get(current)
+        if group is None:
+            raise ValueError(
+                f"model_extensions: parent group {current!r} does not exist"
+            )
+        if group.get("repeating"):
+            chain.append(current)
+        current = str(group.get("parent") or "")
+    chain.reverse()
+    return chain
+
+
+def _apply_model_extensions(
+    extensions: Mapping[str, Any] | None,
+    groups: Mapping[str, Mapping[str, Any]],
+    fields: dict[str, dict[str, Any]],
+    value_sets: Mapping[str, Mapping[str, Any]],
+    order: list[str],
+) -> dict[str, Any] | None:
+    """Compile reviewed local dataset supplements into ordinary model fields.
+
+    ART-DECOR remains the source of the base dataset.  This narrowly validated
+    workspace contract adds fields that the selected CDA expects but the
+    published dataset does not define.  Added fields carry explicit provenance
+    and otherwise use the same runtime shape as owner-published fields.
+    """
+    if extensions is None:
+        return None
+    if not isinstance(extensions, Mapping):
+        raise ValueError("model_extensions must be an object")
+    allowed_top = {"version", "status", "collision_policy", "reason", "fields"}
+    extra_top = set(extensions) - allowed_top
+    if extra_top:
+        raise ValueError(
+            "model_extensions has unknown keys: "
+            + ", ".join(sorted(map(str, extra_top)))
+        )
+    if extensions.get("version") != 1:
+        raise ValueError("model_extensions.version must be 1")
+    if extensions.get("status") != "reviewed":
+        raise ValueError("model_extensions.status must be 'reviewed'")
+    if extensions.get("collision_policy") != "error":
+        raise ValueError("model_extensions.collision_policy must be 'error'")
+    configured = extensions.get("fields")
+    if not isinstance(configured, Mapping) or not configured:
+        raise ValueError("model_extensions.fields must be a non-empty object")
+
+    for raw_path, raw_spec in configured.items():
+        path = str(raw_path or "")
+        if not path or not isinstance(raw_spec, Mapping):
+            raise ValueError(
+                "model_extensions.fields entries require a path and object value"
+            )
+        if path in groups or path in fields:
+            raise ValueError(
+                f"model_extensions: {path!r} collides with the compiled dataset"
+            )
+        extra = set(raw_spec) - MODEL_EXTENSION_KEYS
+        if extra:
+            raise ValueError(
+                f"model_extensions.fields[{path!r}] has unknown keys: "
+                + ", ".join(sorted(map(str, extra)))
+            )
+        name = str(raw_spec.get("name") or "").strip()
+        reason = str(raw_spec.get("reason") or "").strip()
+        parent = str(raw_spec.get("parent") or "").strip()
+        field_type = str(raw_spec.get("type") or "").strip()
+        if not name:
+            raise ValueError(
+                f"model_extensions.fields[{path!r}] requires a name"
+            )
+        if not reason:
+            raise ValueError(
+                f"model_extensions.fields[{path!r}] requires a review reason"
+            )
+        if field_type not in MODEL_EXTENSION_TYPES:
+            raise ValueError(
+                f"model_extensions.fields[{path!r}] has unsupported type "
+                f"{field_type!r}"
+            )
+        if path.rpartition(".")[0] != parent:
+            raise ValueError(
+                f"model_extensions.fields[{path!r}] parent must be its "
+                "immediate path prefix"
+            )
+        repeat_chain = _model_extension_repeat_chain(parent, groups)
+        minimum = raw_spec.get("min", 0)
+        maximum = raw_spec.get("max", 1)
+        if minimum not in {0, 1} or maximum != 1 or minimum > maximum:
+            raise ValueError(
+                f"model_extensions.fields[{path!r}] must have cardinality "
+                "0..1 or 1..1 within its parent occurrence"
+            )
+
+        value_set = raw_spec.get("value_set")
+        value_set_refs: list[dict[str, str]] = []
+        value_set_ids: list[str] = []
+        formal_values: dict[str, dict[str, Any]] = {}
+        formal_status = {
+            "status": "unbound", "bound": False, "complete": False,
+            "missing_value_sets": [], "unresolved_includes": [],
+        }
+        if value_set is not None:
+            if field_type != "code" or not isinstance(value_set, Mapping):
+                raise ValueError(
+                    f"model_extensions.fields[{path!r}].value_set requires "
+                    "a coded field and an object"
+                )
+            oid = str(value_set.get("id") or "").strip()
+            effective = str(value_set.get("effective_date") or "").strip()
+            if set(value_set) != {"id", "effective_date"} or not oid or not effective:
+                raise ValueError(
+                    f"model_extensions.fields[{path!r}].value_set requires "
+                    "exact id and effective_date keys"
+                )
+            key = _value_set_key(oid, effective)
+            revision = value_sets.get(key)
+            if revision is None:
+                raise ValueError(
+                    f"model_extensions.fields[{path!r}] references unavailable "
+                    f"ValueSet revision {key}"
+                )
+            if revision.get("unresolved_includes") or not revision.get("codes"):
+                raise ValueError(
+                    f"model_extensions.fields[{path!r}] requires a complete "
+                    f"ValueSet revision {key}"
+                )
+            value_set_ids = [oid]
+            value_set_refs = [{"id": oid, "effective_date": effective}]
+            synthetic_node = {
+                "value_sets": value_set_ids,
+                "value_set_refs": value_set_refs,
+                "terminology_associations": [],
+            }
+            formal_values = _formal_values(synthetic_node, value_sets)
+            formal_status = _formal_domain_status(synthetic_node, value_sets)
+
+        extension_provenance = {
+            "source": "decor2hl7.json",
+            "status": "reviewed",
+            "reason": reason,
+        }
+        field: dict[str, Any] = {
+            "name": name,
+            "description": raw_spec.get("description"),
+            "comment": raw_spec.get("comment"),
+            "implementation": None,
+            "short_name": path.rsplit(".", 1)[-1],
+            "concept": f"model-extension:{path}",
+            "parent": parent,
+            "min": minimum,
+            "max": maximum,
+            "required": minimum >= 1,
+            "repeat": repeat_chain[-1] if repeat_chain else None,
+            "repeat_chain": repeat_chain,
+            "formal_origin": {},
+            "relationships": [],
+            "type": field_type,
+            "value_sets": value_set_ids,
+            "value_set_refs": value_set_refs,
+            "codes": [],
+            "terminology_associations": [],
+            "logical_domain": {
+                "options": {}, "source": "model-extension",
+            },
+            "formal_terminology": {
+                "value_sets": _formal_value_set_refs(
+                    {
+                        "value_sets": value_set_ids,
+                        "value_set_refs": value_set_refs,
+                    },
+                    value_sets,
+                ),
+                "members": formal_values,
+                "source": "model-extension-binding",
+                **formal_status,
+            },
+            "model_extension": extension_provenance,
+        }
+        if formal_values:
+            field["accepted_values"] = formal_values
+        fields[path] = field
+        order.append(path)
+
+    canonical = json.dumps(
+        extensions, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "source": "decor2hl7.json",
+        "version": 1,
+        "status": "reviewed",
+        "collision_policy": "error",
+        "field_count": len(configured),
+        "sha256": hashlib.sha256(canonical).hexdigest(),
+        **(
+            {"reason": str(extensions["reason"])}
+            if extensions.get("reason") else {}
+        ),
+    }
+
+
 def _logical_values(field: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     values: dict[str, dict[str, Any]] = {}
     option_details = (
@@ -1318,6 +1540,7 @@ def compile_model(
     resource_paths: Iterable[Path] = (),
     terminology_paths: Iterable[Path] = (),
     transaction_source: Path | None = None,
+    model_extensions: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not transaction.exists():
         raise FileNotFoundError(f"missing {transaction}")
@@ -1493,6 +1716,11 @@ def compile_model(
             field["accepted_values"] = accepted_values
         fields[model_path] = field
 
+    order = list(nodes)
+    extension_meta = _apply_model_extensions(
+        model_extensions, groups, fields, value_sets, order,
+    )
+
     meta = {
         "dataset_id": root.get("id"),
         "transaction_id": root.get("transactionId"),
@@ -1534,11 +1762,12 @@ def compile_model(
                 "effect": "accepted-values-and-domain-status",
             },
         ],
+        **({"model_extensions": extension_meta} if extension_meta else {}),
     }
     return {
         "version": 2,
         "meta": meta,
-        "order": list(nodes),
+        "order": order,
         "groups": groups,
         "fields": fields,
         "value_sets": value_sets,
@@ -1551,10 +1780,12 @@ def write_model(
     model_dir: Path,
     terminology_paths: Iterable[Path] = (),
     transaction_source: Path | None = None,
+    model_extensions: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     model = compile_model(
         transaction, resource_paths, terminology_paths,
         transaction_source=transaction_source,
+        model_extensions=model_extensions,
     )
     write_json(model_dir / "model.json", model)
     return model
@@ -1566,9 +1797,11 @@ def write_transaction_model(
     resources: Iterable[Path],
     terminology: Iterable[Path],
     model_dir: Path,
+    model_extensions: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write ``model.json`` from the authoritative source/analysis pair."""
     return write_model(
         analysis, resources, model_dir, terminology,
         transaction_source=source,
+        model_extensions=model_extensions,
     )

@@ -18,6 +18,9 @@ external input + site configuration
 ```
 
 `model.json` is target-neutral. `cda.json` is the current physical target model.
+An optional reviewed `model_extensions` block in root `decor2hl7.json` is
+compiled into the former only after collision, parent, cardinality, provenance,
+and exact-terminology checks. Target assignments remain in the portable mapping.
 `cda-mapping.json` is the portable reviewed bridge between them. Site input
 configuration and runtime state are separate products.
 

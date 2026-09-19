@@ -3088,7 +3088,7 @@ def _cda_mapping_analysis(
             primary_rules = mapping_rules(primary.get("mapping"))
             primary_targets = [
                 str(rule["target"]) for rule in primary_rules
-                if rule.get("mode") not in {"fallback", "fallback_if_active"}
+                if rule.get("mode") not in {"fallback", "fallback_if_active", "if_active"}
             ] or [primary["target"]]
             for target_name in primary_targets:
                 claims[target_name].append(path)

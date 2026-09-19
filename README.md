@@ -77,7 +77,7 @@ mapping decisions, site configuration, test output, runtime output, and state:
 INPUT/                              producer-owned source snapshot
 
 WORKSPACE/                          decor2hl7-owned
-├── decor2hl7.json                  selected release, transaction, and defaults
+├── decor2hl7.json                  selection and reviewed local model extensions
 ├── config/                         acquisition hints and reviewed overlays
 ├── spec/<release>/                 fetched cache and transaction closures
 ├── model/<release>/<transaction>/  generated models, audit, and proposal

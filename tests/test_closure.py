@@ -113,7 +113,7 @@ class ReferenceClosureTests(unittest.TestCase):
             )
             if inventory is not None:
                 inventories[path] = inventory
-        self.assertEqual(len(inventories), 29)
+        self.assertEqual(len(inventories), 31)
         self.assertTrue(all(value["items"] for value in inventories.values()))
         self.assertEqual(
             {value["document_pool_size"] for value in inventories.values()},
@@ -284,7 +284,7 @@ class ReferenceClosureTests(unittest.TestCase):
         self.assertTrue(manifest.get("complete"))
         self.assertTrue(manifest.get("executable"))
 
-    def test_mapping_delta_matches_reviewed_relationship_boundary(self) -> None:
+    def test_mapping_delta_matches_reviewed_reference_boundary(self) -> None:
         baseline = self._load(
             Path(__file__).parent / "fixtures" / "reference-mapping-audit.json"
         )
@@ -305,11 +305,16 @@ class ReferenceClosureTests(unittest.TestCase):
             "patient.identifikatoren.patienten_id",
         ])
         self.assertEqual(delta["gained"], [
+            "abschlussdiagnosen.abschlussdiagnose.lateralitat",
+            "administrative_verlegungsentlassungsinformationen.aufnehmende_fachabteilung",
             "hauptkostentrager.versicherungsverhaltnis.identifikation",
+            "hauptkostentrager.versicherungsverhaltnis.kv_fall",
+            "hauptkostentrager.versicherungsverhaltnis.versichertenstatus",
+            "hauptkostentrager.versicherungsverhaltnis.versichertenstatus_gkv",
         ])
         current_counts = current["summary"]["coverage_headline"]
-        self.assertEqual(current_counts["mapped_datapoints"], 84)
-        self.assertEqual(current_counts["no_target_datapoints"], 32)
+        self.assertEqual(current_counts["mapped_datapoints"], 89)
+        self.assertEqual(current_counts["no_target_datapoints"], 34)
 
     def test_reviewed_recovery_overlay_matches_authoritative_mapping(self) -> None:
         repository = Path(__file__).resolve().parents[1]
@@ -325,15 +330,26 @@ class ReferenceClosureTests(unittest.TestCase):
         model = self._load(self.model_dir / "model.json")
         cda = self._load(self.model_dir / "cda.json")
 
-        proposal_null_reviewed = {
+        proposal_overridden_by_review = {
             path: value for path, value in reviewed["fields"].items()
-            if value is not None and proposal["fields"].get(path) is None
+            if value is not None and (
+                proposal["fields"].get(path) is None
+                or [
+                    cda_target_name(rule) for rule in mapping_rules(value)
+                ] != [
+                    cda_target_name(rule) for rule in mapping_rules(
+                        proposal["fields"].get(path)
+                    )
+                ]
+            )
         }
         reviewed_only_defaults = {
             path: value for path, value in reviewed["target_defaults"].items()
             if path not in proposal.get("target_defaults", {})
         }
-        self.assertEqual(recovery["field_overrides"], proposal_null_reviewed)
+        self.assertEqual(
+            recovery["field_overrides"], proposal_overridden_by_review,
+        )
         self.assertEqual(
             recovery["narrative_overrides"], reviewed.get("narratives", {}),
         )
@@ -358,11 +374,11 @@ class ReferenceClosureTests(unittest.TestCase):
         self.assertEqual(
             recovery["expected"],
             {
-                "dataset_fields": 120,
-                "generated_mapped_fields": 84,
-                "reviewed_mapped_fields": 113,
+                "dataset_fields": 127,
+                "generated_mapped_fields": 89,
+                "reviewed_mapped_fields": 120,
                 "reviewed_narrative_fields": 2,
-                "field_override_count": 29,
+                "field_override_count": 36,
                 "narrative_target_count": 1,
                 "structure_override_count": 3,
                 "field_review_override_count": 5,

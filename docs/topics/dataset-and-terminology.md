@@ -4,7 +4,7 @@
 all output targets. CDA is a consumer of this model, not part of its definition.
 
 Related decisions: DEC-003, DEC-005, DEC-006, DEC-016, DEC-025, DEC-037,
-DEC-039, DEC-040, and DEC-042.
+DEC-039, DEC-040, DEC-042, and DEC-046.
 
 ## Dataset composition
 
@@ -23,6 +23,26 @@ contradiction, not a reason to borrow from another dataset revision.
 Every compiled field retains identity, name and description, datatype and
 constraints, cardinality, parent, repeat chain, terminology associations,
 domain metadata, and provenance. Groups and fields remain distinct.
+
+## Reviewed local model extensions
+
+When an approved CDA data requirement has no field in the published dataset,
+the workspace may declare `decor2hl7.json:model_extensions`. This is a narrow
+target-neutral supplement, not an editable replacement dataset. Version 1
+requires `status: "reviewed"`, `collision_policy: "error"`, an existing
+immediate parent group, a scalar 0..1 or 1..1 field, and a review reason.
+Paths may not collide with owner-published groups or fields.
+
+A coded extension may name one exact `id` and `effective_date`. The revision
+must be locally available and completely expanded; unresolved terminology
+fails the build. Repeat identity is inherited from the parent group. Compiled
+fields carry `concept: model-extension:<path>`, a `model_extension` provenance
+block, and the canonical extension hash in `meta.model_extensions`. The
+generated mapping trees label this provenance explicitly.
+
+Extensions add input/model concepts only. CDA target choices and derivations
+remain reviewed decisions in `cda-mapping.json`, while CSV columns and local
+aliases remain site configuration.
 
 ## Terminology views
 

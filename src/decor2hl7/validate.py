@@ -252,7 +252,7 @@ def check_config(
                 continue
             mode = rule.get("mode")
             if mode not in {
-                None, "fallback", "fallback_if_active", "presence",
+                None, "fallback", "fallback_if_active", "if_active", "presence",
             }:
                 errors.append(
                     f"cda-mapping: {path} -> {target_name}: unknown assignment mode "
@@ -315,13 +315,34 @@ def check_config(
                         f"cda-mapping: {path} -> {target_name}: presence mode requires a boolean source"
                     )
                 continue
-            if mode == "fallback_if_active":
+            if mode in {"fallback_if_active", "if_active"}:
                 review_reason = rule.get("reason")
                 if not isinstance(review_reason, str) or not review_reason.strip():
                     errors.append(
                         f"cda-mapping: {path} -> {target_name}: "
-                        "fallback_if_active requires a non-empty review reason"
+                        f"{mode} requires a non-empty review reason"
                     )
+            if mode == "if_active":
+                active_if = str(rule.get("active_if") or "")
+                guard = targets.get(active_if)
+                if not active_if or not isinstance(guard, Mapping):
+                    errors.append(
+                        f"cda-mapping: {path} -> {target_name}: if_active "
+                        "requires one exact active_if CDA target"
+                    )
+                elif active_if == cda_target_name:
+                    errors.append(
+                        f"cda-mapping: {path} -> {target_name}: if_active "
+                        "cannot guard itself"
+                    )
+                elif list(guard.get("repeat_ancestors") or []) != list(
+                    target.get("repeat_ancestors") or []
+                ):
+                    errors.append(
+                        f"cda-mapping: {path} -> {target_name}: if_active "
+                        "guard and value must have the same occurrence shape"
+                    )
+            if mode == "fallback_if_active":
                 target_required = bool(target.get("mandatory")) or int(
                     target.get("min") or 0
                 ) >= 1
