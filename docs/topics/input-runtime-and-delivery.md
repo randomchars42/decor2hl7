@@ -22,13 +22,13 @@ not infer joins, cardinality, or occurrence identity. `build` and
 CSV mappings may specify parsing and small input transforms. Local code or unit
 aliases are input policy and cannot extend a bound formal dataset terminology.
 
-### Optional ODBC source stage
+### Optional database source stage
 
-An ODBC deployment configures `site.json:source` and one reviewed SQL file per
-declared `input.sources` entry. Every query receives exactly one positional
+An ODBC or SQLite deployment configures `site.json:source` and one reviewed SQL
+file per declared `input.sources` entry. Every query receives exactly one positional
 lower-bound date. The case source must return its configured join column and
 `source.written_at_column`; each other query must return its global or
-source-specific join column plus configured occurrence/primary columns. The
+source-specific join column plus configured occurrence/primary columns. An ODBC
 DSN or connection string is read only from the environment variable named by
 `source.dsn_env`. Credentials never enter a snapshot or sidecar.
 
@@ -41,6 +41,30 @@ scalars receive only stable serialization; opaque ODBC binary values such as
 `VARBINARY` hashes are written as lowercase hexadecimal text. Null, datetime,
 terminology, unit, and clinical normalization remain owned by `data.ingest`.
 
+Native SQLite uses `source.adapter: sqlite` and a non-empty `source.database`
+filename. Absolute filenames are accepted; relative filenames resolve beside
+the actual `site.json`, including the default release-wide site file and
+`--site-config` overrides. SQL paths still resolve against the transaction
+bundle. SQLite never imports `pyodbc` and needs no ODBC driver. ODBC installation
+uses the optional `odbc` package extra.
+
+The SQLite file must already exist and contain a valid database. The adapter
+opens it with URI `mode=ro`, enables query-only mode, and establishes one read
+transaction for the complete extraction. Site SQL is restricted to reads and
+computations, including CTEs; it cannot attach databases, change pragmas, or end
+that transaction. Closing the connection releases the snapshot. A concurrent
+writer cannot cause case and child queries to observe different revisions.
+The adapter does not open SQLite's `immutable` mode because the source may be
+updated between runs.
+
+SQLite receives the lower-bound parameter as explicit `YYYY-MM-DD` text,
+without Python's implicit date adapters. SQLite queries must return timestamps
+as ISO text in a consistent timezone/format so date-window and maximum-write
+comparisons remain meaningful. Numeric or engine-specific dates need explicit
+site-owned SQL conversion. Scalar serialization and all subsequent clinical
+normalization remain shared with ODBC and external CSV input. The snapshot
+manifest records the selected adapter.
+
 Rows are deterministically ordered by join key, optional site-owned
 `order_by`, configured occurrence keys, and remaining columns. `order_by`
 records clinically meaningful row order such as diagnosis rank; remaining
@@ -51,7 +75,7 @@ visible.
 
 The extraction window is a change-detection rescan, not a declaration that
 older cases ceased to exist. Runtime therefore never uses absence from a
-bounded ODBC snapshot—or from a `--limit` development run—to delete another
+bounded database snapshot—or from a `--limit` development run—to delete another
 record's pending artifact.
 
 ## Occurrences and validation
@@ -79,7 +103,7 @@ values.
 The runtime sequence is:
 
 ```text
-optional ODBC extraction -> immutable external input snapshot
+optional database extraction -> immutable external input snapshot
   -> ingest and join
   -> normalize and validate
   -> build occurrence-aware assignments

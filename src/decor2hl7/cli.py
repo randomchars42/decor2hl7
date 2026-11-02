@@ -602,17 +602,12 @@ def _site_scaffold(
             "null_values": ["NULL", "NA", "N/A"],
             "unit_aliases": {},
             "sources": sources,
-            "source_note": (
-                "Source file names are relative to the external input root. "
-                "For 1:n sources set cardinality to 1:n. Optional primary: "
-                "{column, true_values, required} moves one flagged row first; "
-                "missing required or duplicate flags are input errors. ODBC "
-                "sources may set order_by to an ordered list of columns."
-            ),
+            "source_note": Translator().text("cli.input_source_note"),
         },
         "source": {
             "adapter": None,
             "dsn_env": "DECOR2HL7_ODBC_DSN",
+            "database": None,
             "written_at_column": None,
             "window_days": 90,
             "queries": {name: f"sql/{name}.sql" for name in sources},
@@ -1057,16 +1052,18 @@ def cmd_check(args: argparse.Namespace) -> int:
     source_errors, parity = _verify_compiled_sources(root, cda)
     errors.extend(source_errors)
     source_config = site.get("source", {})
-    if isinstance(source_config, Mapping) and source_config.get("adapter") == "odbc":
-        bundle, _, _, _ = _site_paths(
+    if isinstance(source_config, Mapping) and source_config.get("adapter") in ("odbc", "sqlite"):
+        bundle, _, _, site_path = _site_paths(
             root, release, selected_transaction(root), args.site_config
         )
         query_problems = source.query_errors(site, bundle)
         errors.extend(query_problems)
         if not query_problems and not validate.check_site(site, cda):
             try:
-                source.check_connection(site)
-                _out("ODBC source connection: OK")
+                source.check_connection(site, site_path.parent, output_language=args.output_language)
+                _out(Translator(args.output_language).text(
+                    "cli.source_connection_ok", adapter=source_config["adapter"],
+                ))
             except ValueError as error:
                 errors.append(str(error))
     _out(f"model datapoints: {len(model.get('fields', {}))}")
@@ -1671,7 +1668,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def _source_site(
     root: Path,
     site_config_override: str | Path | None,
-) -> tuple[Path, dict[str, Any]]:
+) -> tuple[Path, Path, dict[str, Any]]:
     from . import source, validate
 
     release = selected_release(root)
@@ -1687,7 +1684,7 @@ def _source_site(
             "source runtime configuration is invalid:\n"
             + "\n".join("  " + item for item in errors)
         )
-    return bundle, site
+    return bundle, site_path.parent, site
 
 
 def _parse_since(value: str | None) -> dt.date | None:
@@ -1703,7 +1700,7 @@ def cmd_extract_source(args: argparse.Namespace) -> int:
     from . import source, state
 
     root = _root(args)
-    bundle, site = _source_site(root, args.site_config)
+    bundle, config_dir, site = _source_site(root, args.site_config)
     output = _explicit_path(args.output)
     run_id = _new_run_id()
     with state.workspace_lock(state_dir(root)):
@@ -1713,7 +1710,8 @@ def cmd_extract_source(args: argparse.Namespace) -> int:
         )
         try:
             manifest = source.extract(
-                site, bundle, output, since=_parse_since(args.since)
+                site, bundle, output, since=_parse_since(args.since),
+                config_dir=config_dir, output_language=args.output_language,
             )
             state.finish_run(
                 state_dir(root), run_id, status="extracted",
@@ -1737,7 +1735,7 @@ def cmd_run_source(args: argparse.Namespace) -> int:
     from . import source, state
 
     root = _root(args)
-    bundle, site = _source_site(root, args.site_config)
+    bundle, config_dir, site = _source_site(root, args.site_config)
     if args.dry_run and args.send:
         raise ValueError("--dry-run and --send cannot be combined")
     run_id = _new_run_id()
@@ -1753,7 +1751,8 @@ def cmd_run_source(args: argparse.Namespace) -> int:
         manifest: dict[str, Any] | None = None
         try:
             manifest = source.extract(
-                site, bundle, snapshot, since=_parse_since(args.since)
+                site, bundle, snapshot, since=_parse_since(args.since),
+                config_dir=config_dir, output_language=args.output_language,
             )
             source_config = site.get("source", {})
             require_advance = (

@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import Any, Mapping
 
 from .domain import accepted_values, logical_values
+from .i18n import Translator
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import xml.etree.ElementTree as ET
 
@@ -107,16 +108,22 @@ def check_site(site: Mapping[str, Any], cda: Mapping[str, Any] | None = None) ->
     elif isinstance(source_cfg, Mapping):
         adapter = source_cfg.get("adapter")
         allowed_source_keys = {
-            "adapter", "dsn_env", "written_at_column", "window_days",
+            "adapter", "dsn_env", "database", "written_at_column", "window_days",
             "queries", "require_snapshot_advance",
         }
         unknown = sorted(str(key) for key in source_cfg if key not in allowed_source_keys)
         if unknown:
             errors.append("site: unsupported source option(s): " + ", ".join(unknown))
-        if adapter not in (None, "odbc"):
-            errors.append("site: source.adapter must be null or 'odbc'")
-        if adapter == "odbc":
-            for key in ("dsn_env", "written_at_column"):
+        if adapter not in (None, "odbc", "sqlite"):
+            errors.append(Translator().text("ui.source_adapter_invalid"))
+        if adapter in ("odbc", "sqlite"):
+            if adapter == "sqlite" and (
+                not isinstance(source_cfg.get("database"), str)
+                or not str(source_cfg.get("database")).strip()
+            ):
+                errors.append(Translator().text("ui.sqlite_database_required"))
+            required = ("dsn_env", "written_at_column") if adapter == "odbc" else ("written_at_column",)
+            for key in required:
                 if not isinstance(source_cfg.get(key), str) or not str(source_cfg.get(key)).strip():
                     errors.append(f"site: source.{key} must be a non-empty string")
             days = source_cfg.get("window_days", 90)

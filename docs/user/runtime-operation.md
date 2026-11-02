@@ -58,7 +58,8 @@ decor2hl7 run --input /data/clinical-export --send
 decor2hl7 status
 ```
 
-When `site.json:source.adapter` is `odbc`, the equivalent scheduled path is:
+When `site.json:source.adapter` is `odbc` or `sqlite`, the equivalent scheduled
+path is:
 
 ```bash
 decor2hl7 run-source --dry-run
@@ -113,7 +114,7 @@ does not substitute for those controls.
 | Missing artifact, checksum, or selected identity | Specification maintainer or technical maintainer |
 | Disputed clinical correspondence or unresolved target | Clinical mapping reviewer |
 | Missing file/column, join, parsing, code alias, identifier, or timezone | Site integration administrator |
-| Stale snapshot maximum or ODBC/query failure | Database/replication and site integration owner |
+| Stale snapshot maximum or database/query failure | Database/replication and site integration owner |
 | CDA XSD, Schematron, or assertion failure | Mapping reviewer and technical maintainer |
 | Authentication, acknowledgement, or receiver protocol failure | Runtime/integration owner |
 

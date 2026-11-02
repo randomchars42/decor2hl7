@@ -71,6 +71,12 @@ For a plain text section target, the same labelled content uses a compact text
 fallback. This presentation is derived from the reviewed mapping and normalized
 record; it does not add clinical assignments.
 
+Replacement lineage uses the owner-admitted root `relatedDocument` slot.
+Insertion follows the compiled physical particle order through transparent
+includes and choices while preserving the existing header order. A correction
+therefore retains its fixed `typeId` header before `templateId` and the other
+CDA header particles.
+
 ## Schematron and assertions
 
 The build uses pinned DECOR-core, Saxon, XML Resolver, and complete CDA/SDTC XSD

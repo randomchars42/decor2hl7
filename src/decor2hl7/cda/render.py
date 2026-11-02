@@ -1572,7 +1572,16 @@ def _inject_document_replacement(
     """Render CDA RPLC lineage through the compiled, owner-admitted slot."""
     if len(document) != 1:
         raise ValueError("compiled CDA model has no unique document root")
-    children = list(document[0].get("children", []))
+    def root_particles(node: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+        result: list[Mapping[str, Any]] = []
+        for _, child in _ordered_children(node):
+            if child.get("kind") in {"include", "template", "datatype_choice", "choice"}:
+                result.extend(root_particles(child))
+            else:
+                result.append(child)
+        return result
+
+    children = root_particles(document[0])
     slots = [
         node for node in children
         if (
@@ -1620,18 +1629,18 @@ def _inject_document_replacement(
     ET.SubElement(parent, tag("versionNumber"), {
         "value": str(previous["version"]),
     })
-    root.append(related)
-
     def local_name(value: str) -> str:
-        return value.rsplit("}", 1)[-1].split(":", 1)[-1]
+        return value.rsplit("}", 1)[-1].split(":", 1)[-1].split("[", 1)[0]
 
-    order = {
-        local_name(str(node.get("name") or "")): int(node.get("render_order") or index)
-        for index, node in enumerate(children)
+    following_names = {
+        local_name(str(node.get("name") or ""))
+        for node in children[children.index(slots[0]) + 1:]
     }
-    root[:] = sorted(
-        list(root), key=lambda element: order.get(local_name(element.tag), 1_000_000)
+    insertion = next(
+        (index for index, child in enumerate(root) if local_name(child.tag) in following_names),
+        len(root),
     )
+    root.insert(insertion, related)
 
 
 def emit(

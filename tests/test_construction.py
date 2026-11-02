@@ -179,6 +179,17 @@ class ConstructionTests(unittest.TestCase):
                 "attributes": [], "codes": [],
                 "fixed": {"classCode": "DOCCLIN"}, "targets": [],
                 "children": [{
+                    "kind": "include", "min": 1, "max": 1, "render_order": 1,
+                    "children": [{
+                        "kind": "element", "name": "hl7:typeId", "min": 1, "max": 1,
+                        "fixed": {"root": "2.16.840.1.113883.1.3", "extension": "POCD_HD000040"},
+                        "attributes": [], "children": [], "targets": [],
+                    }],
+                }, {
+                    "kind": "element", "name": "hl7:templateId", "min": 1, "max": 1,
+                    "render_order": 2, "fixed": {"root": "1.2.3.4"},
+                    "attributes": [], "children": [], "targets": [],
+                }, {
                     "kind": "element", "name": "hl7:relatedDocument",
                     "min": 0, "max": None, "mandatory": False,
                     "attributes": [], "codes": [], "fixed": {},
@@ -200,6 +211,10 @@ class ConstructionTests(unittest.TestCase):
         )
         self.assertEqual(problems, [])
         root = ET.fromstring(payload)
+        self.assertEqual(
+            [child.tag.rsplit("}", 1)[-1] for child in root],
+            ["typeId", "templateId", "relatedDocument"],
+        )
         related = find_required(root, "{urn:hl7-org:v3}relatedDocument")
         self.assertEqual(related.get("typeCode"), "RPLC")
         parent = find_required(related, "{urn:hl7-org:v3}parentDocument")

@@ -16,7 +16,7 @@ selection
 external CSV snapshot + site configuration
    -> ingest -> normalize -> validate -> bind -> render -> transport -> state
 
-optional ODBC source
+optional ODBC or SQLite source
    -> bounded extraction -> atomic CSV snapshot -> the same runtime pipeline
 ```
 
@@ -76,7 +76,7 @@ src/decor2hl7/
 │   └── render.py           representation-driven XML output
 ├── domain.py               target-neutral dataset value domains
 ├── data.py                 CSV ingestion and occurrence normalization
-├── source.py               bounded ODBC extraction and snapshot publication
+├── source.py               bounded ODBC/SQLite extraction and snapshot publication
 ├── bindings.py             mappings, structures, and construction values
 ├── transforms.py           declarative scalar transforms
 ├── cooccurrence.py         datatype-shape admissibility
@@ -152,12 +152,12 @@ See [`topics/mapping-and-construction.md`](topics/mapping-and-construction.md).
 ## Runtime data flow
 
 The input root is external and explicit. It may be producer-supplied or an
-immutable snapshot created by the built-in ODBC source adapter. Runtime accepts
-a reviewed mapping file and a site bundle rather than individual flags for
+immutable snapshot created by the built-in ODBC or SQLite source adapter.
+Runtime accepts a reviewed mapping file and a site bundle rather than individual flags for
 each JSON file.
 
 ```text
-ODBC source (optional)
+ODBC or SQLite source (optional)
   -> source.extract -> atomically published INPUT/
 
 INPUT/
@@ -208,8 +208,8 @@ rather than runtime-oriented `validate.py`.
 
 - Generated model and test directories are rebuildable; reviewed mapping and
   site configuration have distinct owners.
-- Runtime uses the standard library plus the bounded `pyodbc` source driver;
-  setup/build validation may also use pinned Java tooling.
+- CSV and SQLite runtime use the standard library. ODBC extraction optionally
+  uses `pyodbc`; setup/build validation may also use pinned Java tooling.
 - Mapping review, site validation, and document conformance are independent
   gates.
 - Transport adapters are code-defined and bounded rather than dynamically

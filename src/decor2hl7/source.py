@@ -1,4 +1,4 @@
-"""Bounded ODBC extraction into replayable, atomically published CSV snapshots.
+"""Bounded database extraction into atomically published CSV snapshots.
 
 This boundary performs no clinical normalization. Database scalar values are
 serialized stably; the existing input layer remains the sole owner of null,
@@ -15,15 +15,12 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import tempfile
 from typing import Any, Mapping
 
 from .workspace import load_json, write_json
-
-try:
-    import pyodbc  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - dependency error is reported clearly
-    pyodbc = None
+from .i18n import Translator
 
 
 MANIFEST = ".decor2hl7-snapshot.json"
@@ -31,8 +28,8 @@ MANIFEST = ".decor2hl7-snapshot.json"
 
 def _source_config(site: Mapping[str, Any]) -> Mapping[str, Any]:
     value = site.get("source", {})
-    if not isinstance(value, Mapping) or value.get("adapter") != "odbc":
-        raise ValueError("site source.adapter must be 'odbc' for database extraction")
+    if not isinstance(value, Mapping) or value.get("adapter") not in ("odbc", "sqlite"):
+        raise ValueError(Translator().text("ui.source_adapter_required"))
     return value
 
 
@@ -123,7 +120,10 @@ def _sort_value(value: Any) -> tuple[bool, str]:
 def _execute(connection: Any, sql: str, window_from: dt.date) -> tuple[list[str], list[dict[str, Any]]]:
     cursor = connection.cursor()
     try:
-        cursor.execute(sql, (window_from,))
+        # Bind SQLite dates explicitly rather than relying on Python's default
+        # date adapters. ODBC retains its native date parameter contract.
+        parameter = window_from.isoformat() if isinstance(connection, sqlite3.Connection) else window_from
+        cursor.execute(sql, (parameter,))
         if cursor.description is None:
             raise ValueError("source query returned no result columns")
         columns = [str(column[0]) for column in cursor.description]
@@ -139,9 +139,50 @@ def _execute(connection: Any, sql: str, window_from: dt.date) -> tuple[list[str]
         cursor.close()
 
 
-def _connect(config: Mapping[str, Any]) -> Any:
-    if pyodbc is None:
-        raise ValueError("pyodbc is not installed; install decor2hl7 with its runtime dependencies")
+def _sqlite_authorize(
+    action: int, arg1: str | None, arg2: str | None,
+    database: str | None, trigger: str | None,
+) -> int:
+    # Source SQL may read and compute, including recursive CTEs. It cannot
+    # attach files, change connection policy, or end the shared transaction.
+    return sqlite3.SQLITE_OK if action in {
+        sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ,
+        sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE,
+    } else sqlite3.SQLITE_DENY
+
+
+def _connect(
+    config: Mapping[str, Any], config_dir: Path, *, output_language: str = "en",
+) -> Any:
+    translator = Translator(output_language)
+    if config.get("adapter") == "sqlite":
+        configured = config.get("database")
+        if not isinstance(configured, str) or not configured.strip():
+            raise ValueError(translator.text("ui.sqlite_database_required"))
+        path = Path(configured).expanduser()
+        path = path.resolve() if path.is_absolute() else (config_dir / path).resolve()
+        if not path.is_file():
+            raise ValueError(translator.text("cli.sqlite_missing", path=path))
+        connection = None
+        try:
+            connection = sqlite3.connect(
+                path.as_uri() + "?mode=ro", uri=True, isolation_level=None,
+            )
+            connection.execute("PRAGMA query_only = ON")
+            connection.execute("BEGIN")
+            # Establish and validate the read snapshot before executing any
+            # site SQL. Closing rolls it back without changing the source.
+            connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+            connection.set_authorizer(_sqlite_authorize)
+            return connection
+        except sqlite3.Error as error:
+            if connection is not None:
+                connection.close()
+            raise ValueError(translator.text("cli.sqlite_open_failed", path=path, error=error)) from error
+    try:
+        import pyodbc  # type: ignore[import-not-found]
+    except ImportError as error:
+        raise ValueError(translator.text("ui.odbc_dependency_missing")) from error
     env_name = str(config.get("dsn_env") or "")
     connection_string = os.environ.get(env_name) if env_name else None
     if not connection_string:
@@ -154,13 +195,15 @@ def _connect(config: Mapping[str, Any]) -> Any:
         raise ValueError(f"could not connect to the source database: {error}") from error
 
 
-def check_connection(site: Mapping[str, Any]) -> None:
-    connection = _connect(_source_config(site))
+def check_connection(
+    site: Mapping[str, Any], config_dir: Path, *, output_language: str = "en",
+) -> None:
+    connection = _connect(_source_config(site), config_dir, output_language=output_language)
     connection.close()
 
 
 def query_errors(site: Mapping[str, Any], site_dir: Path) -> list[str]:
-    """Return filesystem-level query contract errors without opening ODBC."""
+    """Return filesystem-level query contract errors without opening a database."""
     try:
         config = _source_config(site)
         sources = _input_sources(site)
@@ -191,6 +234,7 @@ def window_from(site: Mapping[str, Any], since: dt.date | None = None) -> dt.dat
 def extract(
     site: Mapping[str, Any], site_dir: Path, output: Path, *,
     since: dt.date | None = None, connection: Any | None = None,
+    config_dir: Path | None = None, output_language: str = "en",
 ) -> dict[str, Any]:
     """Execute every configured query once and atomically publish a snapshot."""
     config = _source_config(site)
@@ -203,7 +247,7 @@ def extract(
     if case_source not in sources:
         raise ValueError("site input.case_source must name a configured input source")
     if not join_column:
-        raise ValueError("site input.join_column is required for ODBC extraction")
+        raise ValueError(Translator(output_language).text("ui.source_join_required"))
     if _source_cardinality(sources[case_source]) != "1:1":
         raise ValueError("site input.case_source must have cardinality 1:1")
     filenames = [_source_file(str(name), value) for name, value in sources.items()]
@@ -231,7 +275,7 @@ def extract(
     case_keys: set[str] = set()
     try:
         if connection is None:
-            connection = _connect(config)
+            connection = _connect(config, config_dir or site_dir, output_language=output_language)
         lower_bound = window_from(site, since)
         ordered_names = [case_source, *sorted(str(name) for name in sources if str(name) != case_source)]
         for source_name in ordered_names:
@@ -297,7 +341,7 @@ def extract(
 
         manifest = {
             "version": 1,
-            "adapter": "odbc",
+            "adapter": config["adapter"],
             "extracted_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "window_from": lower_bound.isoformat(),
             "window_to": dt.datetime.now(dt.timezone.utc).date().isoformat(),

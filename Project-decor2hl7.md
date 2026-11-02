@@ -58,8 +58,9 @@ identity lock and generated review guides. It contains no site CSV layout.
 
 ### Site and input configuration
 
-The local administrator connects a deployment's source export or read-only ODBC
-replica to the target-neutral dataset model. This workflow owns extraction SQL,
+The local administrator connects a deployment's source export, read-only ODBC
+replica, or native SQLite file to the target-neutral dataset model. This workflow
+owns extraction SQL,
 filenames, joins, CSV columns, parsing, local code and unit aliases, occurrence
 keys, identifiers, timezone, and other deployment policy.
 
@@ -69,7 +70,7 @@ target mapping.
 ### Runtime and operation
 
 Runtime combines one immutable input snapshot, compiled models, the reviewed
-mapping, and site configuration. An optional bounded ODBC stage creates that
+mapping, and site configuration. An optional bounded database stage creates that
 snapshot without clinical normalization. The common runtime then ingests,
 normalizes, validates, maps, renders, delivers, and commits SQLite change and
 lineage state. Runtime does not perform specification discovery or compilation.

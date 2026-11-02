@@ -43,7 +43,7 @@ The site bundle describes:
 - record identity and occurrence keys;
 - local code and unit aliases;
 - identifiers, timezone, and deployment values;
-- optional ODBC extraction queries, window, and replication guard;
+- optional ODBC or SQLite extraction queries, window, and replication guard;
 - transport configuration when delivery is enabled.
 
 Keep values from one repeated source occurrence together. If two tables repeat
@@ -96,6 +96,71 @@ replication watermark advances for every successful scheduled replication.
 Otherwise a legitimate quiet day is indistinguishable from a stale replica;
 disable the guard and monitor replication separately.
 
+### SQLite input and a local integration test
+
+Set `source.adapter` to `sqlite` and `source.database` to an existing SQLite
+filename. Keep the same input sources, SQL query contract, joins, occurrence
+keys, and site mappings. For example:
+
+```json
+{
+  "source": {
+    "adapter": "sqlite",
+    "database": "/data/synthetic/source.sqlite",
+    "written_at_column": "written_at",
+    "window_days": 90,
+    "queries": {
+      "cases": "sql/cases.sql",
+      "diagnoses": "sql/diagnoses.sql"
+    },
+    "require_snapshot_advance": false
+  }
+}
+```
+
+A relative database filename resolves beside `site.json`; SQL filenames resolve
+against the transaction bundle. The adapter opens an existing database
+read-only and holds one consistent read transaction across all queries. No
+SQLite ODBC driver or `pyodbc` installation is needed. Use ISO text timestamps
+in one consistent timezone/format; the lower-bound `?` is `YYYY-MM-DD` text.
+Write queries for SQLite's SQL dialect.
+
+For a repeatable integration test, use the authored reference scenarios already
+maintained in this repository. From the source checkout, after preparing the
+matching compiled models and reviewed mapping in the companion workspace:
+
+```bash
+decor2hl7 --root ../test-workplace setup-test \
+  --scenario tests/fixtures/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases \
+  --test-dir /tmp/decor2hl7-authored
+python3 scripts/create_sqlite_test_source.py \
+  --fixture /tmp/decor2hl7-authored --output /tmp/decor2hl7-sqlite \
+  --written-at 2026-06-01T12:00:00Z
+decor2hl7 --root ../test-workplace check --site-config /tmp/decor2hl7-sqlite
+decor2hl7 --root ../test-workplace run-source \
+  --site-config /tmp/decor2hl7-sqlite --since 2026-01-01 --dry-run
+decor2hl7 --root ../test-workplace run-source \
+  --site-config /tmp/decor2hl7-sqlite --since 2026-01-01 --send
+```
+
+Choose new fixture and output paths for each setup. The builder preserves raw
+CSV values, adds an explicit synthetic case-write timestamp, and creates a
+SQLite database, SQL queries, copied site mappings, provenance, and a site
+configuration that publishes to the bundle's `spool/` directory. It refuses
+existing output. Its source data is the authored fixture; generated CDA is not
+used as the expected result.
+
+The test configuration disables `require_snapshot_advance` so the same fixture
+can be replayed. The initial send publishes documents; an unchanged repeat
+publishes no new versions. A change to a mapped source value exercises the
+normal correction and replacement-lineage path. Source and runtime-state
+SQLite files have separate ownership. Runtime output and delivery history still
+belong to the selected workspace, even with a test site override; use a
+separate test workspace to keep an independent history.
+
+The spool is a local handover. Testing an AKTIN container additionally requires
+its supported import interface and confirmation that it accepted the documents.
+
 ## 3. Validate the configuration and input
 
 ```bash
@@ -105,9 +170,9 @@ decor2hl7 extract-source --output /data/snapshots/acceptance-1
 decor2hl7 check-input --input /data/snapshots/acceptance-1
 ```
 
-`check` verifies the selected workspace products and configuration; when ODBC
-is enabled it also checks query files, the credential environment variable,
-and database connectivity.
+`check` verifies the selected workspace products and configuration. For either
+database adapter it also checks query files and connectivity; ODBC additionally
+requires its credential environment variable.
 `check-input` reads and validates the source snapshot without generating CDA.
 `extract-source` is optional and never changes document lineage; its output is
 an immutable CSV snapshot that can be replayed through `check-input`,

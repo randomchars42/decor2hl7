@@ -29,13 +29,15 @@ The user workflows are deliberately separate:
 ## Requirements
 
 - Python 3.10.8 or newer;
-- an ODBC driver manager and database-specific ODBC driver when direct source
+- an ODBC driver manager and database-specific ODBC driver when ODBC source
   extraction is enabled;
 - Java for setup/build and explicit CDA conformance validation;
 - network access to acquire uncached ART-DECOR artifacts during `fetch`.
 
-Runtime depends on `pyodbc` for its optional built-in database source. CSV-only
-operation does not open ODBC. Setup/build validation packages are
+CSV and native SQLite operation use only the Python standard library. Direct
+ODBC extraction uses the optional `pyodbc` dependency; install it with
+`python3 -m pip install -e '.[odbc]'` and provide the database-specific ODBC
+driver. Setup/build validation packages are
 checksum-pinned and cached by `fetch`.
 
 ## Install
@@ -128,9 +130,11 @@ decor2hl7 status
 
 Use `decor2hl7 run --input /data/clinical-export --send` only after the separate
 validation and delivery steps are understood for the deployment.
-For a configured ODBC source, `decor2hl7 run-source --send` performs bounded
-extraction into a replayable atomic snapshot and then uses the identical
-ingestion, transformation, delivery, and SQLite lineage pipeline.
+For a configured ODBC or SQLite source, `decor2hl7 run-source --send` performs
+bounded extraction into a replayable atomic snapshot and then uses the identical
+ingestion, transformation, delivery, and SQLite lineage pipeline. See the
+[site configuration guide](docs/user/site-configuration.md#sqlite-input-and-a-local-integration-test)
+for native SQLite input and a reproducible synthetic integration test.
 
 ## Project maintenance
 

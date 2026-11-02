@@ -3,10 +3,13 @@ from __future__ import annotations
 import csv
 import datetime as dt
 from decimal import Decimal
+import sqlite3
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from decor2hl7 import source, validate
 
@@ -164,6 +167,123 @@ class SourceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate 1:1"):
                 source.extract(_site(), root, output, connection=connection)
             self.assertFalse(output.exists())
+
+
+class SQLiteSourceTests(unittest.TestCase):
+    @staticmethod
+    def prepare(root: Path) -> dict[str, Any]:
+        site = _site()
+        site["source"].update({"adapter": "sqlite", "database": "source #1?.sqlite"})
+        site["source"].pop("dsn_env")
+        (root / "sql").mkdir()
+        (root / "sql/cases.sql").write_text(
+            "SELECT * FROM cases WHERE written_at >= ?", encoding="utf-8",
+        )
+        (root / "sql/diagnoses.sql").write_text(
+            "SELECT d.* FROM diagnoses d JOIN cases c ON d.case_id = c.case_id "
+            "WHERE c.written_at >= ?", encoding="utf-8",
+        )
+        with sqlite3.connect(root / site["source"]["database"]) as connection:
+            connection.executescript("""
+                PRAGMA journal_mode=WAL;
+                CREATE TABLE cases (case_id TEXT, written_at TEXT, amount REAL, note TEXT);
+                CREATE TABLE diagnoses (case_id TEXT, rank INTEGER, code BLOB);
+                INSERT INTO cases VALUES
+                  ('B', '2026-09-23T08:30:00+00:00', 2.5, 'Übung'),
+                  ('A', '2026-09-22T08:30:00+00:00', 1, NULL),
+                  ('OLD', '2025-01-01T00:00:00+00:00', 0, 'old');
+                INSERT INTO diagnoses VALUES
+                  ('A', 2, X'00FF'), ('B', 1, 'C'), ('A', 1, 'A'), ('OLD', 1, 'OLD');
+            """)
+        return site
+
+    def test_sqlite_extracts_without_odbc_and_replays_identical_csv_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site = self.prepare(root)
+            with patch.dict(sys.modules, {"pyodbc": None}):
+                source.check_connection(site, root)
+                for name in ("first", "second"):
+                    result = source.extract(site, root, root / name, since=dt.date(2026, 1, 1))
+                    self.assertEqual(result["adapter"], "sqlite")
+                    self.assertEqual(result["row_counts"], {"cases": 2, "diagnoses": 3})
+            for name in ("cases.csv", "diagnoses.csv"):
+                self.assertEqual((root / "first" / name).read_bytes(), (root / "second" / name).read_bytes())
+            with (root / "first/cases.csv").open(encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle, delimiter=";"))
+            self.assertEqual([row["case_id"] for row in rows], ["A", "B"])
+            self.assertEqual(rows[0]["note"], "")
+            self.assertEqual(rows[1]["note"], "Übung")
+            with (root / "first/diagnoses.csv").open(encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle, delimiter=";"))
+            self.assertEqual([row["code"] for row in rows], ["A", "00ff", "C"])
+
+    def test_missing_and_invalid_databases_fail_without_creating_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site = self.prepare(root)
+            for name, content in (("missing.sqlite", None), ("invalid.sqlite", "not a database")):
+                with self.subTest(name=name):
+                    site["source"]["database"] = name
+                    if content is not None:
+                        (root / name).write_text(content, encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "SQLite"):
+                        source.extract(site, root, root / "output")
+                    self.assertFalse((root / "output").exists())
+                    self.assertEqual((root / name).exists(), content is not None)
+
+    def test_sqlite_queries_cannot_write_or_change_the_read_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site = self.prepare(root)
+            for sql in (
+                "UPDATE diagnoses SET code = ? RETURNING case_id, rank, code",
+                "PRAGMA query_only = OFF",
+                "COMMIT",
+                "ATTACH DATABASE ? AS other",
+            ):
+                with self.subTest(sql=sql):
+                    (root / "sql/diagnoses.sql").write_text(sql, encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "source query failed"):
+                        source.extract(site, root, root / "output", since=dt.date(2026, 1, 1))
+                    self.assertFalse((root / "output").exists())
+                    self.assertEqual(list(root.glob(".output-*")), [])
+            with sqlite3.connect(root / site["source"]["database"]) as connection:
+                self.assertEqual(connection.execute("SELECT code FROM diagnoses WHERE case_id='A' AND rank=1").fetchone(), ("A",))
+
+    def test_all_queries_observe_one_snapshot_despite_a_concurrent_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site = self.prepare(root)
+            execute = source._execute
+            calls = 0
+
+            def update_after_cases(connection: Any, sql: str, lower: dt.date) -> tuple[list[str], list[dict[str, Any]]]:
+                nonlocal calls
+                result = execute(connection, sql, lower)
+                calls += 1
+                if calls == 1:
+                    with sqlite3.connect(root / site["source"]["database"]) as writer:
+                        writer.execute("UPDATE diagnoses SET code='changed' WHERE case_id='A' AND rank=1")
+                return result
+
+            with patch("decor2hl7.source._execute", side_effect=update_after_cases):
+                source.extract(site, root, root / "output", since=dt.date(2026, 1, 1))
+            with (root / "output/diagnoses.csv").open(encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle, delimiter=";"))
+            self.assertEqual(rows[0]["code"], "A")
+            with sqlite3.connect(root / site["source"]["database"]) as connection:
+                self.assertEqual(connection.execute("SELECT code FROM diagnoses WHERE case_id='A' AND rank=1").fetchone(), ("changed",))
+
+    def test_sqlite_configuration_requires_a_filename_but_not_a_dsn(self) -> None:
+        site = _site()
+        site["source"]["adapter"] = "sqlite"
+        site["source"].pop("dsn_env")
+        self.assertTrue(any("source.database" in error for error in validate.check_site(site)))
+        site["source"]["database"] = "source.sqlite"
+        self.assertEqual(validate.check_site(site), [])
+        site["source"]["database"] = []
+        self.assertTrue(any("source.database" in error for error in validate.check_site(site)))
 
 
 if __name__ == "__main__":

@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import json
 import hashlib
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+import shutil
+import sqlite3
+import sys
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 from decor2hl7.cda.parity import declared_endpoint_parity
 from decor2hl7.compile import mapping as mapping_compiler
@@ -75,6 +82,79 @@ class ReferenceClosureTests(unittest.TestCase):
             raise RuntimeError(
                 "local companion workspace has a different selected release/transaction"
             )
+
+    def test_native_sqlite_runs_reference_cases_and_replacement_lineage(self) -> None:
+        from decor2hl7.cli import main
+        from decor2hl7 import state
+        from decor2hl7.testing import setup_fixture
+        from decor2hl7.workspace import load_json, release_site_dir, transaction_out_dir
+        from scripts.create_sqlite_test_source import create_source
+
+        selection = self._load(self.workspace / "decor2hl7.json")
+        release, transaction = selection["release"], selection["transaction"]
+        mapping = self._load(
+            self.workspace / "mapping" / REFERENCE_RELEASE / REFERENCE_TRANSACTION / "cda-mapping.json"
+        )
+        scenario = Path(__file__).parent / "fixtures/scenarios" / REFERENCE_RELEASE / REFERENCE_TRANSACTION / "valid-reference-cases"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copyfile(self.workspace / "decor2hl7.json", root / "decor2hl7.json")
+            for name in ("spec", "model", "mapping"):
+                (root / name).symlink_to(self.workspace / name, target_is_directory=True)
+            fixture = root / "fixture"
+            setup_fixture(
+                fixture, release, transaction, self._load(self.model_dir / "model.json"),
+                self._load(self.model_dir / "cda.json"), mapping, scenario_dir=scenario,
+            )
+            bundle = root / "site" / REFERENCE_RELEASE / REFERENCE_TRANSACTION
+            evidence = create_source(fixture, bundle, written_at="2026-06-01T12:00:00Z")
+            # Default configuration stores site.json and the database one level
+            # above transaction SQL. Exercise that path rather than the cwd.
+            site_dir = release_site_dir(root, release)
+            (bundle / "site.json").rename(site_dir / "site.json")
+            (bundle / "source.sqlite").rename(site_dir / "source.sqlite")
+            output = StringIO()
+
+            def run(*arguments: str) -> None:
+                with redirect_stdout(output), redirect_stderr(output), patch.dict(sys.modules, {"pyodbc": None}):
+                    result = main(["--root", str(root), *arguments])
+                report = root / "validation.md"
+                detail = report.read_text(encoding="utf-8") if report.exists() else ""
+                self.assertEqual(result, 0, output.getvalue() + detail)
+
+            run("check")
+            run("run-source", "--since", "2026-01-01", "--dry-run")
+            self.assertEqual(state.load_state(root / "state")["documents"], {})
+            out_dir = transaction_out_dir(root, release, transaction)
+            self.assertFalse(out_dir.exists())
+            run("run-source", "--since", "2026-01-01", "--send")
+            delivered = state.load_state(root / "state")["documents"]
+            expected_cases = evidence["cases"]
+            self.assertEqual({item["set_id"]["extension"] for item in delivered.values()}, set(expected_cases))
+            self.assertTrue(all(item["document_version"] == 1 and item["status"] == "published" for item in delivered.values()))
+            run("run-source", "--since", "2026-01-01", "--send")
+            self.assertEqual(state.load_state(root / "state")["documents"], delivered)
+            self.assertEqual(len(list((bundle / "spool").rglob("*.xml"))), len(expected_cases))
+            with sqlite3.connect(site_dir / "source.sqlite") as connection:
+                connection.execute(
+                    'UPDATE cases SET "notfallanamnese.notfallanamnese_des_patienten" = ? WHERE case_id = ?',
+                    ("Synthetic corrected history.", expected_cases[0]),
+                )
+            run("run-source", "--since", "2026-01-01", "--send")
+            corrected = state.load_state(root / "state")["documents"]
+            changed = [item for item in corrected.values() if item["document_version"] == 2]
+            self.assertEqual(len(changed), 1)
+            self.assertEqual(changed[0]["set_id"]["extension"], expected_cases[0])
+            ns = {"h": "urn:hl7-org:v3"}
+            xml = ET.parse(changed[0]["file"]).getroot()
+            previous_id = xml.find("h:relatedDocument/h:parentDocument/h:id", ns)
+            self.assertIsNotNone(previous_id)
+            assert previous_id is not None
+            self.assertEqual(previous_id.get("extension"), expected_cases[0] + "-1")
+            sidecar = load_json(Path(changed[0]["file"]).with_suffix(".json"))
+            self.assertEqual(sidecar["source_snapshot"]["adapter"], "sqlite")
+            documents = sorted(out_dir.glob("*.xml"))
+            run("validate-cda", *(str(path) for path in documents), "--report", str(root / "validation"))
 
     def test_compiler_covers_every_declared_ig_endpoint(self) -> None:
         cda = self._load(self.model_dir / "cda.json")
