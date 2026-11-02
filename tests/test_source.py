@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 from decimal import Decimal
+import os
 import sqlite3
 import sys
 import tempfile
@@ -196,6 +197,55 @@ class SQLiteSourceTests(unittest.TestCase):
                   ('A', 2, X'00FF'), ('B', 1, 'C'), ('A', 1, 'A'), ('OLD', 1, 'OLD');
             """)
         return site
+
+    def test_native_numeric_ranks_keep_numeric_order_with_mixed_and_null_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site = self.prepare(root)
+            with sqlite3.connect(root / site["source"]["database"]) as connection:
+                connection.executemany(
+                    "INSERT INTO diagnoses VALUES ('A', ?, ?)",
+                    [(10, "ten"), (2.5, "fraction"), ("text", "text"), (None, "null")],
+                )
+            source.extract(site, root, root / "snapshot", since=dt.date(2026, 1, 1))
+            with (root / "snapshot/diagnoses.csv").open() as handle:
+                rows = list(csv.DictReader(handle, delimiter=";"))
+            self.assertEqual(
+                [row["rank"] for row in rows if row["case_id"] == "A"],
+                ["1", "2", "2.5", "10", "text", ""],
+            )
+            # Textual identifiers are not guessed to be numbers. Decimal and
+            # float values sort alongside integers without comparison errors.
+            values = [None, "2", 10, Decimal("2.25"), "10", 2.5, 1]
+            self.assertEqual(
+                sorted(values, key=source._sort_value),
+                [1, Decimal("2.25"), 2.5, 10, "10", "2", None],
+            )
+            sorted([float("nan"), Decimal("NaN"), float("inf"), None], key=source._sort_value)
+
+    def test_source_identity_resolves_database_paths_and_tracks_queries_not_windows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site = self.prepare(root)
+            first = source.extract(site, root, root / "first", since=dt.date(2026, 1, 1))
+            site["source"]["database"] = str((root / site["source"]["database"]).resolve())
+            site["source"]["window_days"] = 365
+            site["source"]["require_snapshot_advance"] = False
+            second = source.extract(site, root, root / "second", since=dt.date(2026, 1, 1))
+            self.assertEqual(first["source_identity_sha256"], second["source_identity_sha256"])
+            query = root / "sql/cases.sql"
+            query.write_text(query.read_text() + " -- changed query")
+            third = source.extract(site, root, root / "third", since=dt.date(2026, 1, 1))
+            self.assertNotEqual(first["source_identity_sha256"], third["source_identity_sha256"])
+
+    def test_odbc_source_identity_changes_without_exposing_connection_strings(self) -> None:
+        config = {"adapter": "odbc", "dsn_env": "SOURCE_TEST_CONNECTION"}
+        with patch.dict(os.environ, {"SOURCE_TEST_CONNECTION": "DSN=one;PWD=secret-one"}):
+            first = source._source_identity(config, Path("."), {}, {"cases": "query-hash"})
+        with patch.dict(os.environ, {"SOURCE_TEST_CONNECTION": "DSN=two;PWD=secret-two"}):
+            second = source._source_identity(config, Path("."), {}, {"cases": "query-hash"})
+        self.assertNotEqual(first, second)
+        self.assertRegex(first, r"^[0-9a-f]{64}$")
 
     def test_sqlite_extracts_without_odbc_and_replays_identical_csv_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

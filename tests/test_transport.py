@@ -34,8 +34,11 @@ class TransportTests(unittest.TestCase):
             )
             site = {"transport": {"adapter": "spool", "directory": "spool"}}
 
+            self.assertFalse(transport.is_published(document, site, workspace=workspace))
+            self.assertFalse((workspace / "spool").exists())
             ok, message = transport.send(document, site, workspace=workspace)
             self.assertTrue(ok, message)
+            self.assertTrue(transport.is_published(document, site, workspace=workspace))
             published = list((workspace / "spool").glob("*/case-v1"))
             self.assertEqual(len(published), 1)
             self.assertEqual(
@@ -73,6 +76,18 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(request.data, b"<ClinicalDocument/>")
             self.assertEqual(request.get_header("Authorization"), "Bearer test")
             self.assertEqual(urlopen.call_args.kwargs["timeout"], 17)
+
+    def test_spool_retry_uses_preparation_month_instead_of_current_month(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "case-v1.xml"
+            path.write_bytes(b"<ClinicalDocument/>")
+            path.with_suffix(".json").write_text('{"prepared_at":"2024-12-31T23:59:59+00:00"}')
+            site = {"transport": {"adapter": "spool", "directory": "spool"}}
+            self.assertTrue(transport.send(path, site, workspace=root)[0])
+            self.assertTrue(transport.send(path, site, workspace=root)[0])
+            self.assertTrue((root / "spool/2024-12/case-v1/case-v1.xml").is_file())
+            self.assertEqual(len(list((root / "spool").glob("*/*"))), 1)
 
     def test_legacy_configuration_defaults_to_http_post(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

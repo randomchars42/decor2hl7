@@ -111,6 +111,20 @@ this requires an upstream cardinality or conditional-rule clarification.
 
 ## Validation and delivery
 
+### Published AKTIN validation applies stricter content rules
+
+The AKTIN runtime publication `aktin-runtime-20260427T185033` maps the selected
+document `.10.93@2026-03-25T11:04:07` to `aktin-nartrv2026-2`. In its document
+context, that validator applies closed-content rules to payer code, payer
+associated entity, and the Addendum section. These reject CDA/RIM content allowed
+by the cached open source templates and the reviewed local EDIS attachments.
+
+Local exact-closure conformance therefore does not establish acceptance by
+that receiver publication. Closing this boundary requires an agreed receiver
+profile/validator or an explicitly reviewed compatibility mapping that preserves
+the intended clinical facts. Do not silently delete mapped content, change the
+selected template revisions, or replace receiver validation to obtain a pass.
+
 ### Pharmacy extension XSD is not pinned
 
 The CDA package has no Pharmacy schema. Reviewed foreign nodes are checked
