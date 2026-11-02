@@ -122,16 +122,47 @@ class StateTests(unittest.TestCase):
             state.finish_run(
                 directory, "r1", status="completed",
                 snapshot_max_ts="2026-09-23T01:02:03",
+                source_stream="source-a",
                 summary={"records": 4},
             )
             self.assertEqual(
-                state.last_snapshot_max_ts(directory), "2026-09-23T01:02:03"
+                state.last_snapshot_max_ts(directory, "source-a"), "2026-09-23T01:02:03"
             )
             self.assertEqual(state.recent_runs(directory)[0]["status"], "completed")
             with state.workspace_lock(directory):
                 with self.assertRaisesRegex(RuntimeError, "already active"):
                     with state.workspace_lock(directory):
                         pass
+
+    def test_snapshot_watermarks_are_scoped_and_ignore_incomplete_and_legacy_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for run_id, stream, status, maximum in (
+                ("legacy", None, "completed", "2099-01-01"),
+                ("a", "source-a", "completed", "2026-06-01"),
+                ("b", "source-b", "completed", "2026-05-01"),
+                ("partial", "source-a", "partial", "2026-08-01"),
+                ("failed", "source-a", "failed", "2026-09-01"),
+            ):
+                state.start_run(directory, run_id, kind="run-source")
+                state.finish_run(directory, run_id, status=status, source_stream=stream, snapshot_max_ts=maximum)
+            self.assertEqual(state.last_snapshot_max_ts(directory, "source-a"), "2026-06-01")
+            self.assertEqual(state.last_snapshot_max_ts(directory, "source-b"), "2026-05-01")
+            self.assertIsNone(state.last_snapshot_max_ts(directory, "new-source"))
+
+    def test_existing_run_ledger_is_migrated_without_assigning_legacy_watermarks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            with sqlite3.connect(directory / "state.sqlite") as connection:
+                connection.execute("""CREATE TABLE runs (
+                    run_id TEXT PRIMARY KEY, kind TEXT, started_at TEXT,
+                    finished_at TEXT, status TEXT, snapshot_path TEXT,
+                    snapshot_max_ts TEXT, summary TEXT, error TEXT
+                )""")
+                connection.execute("INSERT INTO runs (run_id, kind, status, snapshot_max_ts) VALUES ('old', 'run-source', 'completed', '2099-01-01')")
+            self.assertIsNone(state.last_snapshot_max_ts(directory, "new-source"))
+            self.assertIsNone(state.recent_runs(directory)[0]["source_stream"])
+            self.assertEqual(state.recent_runs(directory)[0]["snapshot_max_ts"], "2099-01-01")
 
     def test_state_fingerprint_changes_with_transformation_context(self) -> None:
         record = {"values": {"a": 1}, "instances": {}}

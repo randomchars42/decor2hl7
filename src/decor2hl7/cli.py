@@ -1340,6 +1340,54 @@ def _document_identity(
     }
 
 
+def _reuse_pending_document(path: Path, expected: Mapping[str, Any]) -> bool:
+    """Preserve the exact handover bytes until delivery has been committed."""
+    sidecar = path.with_suffix(".json")
+    if not path.is_file() or not sidecar.is_file():
+        return False
+    info = load_json(sidecar)
+    if any(info.get(key) != value for key, value in expected.items()):
+        raise ValueError(Translator(_OUTPUT_LANGUAGE.get()).text(
+            "cli.pending_metadata_inconsistent", path=path,
+        ))
+    digest = info.get("payload_sha256")
+    if digest is not None and digest != hashlib.sha256(path.read_bytes()).hexdigest():
+        raise ValueError(Translator(_OUTPUT_LANGUAGE.get()).text(
+            "cli.pending_checksum_inconsistent", path=path,
+        ))
+    return True
+
+
+def _recover_spool_publications(
+    root: Path, out_dir: Path, site: Mapping[str, Any],
+    site_config_override: str | Path | None,
+) -> int:
+    from . import state, transport
+
+    if transport.configured_name(site) != "spool":
+        return 0
+    recovered = 0
+    for path in sorted(out_dir.glob("*.xml")):
+        sidecar = path.with_suffix(".json")
+        if not sidecar.is_file():
+            continue
+        info = load_json(sidecar)
+        stream_key = str(info.get("state_key") or "")
+        disposition, version = state.classify(state_dir(root), stream_key, str(info.get("fingerprint") or ""))
+        if disposition == "UNCHANGED" or info.get("document_version") != version:
+            continue
+        if transport.is_published(path, site, workspace=root):
+            # This records a handover that already happened. Do it before
+            # pruning, even if today's source changed or the case is absent.
+            sent, failed = _send_paths(root, [path], site_config_override)
+            if failed:
+                raise ValueError(Translator(_OUTPUT_LANGUAGE.get()).text(
+                    "cli.spool_recovery_failed", path=path,
+                ))
+            recovered += sent
+    return recovered
+
+
 def _quarantine_record(
     root: Path, run_id: str, record: Mapping[str, Any], *,
     stage: str, problems: Sequence[Any], document_version: int | None = None,
@@ -1394,6 +1442,10 @@ def _transform(
     skipped_unchanged = skipped_invalid = quarantined = 0
     run_id = run_id or dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S")
     state_path = state_dir(root)
+    recovered = (
+        _recover_spool_publications(root, out_dir, site, site_config_override)
+        if not dry_run else 0
+    )
     current_state = state.load_state(state_path)
     current_keys = {_state_key(transaction, str(record["key"])) for record in records}
     if not dry_run and prune_absent and limit is None:
@@ -1430,6 +1482,24 @@ def _transform(
             # Legacy JSON state did not persist CDA identities. The identifiers
             # were deterministic, so reconstruct the direct predecessor once.
             previous = _document_identity(raw_key, document_version - 1, site)
+        stem = f"{_safe_key(raw_key)}-v{document_version}"
+        xml_path = out_dir / f"{stem}.xml"
+        identity = _document_identity(raw_key, document_version, site)
+        artifact = {
+            "key": raw_key,
+            "state_key": stream_key,
+            "fingerprint": digest,
+            "document_version": document_version,
+            "release": release.get("key"),
+            "transaction": transaction,
+            "source_status": disposition,
+            "document_id": identity["document_id"],
+            "set_id": identity["set_id"],
+            "previous_document": previous if disposition == "CHANGED" else None,
+        }
+        if _reuse_pending_document(xml_path, artifact):
+            emitted.append(xml_path)
+            continue
         try:
             payload, render_problems = emit(
                 record, model, cda, cda_mapping, site,
@@ -1444,21 +1514,11 @@ def _transform(
                 problems=[str(error)], document_version=document_version,
             )
             continue
-        stem = f"{_safe_key(raw_key)}-v{document_version}"
-        xml_path = out_dir / f"{stem}.xml"
-        identity = _document_identity(raw_key, document_version, site)
         write_bytes(xml_path, payload)
         write_json(out_dir / f"{stem}.json", {
-            "key": raw_key,
-            "state_key": stream_key,
-            "fingerprint": digest,
-            "document_version": document_version,
-            "release": release.get("key"),
-            "transaction": transaction,
-            "source_status": disposition,
-            "document_id": identity["document_id"],
-            "set_id": identity["set_id"],
-            "previous_document": previous if disposition == "CHANGED" else None,
+            **artifact,
+            "prepared_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "payload_sha256": hashlib.sha256(payload).hexdigest(),
             "source_snapshot": dict(source_snapshot) if source_snapshot is not None else None,
             "validation": record.get("problems", []),
             "render_warnings": render_problems,
@@ -1470,6 +1530,7 @@ def _transform(
         "unchanged": skipped_unchanged,
         "invalid": skipped_invalid,
         "quarantined": quarantined,
+        "recovered": recovered,
     }
 
 
@@ -1573,6 +1634,13 @@ def _send_paths(
                 _say(f"send failed {path.name}: replacement lineage does not match committed state")
                 failed += 1
                 continue
+        payload_digest = info.get("payload_sha256")
+        if payload_digest is not None and payload_digest != hashlib.sha256(path.read_bytes()).hexdigest():
+            _say(Translator(_OUTPUT_LANGUAGE.get()).text(
+                "cli.send_checksum_inconsistent", name=path.name,
+            ))
+            failed += 1
+            continue
         ok, message = transport.send(path, site, workspace=root)
         if not ok:
             _say(f"send failed {path.name}: {message}")
@@ -1749,6 +1817,7 @@ def cmd_run_source(args: argparse.Namespace) -> int:
             snapshot_path=str(snapshot),
         )
         manifest: dict[str, Any] | None = None
+        source_stream: str | None = None
         try:
             manifest = source.extract(
                 site, bundle, snapshot, since=_parse_since(args.since),
@@ -1760,7 +1829,15 @@ def cmd_run_source(args: argparse.Namespace) -> int:
                 if isinstance(source_config, Mapping) else True
             )
             maximum = manifest.get("snapshot_max_ts")
-            previous_maximum = state.last_snapshot_max_ts(state_dir(root))
+            transaction = selected_transaction(root)
+            source_stream = _json_digest({
+                "transaction": {
+                    "id": transaction["id"],
+                    "effective_date": transaction.get("effective_date"),
+                },
+                "source_identity_sha256": manifest["source_identity_sha256"],
+            })
+            previous_maximum = state.last_snapshot_max_ts(state_dir(root), source_stream)
             if not args.dry_run and require_advance and previous_maximum is not None:
                 if maximum is None or str(maximum) <= previous_maximum:
                     raise ValueError(
@@ -1798,6 +1875,7 @@ def cmd_run_source(args: argparse.Namespace) -> int:
                 },
                 snapshot_path=str(snapshot),
                 snapshot_max_ts=(str(maximum) if maximum is not None else None),
+                source_stream=source_stream,
             )
         except BaseException as error:
             state.finish_run(
@@ -1809,6 +1887,7 @@ def cmd_run_source(args: argparse.Namespace) -> int:
                     else None
                 ),
                 error=str(error),
+                source_stream=source_stream,
             )
             raise
     if not args.send and not args.dry_run:

@@ -83,11 +83,26 @@ identity create a new document version. A correction keeps its CDA `setId`,
 increments `versionNumber`, and identifies the prior committed document through
 `relatedDocument typeCode="RPLC"`.
 
+Retry preserves the exact pending document and its original source evidence.
+With the local spool adapter, a transforming command also records an existing
+publication if the previous process stopped before committing delivery state.
+The summary reports these recovered commits as `recovered`; recovery does not
+publish new content and is disabled in a dry run. Do not edit pending XML or
+sidecars: new artifacts carry an XML checksum that is checked before reuse or
+delivery.
+
+Source freshness checks compare only runs of the same transaction, database,
+input relationships, and queries. A changed source configuration starts its own
+baseline. Upgrading an old ledger preserves its rows but does not assign its
+unscoped timestamps to a source by guesswork.
+
 With `transport.adapter: spool`, successful handover means an XML document and
 its JSON sidecar are atomically visible under
 `<directory>/YYYY-MM/<document-stem>/`. An existing different artifact is an
 error and is never overwritten. Downstream removal or acknowledgement is a
 separate integration responsibility.
+The month is fixed when the document is prepared, so delayed delivery and retry
+use the same destination across month boundaries.
 
 The generic HTTP adapter sends one document at a time. Authentication,
 acknowledgement parsing, batching, receiver idempotency, and exactly-once

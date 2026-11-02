@@ -97,6 +97,26 @@ def _query_path(site_dir: Path, name: str, configured: Any) -> Path:
     return path.resolve() if path.is_absolute() else (site_dir / path).resolve()
 
 
+def _source_identity(
+    config: Mapping[str, Any], config_dir: Path,
+    input_config: Mapping[str, Any], queries: Mapping[str, str],
+) -> str:
+    """Hash source identity without recording connection strings in evidence."""
+    if config["adapter"] == "sqlite":
+        path = Path(str(config["database"])).expanduser()
+        location = str((path if path.is_absolute() else config_dir / path).resolve())
+    else:
+        location = os.environ.get(str(config.get("dsn_env") or ""), "")
+    identity = {
+        "adapter": config["adapter"], "location": location,
+        "written_at_column": config.get("written_at_column"),
+        "input": dict(input_config), "queries": dict(queries),
+    }
+    return hashlib.sha256(json.dumps(
+        identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+
+
 def _stable_scalar(value: Any) -> str:
     if value is None:
         return ""
@@ -113,8 +133,15 @@ def _stable_scalar(value: Any) -> str:
     return str(value)
 
 
-def _sort_value(value: Any) -> tuple[bool, str]:
-    return value is None, _stable_scalar(value)
+def _sort_value(value: Any) -> tuple[bool, int, Decimal, str]:
+    """Keep native numeric order without interpreting textual identifiers."""
+    scalar = _stable_scalar(value)
+    if isinstance(value, (int, float, Decimal)):
+        number = Decimal(int(value)) if isinstance(value, bool) else Decimal(str(value))
+        if number.is_finite():
+            return False, 0, number, scalar
+        return False, 1, Decimal(0), scalar
+    return value is None, 2 if isinstance(value, str) else 3, Decimal(0), scalar
 
 
 def _execute(connection: Any, sql: str, window_from: dt.date) -> tuple[list[str], list[dict[str, Any]]]:
@@ -348,6 +375,9 @@ def extract(
             "snapshot_max_ts": maximum_timestamp,
             "row_counts": row_counts,
             "query_sha256": query_digests,
+            "source_identity_sha256": _source_identity(
+                config, config_dir or site_dir, input_config, query_digests,
+            ),
             "configuration_sha256": hashlib.sha256(json.dumps(
                 {"source": dict(config), "input": dict(input_config)},
                 ensure_ascii=False, sort_keys=True, separators=(",", ":"),
