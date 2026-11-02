@@ -1,6 +1,6 @@
 {
-  "version": 5,
-  "decision": "DEC-038, DEC-043, DEC-044, DEC-045, DEC-046",
+  "version": 6,
+  "decision": "DEC-038, DEC-043, DEC-044, DEC-045, DEC-046, DEC-047",
   "release": {
     "key": "2026.1.2",
     "date": "2026-04-27T18:50:33"
@@ -53,10 +53,7 @@
       "hauptkostentrager.name",
       "HeaderParticipantKostentraeger.scopingOrganization::OrganizationElements.name"
     ],
-    "hauptkostentrager.versicherungsverhaltnis.identifikation": [
-      "hauptkostentrager.participant_templateId_root_1.2.276.0.76.3.1.195.10.4.associatedEntity.id",
-      "HeaderParticipantKostentraeger.participant_templateId_root_1.2.276.0.76.10.2022.associatedEntity.id"
-    ],
+    "hauptkostentrager.versicherungsverhaltnis.identifikation": "HeaderParticipantKostentraeger.participant_templateId_root_1.2.276.0.76.10.2022.associatedEntity.id",
     "hauptkostentrager.versicherungsverhaltnis.weitere_versichertenstatuskodierung": "HeaderParticipantKostentraeger.translation",
     "administrative_aufnahmeinformationen.aufnahmezeitpunkt": [
       "CDAEncompassingEncounter.low",

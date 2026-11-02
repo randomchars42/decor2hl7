@@ -71,6 +71,12 @@ For a plain text section target, the same labelled content uses a compact text
 fallback. This presentation is derived from the reviewed mapping and normalized
 record; it does not add clinical assignments.
 
+Automatic `originalText` completion omits optional wording that exactly repeats
+the emitted `code` or `displayName` of an already coded value. Distinct source
+wording, uncoded/null-flavoured content, required companions, and explicit text
+assignments are preserved. This removes redundant datatype children without
+discarding a source fact or changing its coded meaning.
+
 Replacement lineage uses the owner-admitted root `relatedDocument` slot.
 Insertion follows the compiled physical particle order through transparent
 includes and choices while preserving the existing header order. A correction
