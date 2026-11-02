@@ -68,7 +68,11 @@ manifest records the selected adapter.
 Rows are deterministically ordered by join key, optional site-owned
 `order_by`, configured occurrence keys, and remaining columns. `order_by`
 records clinically meaningful row order such as diagnosis rank; remaining
-columns are only deterministic tie-breakers. Duplicate `1:1` keys, missing
+columns are only deterministic tie-breakers. Native integers, finite decimals,
+and floats compare numerically; text remains text even when it looks numeric.
+For mixed columns, finite numbers precede non-finite numbers, then text and
+other serialized scalars; nulls sort last. Serialization remains unchanged.
+Duplicate `1:1` keys, missing
 required columns, orphan child keys, absent query files, and query failures
 abort the complete snapshot. No partially populated final directory becomes
 visible.
@@ -131,7 +135,20 @@ workspace lock prevents overlapping transforming or delivering commands.
 
 State advances only after the selected transport reports a successful
 handover. A crash before that point leaves the record pending; retry therefore
-reuses the same version. A changed record increments `versionNumber`, keeps the
+reuses the same version and the exact pending XML and sidecar bytes. Pending
+artifacts record their preparation time and XML checksum; reuse and delivery
+reject checksum mismatches. Existing sidecars without those fields remain
+readable and are preserved unchanged.
+
+Before pruning or replacing output, a transforming command recovers any exact
+local spool publication whose delivery-state commit was interrupted. It records
+only a handover that is already visible, so changed source data can then produce
+the next version with the correct predecessor. The summary's `recovered` count
+reports those commits separately from newly emitted or sent documents. A dry
+run never performs recovery or commits document state. Unpublished stale output
+still follows ordinary invalidation rules.
+
+A changed record increments `versionNumber`, keeps the
 same `setId` root and extension, creates a new document `id`, and renders a CDA
 `relatedDocument typeCode="RPLC"` that names the exact previously committed
 `id`, `setId`, and version. This production role is available only when the
@@ -149,7 +166,16 @@ second normalization or rendering implementation. `--dry-run` still creates a
 replayable source snapshot but emits, delivers, and commits no document.
 `source.require_snapshot_advance` may guard scheduled replicated sources by
 requiring the case query's maximum write timestamp to exceed the last completed
-source run. Sites where quiet days do not advance that timestamp must disable
+run for that source stream. The stream covers the transaction OID and effective
+date, adapter, resolved SQLite filename or configured ODBC connection identity,
+input relationships, write-timestamp column, and SQL content hashes. Connection
+identity is stored only as part of an opaque digest, never as a connection
+string. Changing database, queries, or transaction starts an independent
+baseline; changing only the rescan window does not. Existing SQLite ledgers are
+migrated additively and their old unscoped runs are retained as evidence, not
+reused as another stream's baseline.
+
+Sites where quiet days do not advance that timestamp must disable
 this guard or provide a replication watermark with the stated property.
 
 ## Mapping scenarios
@@ -186,6 +212,11 @@ is successful; an existing destination with different bytes is never removed
 or overwritten. SQLite records the document as `published` only after that
 directory is visible. Consumption and acknowledgement beyond the spool remain
 the downstream system's responsibility.
+
+The month comes from the persisted preparation time, so a retry after a month
+boundary still addresses the same publication. Legacy artifacts without that
+timestamp use their XML modification time. Preserve pending artifacts and their
+metadata until handover and state recovery have completed.
 
 Authentication, batch envelopes, remote acknowledgement parsing, and receiver
 idempotency are not generic configuration knobs; they require a concrete

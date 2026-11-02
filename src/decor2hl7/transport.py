@@ -12,6 +12,8 @@ from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 from . import __version__
+from .workspace import load_json
+from .i18n import Translator
 
 
 SendResult = tuple[bool, str]
@@ -78,20 +80,41 @@ def _http_post_config(config: Mapping[str, Any]) -> ConfigResult:
     }, ""
 
 
-def _spool(path: Path, config: Mapping[str, Any]) -> SendResult:
+def _spool_destination(path: Path, config: Mapping[str, Any]) -> Path:
     root = Path(str(config["directory"]))
-    final = root / dt.datetime.now(dt.timezone.utc).strftime("%Y-%m") / path.stem
+    sidecar = path.with_suffix(".json")
+    # Retrying across a month boundary must address the same destination.
+    # Legacy artifacts have no prepared_at; their unchanged mtime is the anchor.
+    prepared = dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc)
+    if sidecar.is_file():
+        try:
+            timestamp = load_json(sidecar).get("prepared_at")
+            if timestamp is not None:
+                prepared = dt.datetime.fromisoformat(str(timestamp))
+                if prepared.tzinfo is None:
+                    raise ValueError("missing timezone")
+        except (ValueError, OSError):
+            raise ValueError(Translator().text("ui.spool_invalid_prepared_at", path=sidecar))
+    return root / prepared.astimezone(dt.timezone.utc).strftime("%Y-%m") / path.stem
+
+
+def _identical_publication(final: Path, files: list[Path]) -> bool:
+    return final.is_dir() and all(
+        (final / item.name).is_file()
+        and (final / item.name).read_bytes() == item.read_bytes()
+        for item in files
+    ) and sorted(item.name for item in final.iterdir()) == sorted(item.name for item in files)
+
+
+def _spool(path: Path, config: Mapping[str, Any]) -> SendResult:
+    try:
+        final = _spool_destination(path, config)
+    except (ValueError, OSError) as error:
+        return False, str(error)
     sidecar = path.with_suffix(".json")
     files = [path, *([sidecar] if sidecar.is_file() else [])]
     if final.exists():
-        identical = final.is_dir() and all(
-            (final / item.name).is_file()
-            and (final / item.name).read_bytes() == item.read_bytes()
-            for item in files
-        )
-        if identical and sorted(item.name for item in final.iterdir()) == sorted(
-            item.name for item in files
-        ):
+        if _identical_publication(final, files):
             return True, f"already published at {final}"
         return False, f"spool destination already exists with different content: {final}"
 
@@ -184,3 +207,19 @@ def send(
             configured = workspace / configured
         config = {**config, "directory": str(configured.resolve())}
     return adapter(path, config)
+
+
+def is_published(path: Path, site: Mapping[str, Any], *, workspace: Path) -> bool:
+    """Inspect an existing local handover without publishing anything new."""
+    if configured_name(site) != "spool":
+        return False
+    _, config, error = _configured_adapter(site)
+    if config is None:
+        raise ValueError(error)
+    directory = Path(str(config["directory"])).expanduser()
+    if not directory.is_absolute():
+        directory = workspace / directory
+    config = {**config, "directory": str(directory.resolve())}
+    final = _spool_destination(path, config)
+    sidecar = path.with_suffix(".json")
+    return _identical_publication(final, [path, *([sidecar] if sidecar.is_file() else [])])

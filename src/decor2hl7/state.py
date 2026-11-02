@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS runs (
   status TEXT NOT NULL,
   snapshot_path TEXT,
   snapshot_max_ts TEXT,
+  source_stream TEXT,
   summary TEXT,
   error TEXT
 );
@@ -87,6 +88,25 @@ def _connect(state_dir: Path) -> sqlite3.Connection:
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = FULL")
     connection.executescript(_SCHEMA)
+    # Existing ledgers predate scoped source watermarks. Keep their rows as
+    # evidence; an unscoped timestamp must not become a new stream's baseline.
+    if "source_stream" not in {
+        row["name"] for row in connection.execute("PRAGMA table_info(runs)")
+    }:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            if "source_stream" not in {
+                row["name"] for row in connection.execute("PRAGMA table_info(runs)")
+            }:
+                connection.execute("ALTER TABLE runs ADD COLUMN source_stream TEXT")
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            connection.close()
+            raise
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS runs_source_stream ON runs(source_stream, status)"
+    )
     _import_legacy_state(connection, state_dir)
     return connection
 
@@ -368,32 +388,35 @@ def finish_run(
     summary: Mapping[str, Any] | None = None,
     snapshot_path: str | None = None,
     snapshot_max_ts: str | None = None,
+    source_stream: str | None = None,
     error: str | None = None,
 ) -> None:
     with _opened(state_dir) as connection:
         connection.execute(
             """
             UPDATE runs SET finished_at = ?, status = ?, snapshot_path = ?,
-              snapshot_max_ts = ?, summary = ?, error = ?
+              snapshot_max_ts = ?, source_stream = ?, summary = ?, error = ?
             WHERE run_id = ?
             """,
             (
-                _now(), status, snapshot_path, snapshot_max_ts,
+                _now(), status, snapshot_path, snapshot_max_ts, source_stream,
                 json.dumps(dict(summary or {}), ensure_ascii=False, sort_keys=True),
                 error, run_id,
             ),
         )
 
 
-def last_snapshot_max_ts(state_dir: Path) -> str | None:
+def last_snapshot_max_ts(state_dir: Path, source_stream: str) -> str | None:
     with _opened(state_dir) as connection:
         row = connection.execute(
             """
             SELECT snapshot_max_ts FROM runs
-            WHERE status = 'completed' AND snapshot_max_ts IS NOT NULL
+            WHERE source_stream = ? AND kind = 'run-source'
+              AND status = 'completed' AND snapshot_max_ts IS NOT NULL
               AND snapshot_max_ts != ''
             ORDER BY finished_at DESC, rowid DESC LIMIT 1
-            """
+            """,
+            (source_stream,),
         ).fetchone()
     return str(row["snapshot_max_ts"]) if row is not None else None
 
