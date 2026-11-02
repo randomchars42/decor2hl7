@@ -119,11 +119,19 @@ context, that validator applies closed-content rules to payer code, payer
 associated entity, and the Addendum section. These reject CDA/RIM content allowed
 by the cached open source templates and the reviewed local EDIS attachments.
 
-Local exact-closure conformance therefore does not establish acceptance by
-that receiver publication. Closing this boundary requires an agreed receiver
-profile/validator or an explicitly reviewed compatibility mapping that preserves
-the intended clinical facts. Do not silently delete mapped content, change the
-selected template revisions, or replace receiver validation to obtain a pass.
+Redundant automatic coded wording and the duplicate insurance identifier in the
+Hauptkostenträger participant are omitted under the reviewed compatibility
+policy. The code/display name and the insurance number in the explicitly
+declared generic payer slot remain. EDIS containment and the rejection of the
+runtime replacement link (`relatedDocument typeCode="RPLC"`) remain unresolved.
+
+Local exact-closure conformance therefore does not establish acceptance by that
+receiver publication. The unchanged provided receiver is the acceptance target.
+Closing this boundary requires reviewed output/mapping changes that preserve the
+intended facts, including a decision on structured versus narrative EDIS content
+and the receiver's correction protocol. Do not silently delete mapped content,
+change selected template revisions, or replace receiver validation to obtain a
+pass.
 
 ### Pharmacy extension XSD is not pinned
 

@@ -132,6 +132,29 @@ class ReferenceClosureTests(unittest.TestCase):
             expected_cases = evidence["cases"]
             self.assertEqual({item["set_id"]["extension"] for item in delivered.values()}, set(expected_cases))
             self.assertTrue(all(item["document_version"] == 1 and item["status"] == "published" for item in delivered.values()))
+            ns = {"h": "urn:hl7-org:v3"}
+            for path in out_dir.glob("*.xml"):
+                document = ET.parse(path)
+                for participant in document.findall("h:participant", ns):
+                    template = participant.find("h:templateId", ns)
+                    assert template is not None
+                    if template.get("root") == "1.2.276.0.76.3.1.195.10.4":
+                        self.assertIsNone(participant.find("h:associatedEntity/h:id", ns))
+                    elif template.get("root") == "1.2.276.0.76.10.2022":
+                        self.assertIsNotNone(participant.find("h:associatedEntity/h:id", ns))
+                        self.assertIsNone(participant.find("h:associatedEntity/h:code/h:originalText", ns))
+                for observation in document.findall(".//h:observation", ns):
+                    template = observation.find("h:templateId", ns)
+                    if template is not None and template.get("root") in {
+                        "1.2.276.0.76.3.1.195.10.29", "1.2.276.0.76.10.4073",
+                    }:
+                        value = observation.find("h:value", ns)
+                        assert value is not None
+                        self.assertIsNotNone(value.get("code"))
+                        self.assertIsNone(value.find("h:originalText", ns))
+                for code in document.findall(".//h:manufacturedMaterial/h:code", ns):
+                    if code.get("code"):
+                        self.assertIsNone(code.find("h:originalText", ns))
             run("run-source", "--since", "2026-01-01", "--send")
             self.assertEqual(state.load_state(root / "state")["documents"], delivered)
             self.assertEqual(len(list((bundle / "spool").rglob("*.xml"))), len(expected_cases))
