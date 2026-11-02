@@ -11,11 +11,12 @@ from unittest.mock import patch
 
 from decor2hl7.cli import (
     _merge_mapping_configuration_notes,
-    _prune_absent_pending, _prune_stale_pending, main,
+    _prune_absent_pending, _prune_stale_pending, _send_paths, main,
 )
 from decor2hl7.workspace import (
-    load_json, set_release, set_transaction, transaction_mapping_dir,
-    transaction_model_dir, transaction_site_dir, transaction_test_dir, write_json,
+    load_json, release_site_dir, set_release, set_transaction,
+    transaction_mapping_dir, transaction_model_dir, transaction_out_dir,
+    transaction_site_dir, transaction_test_dir, write_json,
 )
 
 RELEASES = [{"key": "release-v1", "label": "release-v1", "date": "2024-01-02T03:04:05", "status": "final"}]
@@ -324,6 +325,9 @@ class CliTests(unittest.TestCase):
             site = load_json(root / "site" / "release-v1" / "site.json")
             self.assertEqual(site["input"]["case_source"], "cases")
             self.assertEqual(site["input"]["sources"]["cases"]["file"], "cases.csv")
+            self.assertIsNone(site["source"]["adapter"])
+            self.assertEqual(site["source"]["queries"], {"cases": "sql/cases.sql"})
+            self.assertEqual(site["operation"]["failure_threshold"], 0)
             self.assertEqual(site["transport"]["adapter"], "http-post")
 
     def test_init_site_config_adds_defaults_without_overwriting_user_values(self) -> None:
@@ -836,6 +840,41 @@ class CliTests(unittest.TestCase):
             self.assertEqual(removed, 1)
             self.assertFalse((out / "pending.xml").exists())
             self.assertTrue((out / "sent.xml").exists())
+
+    def test_send_rejects_a_stale_artifact_before_transport_io(self) -> None:
+        from decor2hl7 import state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["--root", str(root), "init"]), 0)
+            set_release(root, RELEASES[0])
+            set_transaction(root, TRANSACTIONS[0])
+            site_path = release_site_dir(root) / "site.json"
+            write_json(site_path, {
+                "identifiers": {"document_root": "1.2.3"},
+                "transport": {
+                    "adapter": "http-post", "url": "https://example.invalid",
+                    "headers": {}, "timeout": 60,
+                },
+            })
+            out = transaction_out_dir(root)
+            out.mkdir(parents=True)
+            document = out / "case-v1.xml"
+            document.write_text("<ClinicalDocument/>", encoding="utf-8")
+            write_json(document.with_suffix(".json"), {
+                "key": "case", "state_key": f"{TRANSACTIONS[0]['id']}::case",
+                "fingerprint": "stale", "document_version": 1,
+                "document_id": {"root": "1.2.3", "extension": "case-1"},
+                "set_id": {"root": "1.2.3", "extension": "case"},
+            })
+            state.record_sent(
+                root / "state", key=f"{TRANSACTIONS[0]['id']}::case",
+                digest="current", document_version=1, file="current.xml",
+                spec_version="release-v1",
+            )
+            with patch("decor2hl7.transport.send") as send:
+                self.assertEqual(_send_paths(root, [document]), (0, 1))
+            send.assert_not_called()
 
 
 

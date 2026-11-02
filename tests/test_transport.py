@@ -21,7 +21,33 @@ class _Response:
 
 class TransportTests(unittest.TestCase):
     def test_adapter_names_expose_the_closed_built_in_set(self) -> None:
-        self.assertEqual(transport.adapter_names(), ("http-post",))
+        self.assertEqual(transport.adapter_names(), ("http-post", "spool"))
+
+    def test_spool_atomically_publishes_xml_and_sidecar_without_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            document = workspace / "out" / "case-v1.xml"
+            document.parent.mkdir()
+            document.write_bytes(b"<ClinicalDocument/>")
+            document.with_suffix(".json").write_text(
+                '{"key":"case"}\n', encoding="utf-8"
+            )
+            site = {"transport": {"adapter": "spool", "directory": "spool"}}
+
+            ok, message = transport.send(document, site, workspace=workspace)
+            self.assertTrue(ok, message)
+            published = list((workspace / "spool").glob("*/case-v1"))
+            self.assertEqual(len(published), 1)
+            self.assertEqual(
+                (published[0] / document.name).read_bytes(), b"<ClinicalDocument/>"
+            )
+            self.assertTrue((published[0] / "case-v1.json").is_file())
+
+            self.assertTrue(transport.send(document, site, workspace=workspace)[0])
+            document.write_bytes(b"<different/>")
+            ok, message = transport.send(document, site, workspace=workspace)
+            self.assertFalse(ok)
+            self.assertIn("different content", message)
 
     def test_http_post_adapter_sends_one_xml_document(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

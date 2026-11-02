@@ -170,6 +170,60 @@ class ConstructionTests(unittest.TestCase):
         self.assertEqual(root[0].text, "hello")
         self.assertEqual(problems, [])
 
+    def test_cda_renderer_emits_standard_replacement_lineage(self) -> None:
+        compiled = {
+            "targets": {},
+            "document": [{
+                "kind": "element", "name": "hl7:ClinicalDocument",
+                "id": "root", "min": 1, "max": 1, "mandatory": True,
+                "attributes": [], "codes": [],
+                "fixed": {"classCode": "DOCCLIN"}, "targets": [],
+                "children": [{
+                    "kind": "element", "name": "hl7:relatedDocument",
+                    "min": 0, "max": None, "mandatory": False,
+                    "attributes": [], "codes": [], "fixed": {},
+                    "targets": [], "children": [], "render_order": 23,
+                    "content_role": "document_replacement",
+                }],
+            }],
+        }
+        previous = {
+            "document_id": {"root": "1.2.3", "extension": "CASE-1"},
+            "set_id": {"root": "1.2.3", "extension": "CASE"},
+            "version": 1,
+        }
+        payload, problems = cda.emit(
+            {"key": "CASE", "values": {}}, {"fields": {}}, compiled,
+            {"fields": {}},
+            {"identifiers": {"document_root": "1.2.3"}, "cda": {}},
+            document_version=2, previous_document=previous,
+        )
+        self.assertEqual(problems, [])
+        root = ET.fromstring(payload)
+        related = find_required(root, "{urn:hl7-org:v3}relatedDocument")
+        self.assertEqual(related.get("typeCode"), "RPLC")
+        parent = find_required(related, "{urn:hl7-org:v3}parentDocument")
+        self.assertEqual(
+            find_required(parent, "{urn:hl7-org:v3}id").attrib,
+            {"root": "1.2.3", "extension": "CASE-1"},
+        )
+        self.assertEqual(
+            find_required(parent, "{urn:hl7-org:v3}setId").attrib,
+            {"root": "1.2.3", "extension": "CASE"},
+        )
+        self.assertEqual(
+            find_required(parent, "{urn:hl7-org:v3}versionNumber").get("value"),
+            "1",
+        )
+
+        with self.assertRaisesRegex(ValueError, "direct predecessor"):
+            cda.emit(
+                {"key": "CASE", "values": {}}, {"fields": {}}, compiled,
+                {"fields": {}},
+                {"identifiers": {"document_root": "1.2.3"}, "cda": {}},
+                document_version=3, previous_document=previous,
+            )
+
     def test_coalesce_equal_or_error(self) -> None:
         model = {"fields": {
             "encounter.admission": {"type": "datetime"},

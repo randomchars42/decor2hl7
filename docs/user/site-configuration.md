@@ -43,6 +43,7 @@ The site bundle describes:
 - record identity and occurrence keys;
 - local code and unit aliases;
 - identifiers, timezone, and deployment values;
+- optional ODBC extraction queries, window, and replication guard;
 - transport configuration when delivery is enabled.
 
 Keep values from one repeated source occurrence together. If two tables repeat
@@ -54,15 +55,63 @@ extend the specification's terminology. If a source value has no approved
 meaning in the selected dataset, return it to review instead of inventing a
 code mapping.
 
+For direct extraction from a read-only replica, set `source.adapter` to
+`odbc`, put one query below the transaction site bundle for every configured
+input source, and name each query in `source.queries`. For example:
+
+```json
+{
+  "source": {
+    "adapter": "odbc",
+    "dsn_env": "DECOR2HL7_ODBC_DSN",
+    "written_at_column": "replica_written_at",
+    "window_days": 90,
+    "queries": {
+      "cases": "sql/cases.sql",
+      "diagnoses": "sql/diagnoses.sql"
+    },
+    "require_snapshot_advance": true
+  },
+  "operation": {"failure_threshold": 0},
+  "transport": {"adapter": "spool", "directory": "var/spool"}
+}
+```
+
+For a repeated input source whose row order carries meaning, add an ordered
+`order_by` column list to that source under `input.sources` (for example,
+`"order_by": ["diagnosis_rank"]`). Occurrence keys still define identity;
+`order_by` defines presentation/order, and all remaining columns are used only
+as deterministic tie-breakers.
+
+Each SQL file must accept one positional `?` lower-bound date. The case query
+returns exactly one row per case plus its configured join column and the
+configured write timestamp. A child query returns its global or
+source-specific join column, configured occurrence/primary columns, and zero or
+more rows for cases in the same window. Keep clinical selection and joins
+explicit in SQL; decor2hl7 does not generate site queries. Set the environment
+variable to the DSN or connection string outside JSON.
+
+Enable `require_snapshot_advance` only if the selected write timestamp or
+replication watermark advances for every successful scheduled replication.
+Otherwise a legitimate quiet day is indistinguishable from a stale replica;
+disable the guard and monitor replication separately.
+
 ## 3. Validate the configuration and input
 
 ```bash
 decor2hl7 check
 decor2hl7 check-input --input /data/clinical-export
+decor2hl7 extract-source --output /data/snapshots/acceptance-1
+decor2hl7 check-input --input /data/snapshots/acceptance-1
 ```
 
-`check` verifies the selected workspace products and configuration.
+`check` verifies the selected workspace products and configuration; when ODBC
+is enabled it also checks query files, the credential environment variable,
+and database connectivity.
 `check-input` reads and validates the source snapshot without generating CDA.
+`extract-source` is optional and never changes document lineage; its output is
+an immutable CSV snapshot that can be replayed through `check-input`,
+`transform`, or `run`.
 Resolve errors at the layer that owns them:
 
 - file, column, join, parsing, local code, or timezone errors belong to the
@@ -76,10 +125,10 @@ specific snapshot.
 
 ## 4. Hand off to operations
 
-Provide the approved site bundle, the matching reviewed mapping, and the
-location of the external input snapshot to the runtime operator. Record how
-credentials or other protected transport values are supplied; do not place
-secrets in shared mapping documentation.
+Provide the approved site bundle, the matching reviewed mapping, and either the
+location of the external input snapshot or the reviewed SQL query bundle to the
+runtime operator. Record how source and transport credentials are supplied; do
+not place secrets in shared mapping documentation.
 
 Before production use, run the first transformation without delivery and
 inspect its validation result and output. Continue with

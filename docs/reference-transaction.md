@@ -132,11 +132,15 @@ mood or lifecycle state.
 ## Other reviewed construction
 
 The reference workspace uses reviewed inline model extensions for source values
-that the CDA profile expects but the selected dataset omits: primary, GKV, and
-additional insurance-status coding; KV-case status; transport arrival time;
-diagnosis-scoped laterality; and receiving department. Insurance identity is
-written to both payer participant templates. The generic payer's quarter end is
-derived from admission time only when that participant is active.
+that the CDA profile expects but the selected dataset omits: administrative
+gender; primary, GKV, and additional insurance-status coding; KV-case status;
+transport arrival time; diagnosis-scoped laterality; and receiving department.
+Administrative gender uses the same exact HL7 V3 ValueSet revision as the CDA
+target, so site aliases such as ECare `m`, `w`, and `d` are normalized at the
+input boundary rather than translated inside CDA construction. Insurance
+identity is written to both payer participant templates. The generic payer's
+quarter end is derived from admission time only when that participant is
+active.
 
 The reviewed time correspondences are admission → service-event start,
 discharge-ready → first-performer end, and actual transfer/discharge → both

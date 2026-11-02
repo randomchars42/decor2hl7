@@ -93,6 +93,62 @@ def check_site(site: Mapping[str, Any], cda: Mapping[str, Any] | None = None) ->
                         for repeat, column in occurrence_keys.items():
                             if not str(repeat).strip() or not str(column).strip():
                                 errors.append(f"site: input.sources.{name}.occurrence_keys must map non-empty repeat paths to columns")
+                    order_by = spec.get("order_by", [])
+                    if not isinstance(order_by, list) or not all(
+                        isinstance(column, str) and column.strip()
+                        for column in order_by
+                    ):
+                        errors.append(
+                            f"site: input.sources.{name}.order_by must be a list of non-empty column names"
+                        )
+    source_cfg = site.get("source", {})
+    if source_cfg is not None and not isinstance(source_cfg, Mapping):
+        errors.append("site: source must be an object")
+    elif isinstance(source_cfg, Mapping):
+        adapter = source_cfg.get("adapter")
+        allowed_source_keys = {
+            "adapter", "dsn_env", "written_at_column", "window_days",
+            "queries", "require_snapshot_advance",
+        }
+        unknown = sorted(str(key) for key in source_cfg if key not in allowed_source_keys)
+        if unknown:
+            errors.append("site: unsupported source option(s): " + ", ".join(unknown))
+        if adapter not in (None, "odbc"):
+            errors.append("site: source.adapter must be null or 'odbc'")
+        if adapter == "odbc":
+            for key in ("dsn_env", "written_at_column"):
+                if not isinstance(source_cfg.get(key), str) or not str(source_cfg.get(key)).strip():
+                    errors.append(f"site: source.{key} must be a non-empty string")
+            days = source_cfg.get("window_days", 90)
+            if isinstance(days, bool) or not isinstance(days, int) or days < 1:
+                errors.append("site: source.window_days must be a positive integer")
+            queries = source_cfg.get("queries")
+            if not isinstance(queries, Mapping):
+                errors.append("site: source.queries must be an object")
+            else:
+                configured_sources = (
+                    input_cfg.get("sources", {})
+                    if isinstance(input_cfg, Mapping) else {}
+                )
+                expected = set(configured_sources) if isinstance(configured_sources, Mapping) else set()
+                actual = set(queries)
+                for name in sorted(expected - actual):
+                    errors.append(f"site: source.queries is missing {name!r}")
+                for name in sorted(actual - expected):
+                    errors.append(f"site: source.queries references unknown input source {name!r}")
+                for name, path in queries.items():
+                    if not isinstance(path, str) or not path.strip():
+                        errors.append(f"site: source.queries[{name!r}] must be a non-empty path")
+            advance = source_cfg.get("require_snapshot_advance", True)
+            if not isinstance(advance, bool):
+                errors.append("site: source.require_snapshot_advance must be boolean")
+    operation = site.get("operation", {})
+    if operation is not None and not isinstance(operation, Mapping):
+        errors.append("site: operation must be an object")
+    elif isinstance(operation, Mapping):
+        threshold = operation.get("failure_threshold", 0)
+        if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold < 0:
+            errors.append("site: operation.failure_threshold must be a non-negative integer")
     if cda is not None:
         targets = cda.get("targets", {})
         cda_config = site.get("cda", {})

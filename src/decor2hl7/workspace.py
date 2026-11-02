@@ -50,6 +50,22 @@ def write_json(path: Path, value: Any) -> None:
         raise
 
 
+def write_bytes(path: Path, value: bytes) -> None:
+    """Atomically replace one binary artifact in its destination directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(value); handle.flush(); os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try: os.unlink(tmp_name)
+        except OSError: pass
+        raise
+
+
 def settings_path(root: Path) -> Path:
     return root / SETTINGS
 

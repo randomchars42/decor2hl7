@@ -58,20 +58,21 @@ identity lock and generated review guides. It contains no site CSV layout.
 
 ### Site and input configuration
 
-The local administrator connects a deployment's source export to the
-target-neutral dataset model. This workflow owns filenames, joins, CSV columns,
-parsing, local code and unit aliases, occurrence keys, identifiers, timezone,
-and other deployment policy.
+The local administrator connects a deployment's source export or read-only ODBC
+replica to the target-neutral dataset model. This workflow owns extraction SQL,
+filenames, joins, CSV columns, parsing, local code and unit aliases, occurrence
+keys, identifiers, timezone, and other deployment policy.
 
 Its products live under `site/`. They may not modify the reviewed portable
 target mapping.
 
 ### Runtime and operation
 
-Runtime combines one external input snapshot, compiled models, the reviewed
-mapping, and site configuration. It ingests, normalizes, validates, maps,
-renders, records change state, and optionally delivers output. Runtime does not
-perform specification discovery or compilation.
+Runtime combines one immutable input snapshot, compiled models, the reviewed
+mapping, and site configuration. An optional bounded ODBC stage creates that
+snapshot without clinical normalization. The common runtime then ingests,
+normalizes, validates, maps, renders, delivers, and commits SQLite change and
+lineage state. Runtime does not perform specification discovery or compilation.
 
 ## Workspace boundary
 
@@ -90,12 +91,13 @@ WORKSPACE/
 ├── site/                          deployment-specific input configuration
 ├── test/                          disposable mapping verification
 ├── out/                           generated runtime output
-└── state/                         delivery/change history
+└── state/                         SQLite lineage, run ledger, snapshots, quarantine
 ```
 
 The release is the acquisition/cache scope. The transaction is the model,
-mapping, site, test, and output scope. Sent state is transaction-scoped rather
-than release-scoped.
+mapping, site, test, and output scope. Delivered state is transaction-scoped
+rather than release-scoped. One runtime lock serializes state-changing
+operations, and state advances only after successful handover.
 
 ## Project-wide invariants
 

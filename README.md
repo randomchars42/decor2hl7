@@ -29,11 +29,14 @@ The user workflows are deliberately separate:
 ## Requirements
 
 - Python 3.10.8 or newer;
+- an ODBC driver manager and database-specific ODBC driver when direct source
+  extraction is enabled;
 - Java for setup/build and explicit CDA conformance validation;
 - network access to acquire uncached ART-DECOR artifacts during `fetch`.
 
-Runtime has no third-party Python dependencies. Setup/build validation packages
-are checksum-pinned and cached by `fetch`.
+Runtime depends on `pyodbc` for its optional built-in database source. CSV-only
+operation does not open ODBC. Setup/build validation packages are
+checksum-pinned and cached by `fetch`.
 
 ## Install
 
@@ -85,7 +88,7 @@ WORKSPACE/                          decor2hl7-owned
 ├── site/<release>/                 deployment and transaction input configuration
 ├── test/<release>/<transaction>/   isolated mapping verification
 ├── out/<release>/<transaction>/    generated runtime documents
-└── state/                           change and delivery history
+└── state/                           SQLite lineage, snapshots, runs, quarantine
 ```
 
 Generated `spec/`, `model/`, `test/`, and `out/` content can be rebuilt.
@@ -117,6 +120,7 @@ decor2hl7 test-cda-mapping
 
 # Runtime operation
 decor2hl7 check
+decor2hl7 extract-source --output /data/snapshots/review-1
 decor2hl7 transform --input /data/clinical-export
 decor2hl7 send
 decor2hl7 status
@@ -124,6 +128,9 @@ decor2hl7 status
 
 Use `decor2hl7 run --input /data/clinical-export --send` only after the separate
 validation and delivery steps are understood for the deployment.
+For a configured ODBC source, `decor2hl7 run-source --send` performs bounded
+extraction into a replayable atomic snapshot and then uses the identical
+ingestion, transformation, delivery, and SQLite lineage pipeline.
 
 ## Project maintenance
 

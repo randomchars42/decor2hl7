@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import datetime as dt
+import sqlite3
 import json
 import tempfile
 import unittest
@@ -10,12 +10,34 @@ from decor2hl7 import state
 
 
 class StateTests(unittest.TestCase):
+    def test_legacy_json_state_is_imported_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "index.json").write_text(json.dumps({
+                "version": 1,
+                "documents": {"tx::case": {
+                    "fingerprint": "old", "document_version": 3,
+                    "sent_at": "2026-01-01T00:00:00+00:00",
+                    "file": "case-v3.xml", "spec_version": "2026.1",
+                }},
+            }), encoding="utf-8")
+            self.assertEqual(
+                state.classify(directory, "tx::case", "new"), ("CHANGED", 4)
+            )
+            # A later edit of the retained evidence must not overwrite SQLite.
+            (directory / "index.json").write_text(
+                '{"version":1,"documents":{}}', encoding="utf-8"
+            )
+            self.assertEqual(
+                state.classify(directory, "tx::case", "old"), ("UNCHANGED", 3)
+            )
+
     def test_state_lifecycle_increments_versions_and_appends_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             first = state.fingerprint({"values": {"a": 1}})
             second = state.fingerprint({"values": {"a": 2}})
-            self.assertEqual(state.load_state(directory), {"version": 1, "documents": {}})
+            self.assertEqual(state.load_state(directory), {"version": 2, "documents": {}})
             self.assertEqual(state.classify(directory, "document", first), ("NEW", 1))
 
             state.record_sent(
@@ -31,34 +53,44 @@ class StateTests(unittest.TestCase):
             state.record_sent(
                 directory, key="document", digest=second, document_version=2,
                 file="second.xml", spec_version="release-v2",
+                document_id={"root": "1.2.3", "extension": "document-2"},
+                set_id={"root": "1.2.3", "extension": "document"},
+                previous={
+                    "document_id": {"root": "1.2.3", "extension": "document-1"},
+                    "set_id": {"root": "1.2.3", "extension": "document"},
+                    "version": 1,
+                },
             )
 
             saved = state.load_state(directory)["documents"]["document"]
             self.assertEqual(saved["document_version"], 2)
             self.assertEqual(saved["spec_version"], "release-v2")
-            history = (directory / "history.jsonl").read_text(
-                encoding="utf-8"
-            ).splitlines()
-            self.assertEqual(len(history), 2)
-            self.assertEqual(json.loads(history[-1])["file"], "second.xml")
+            with sqlite3.connect(directory / "state.sqlite") as connection:
+                history = connection.execute(
+                    "SELECT file FROM history ORDER BY document_version"
+                ).fetchall()
+            self.assertEqual(history, [("first.xml",), ("second.xml",)])
+            self.assertEqual(
+                state.previous_document(directory, "document"),
+                {
+                    "document_id": {"root": "1.2.3", "extension": "document-2"},
+                    "set_id": {"root": "1.2.3", "extension": "document"},
+                    "version": 2,
+                },
+            )
 
-    def test_history_rotation_ignores_disabled_recent_and_invalid_history(self) -> None:
+    def test_history_rotation_is_a_sqlite_checkpoint_and_never_deletes_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             self.assertIsNone(state.rotate(directory, 1))
-            history = directory / "history.jsonl"
-            history.write_text("", encoding="utf-8")
-            self.assertIsNone(state.rotate(directory, 0))
-            self.assertIsNone(state.rotate(directory, 1))
-
-            history.write_text("not json\n", encoding="utf-8")
-            self.assertIsNone(state.rotate(directory, 1))
-            recent = dt.datetime.now(dt.timezone.utc).isoformat()
-            history.write_text(
-                json.dumps({"sent_at": recent}) + "\n", encoding="utf-8"
+            state.record_sent(
+                directory, key="x", digest="d", document_version=1,
+                file="x.xml", spec_version="v",
             )
             self.assertIsNone(state.rotate(directory, 1))
-            self.assertTrue(history.exists())
+            with sqlite3.connect(directory / "state.sqlite") as connection:
+                count = connection.execute("SELECT COUNT(*) FROM history").fetchone()
+            self.assertEqual(count, (1,))
 
     def test_state_change_detection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -67,6 +99,11 @@ class StateTests(unittest.TestCase):
             self.assertEqual(state.classify(path, "tx::x", digest), ("NEW", 1))
             state.record_sent(path, key="tx::x", digest=digest, document_version=1, file="x.xml", spec_version="v")
             self.assertEqual(state.classify(path, "tx::x", digest)[0], "UNCHANGED")
+            with self.assertRaisesRegex(ValueError, "cannot follow"):
+                state.record_sent(
+                    path, key="tx::x", digest="future", document_version=3,
+                    file="x-v3.xml", spec_version="v",
+                )
 
     def test_state_fingerprint_includes_repeating_instances(self) -> None:
         a = {"values": {}, "instances": {"med": [{"values": {"drug": "A", "route": None}}, {"values": {"drug": "B", "route": "oral"}}]}}
@@ -78,19 +115,23 @@ class StateTests(unittest.TestCase):
         b = {"values": {}, "instances": {"med": [{"source": "medications", "row": 99, "values": {"drug": "A"}}]}}
         self.assertEqual(state.fingerprint(a), state.fingerprint(b))
 
-    def test_history_rotation_uses_first_entry_timestamp_not_mtime(self) -> None:
+    def test_run_ledger_records_completed_snapshot_and_lock_is_exclusive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
-            history = directory / "history.jsonl"
-            history.write_text(
-                '{"key":"x","sent_at":"2000-01-01T00:00:00+00:00"}\n',
-                encoding="utf-8",
+            state.start_run(directory, "r1", kind="run-source")
+            state.finish_run(
+                directory, "r1", status="completed",
+                snapshot_max_ts="2026-09-23T01:02:03",
+                summary={"records": 4},
             )
-            rotated = state.rotate(directory, 1)
-            self.assertIsNotNone(rotated)
-            self.assertFalse(history.exists())
-            assert rotated is not None
-            self.assertTrue(rotated.exists())
+            self.assertEqual(
+                state.last_snapshot_max_ts(directory), "2026-09-23T01:02:03"
+            )
+            self.assertEqual(state.recent_runs(directory)[0]["status"], "completed")
+            with state.workspace_lock(directory):
+                with self.assertRaisesRegex(RuntimeError, "already active"):
+                    with state.workspace_lock(directory):
+                        pass
 
     def test_state_fingerprint_changes_with_transformation_context(self) -> None:
         record = {"values": {"a": 1}, "instances": {}}

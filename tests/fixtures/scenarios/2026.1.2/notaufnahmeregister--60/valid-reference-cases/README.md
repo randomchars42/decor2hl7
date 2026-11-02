@@ -30,12 +30,15 @@ target whose exact ValueSet declares OTH and whose datatype exposes
 `originalText`.
 
 The scenario site configuration supplies document confidentiality `N`
-(`normal`), language `de-DE`, administrative gender `F`, author name
-`decor2hl7user`, and activation-scoped medication mood/status values. These are
-test-site values, not portable mapping or compiler defaults. The portable
-mapping declares the six required confidentiality, language, author, and
-medication/subordinate-administration targets as `site_requirements`; it records
-their channels and ownership without copying these values.
+(`normal`), language `de-DE`, author name `decor2hl7user`, and
+activation-scoped medication mood/status values. These are test-site values,
+not portable mapping or compiler defaults. Administrative gender instead
+travels through the reviewed `patient.geschlecht` model extension; the scenario
+normalizes ECare-style `m`, `w`, and `d` source values to the exact HL7
+AdministrativeGender members. The portable mapping declares the six required
+confidentiality, language, author, and medication/subordinate-administration
+targets as `site_requirements`; it records their channels and ownership without
+copying these values.
 
 Wildcard timing is deliberately narrower than the selected mapping inventory.
 The source calls one field a timestamp and the other a numeric duration while

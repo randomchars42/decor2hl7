@@ -311,9 +311,10 @@ class ReferenceClosureTests(unittest.TestCase):
             "hauptkostentrager.versicherungsverhaltnis.kv_fall",
             "hauptkostentrager.versicherungsverhaltnis.versichertenstatus",
             "hauptkostentrager.versicherungsverhaltnis.versichertenstatus_gkv",
+            "patient.geschlecht",
         ])
         current_counts = current["summary"]["coverage_headline"]
-        self.assertEqual(current_counts["mapped_datapoints"], 89)
+        self.assertEqual(current_counts["mapped_datapoints"], 90)
         self.assertEqual(current_counts["no_target_datapoints"], 34)
 
     def test_reviewed_recovery_overlay_matches_authoritative_mapping(self) -> None:
@@ -374,9 +375,9 @@ class ReferenceClosureTests(unittest.TestCase):
         self.assertEqual(
             recovery["expected"],
             {
-                "dataset_fields": 127,
-                "generated_mapped_fields": 89,
-                "reviewed_mapped_fields": 120,
+                "dataset_fields": 128,
+                "generated_mapped_fields": 90,
+                "reviewed_mapped_fields": 121,
                 "reviewed_narrative_fields": 2,
                 "field_override_count": 38,
                 "narrative_target_count": 1,

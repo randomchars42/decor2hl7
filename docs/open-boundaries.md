@@ -126,11 +126,16 @@ changing portable field mappings once presentation requirements are agreed.
 
 ### Receiver protocol and exactly-once delivery are unspecified
 
-The current adapter sends one document by generic HTTP POST. Authentication,
-batch envelopes, acknowledgement parsing, receiver idempotency, and the crash
-window between successful POST and local state recording are unresolved.
-Closing this requires the concrete receiver protocol and its durable
-acknowledgement/state semantics.
+The local spool adapter now defines an atomic, immutable handover: a document
+and sidecar become visible together, identical replay is idempotent, and local
+SQLite state advances only after publication. Downstream consumption and
+acknowledgement of that directory are outside the contract.
+
+The generic HTTP adapter still has no receiver-specific authentication, batch
+envelope, acknowledgement parsing, or idempotency contract. In particular, the
+crash window between a successful remote POST and local SQLite commit remains
+unresolved. Closing the remote boundary requires the concrete receiver protocol
+and its durable acknowledgement/state semantics.
 
 ### Recovery overlay application is manual
 

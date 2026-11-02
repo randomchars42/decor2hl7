@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import os
+import shutil
+import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -74,6 +78,44 @@ def _http_post_config(config: Mapping[str, Any]) -> ConfigResult:
     }, ""
 
 
+def _spool(path: Path, config: Mapping[str, Any]) -> SendResult:
+    root = Path(str(config["directory"]))
+    final = root / dt.datetime.now(dt.timezone.utc).strftime("%Y-%m") / path.stem
+    sidecar = path.with_suffix(".json")
+    files = [path, *([sidecar] if sidecar.is_file() else [])]
+    if final.exists():
+        identical = final.is_dir() and all(
+            (final / item.name).is_file()
+            and (final / item.name).read_bytes() == item.read_bytes()
+            for item in files
+        )
+        if identical and sorted(item.name for item in final.iterdir()) == sorted(
+            item.name for item in files
+        ):
+            return True, f"already published at {final}"
+        return False, f"spool destination already exists with different content: {final}"
+
+    final.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{path.stem}-", dir=final.parent))
+    try:
+        for item in files:
+            destination = temporary / item.name
+            with destination.open("wb") as handle:
+                handle.write(item.read_bytes()); handle.flush(); os.fsync(handle.fileno())
+        temporary.rename(final)
+        return True, f"published at {final}"
+    except OSError as error:
+        shutil.rmtree(temporary, ignore_errors=True)
+        return False, str(error)
+
+
+def _spool_config(config: Mapping[str, Any]) -> ConfigResult:
+    directory = config.get("directory")
+    if not isinstance(directory, str) or not directory.strip():
+        return None, "transport.directory is not configured"
+    return {"adapter": "spool", "directory": directory}, ""
+
+
 _ADAPTERS: dict[
     str, tuple[frozenset[str], ConfigValidator, SendAdapter]
 ] = {
@@ -81,6 +123,11 @@ _ADAPTERS: dict[
         frozenset({"adapter", "url", "timeout", "headers"}),
         _http_post_config,
         _http_post,
+    ),
+    "spool": (
+        frozenset({"adapter", "directory"}),
+        _spool_config,
+        _spool,
     ),
 }
 
@@ -113,9 +160,27 @@ def _configured_adapter(
     return (adapter, config, "") if config is not None else (None, None, error)
 
 
-def send(path: Path, site: Mapping[str, Any]) -> SendResult:
+def configured_name(site: Mapping[str, Any]) -> str:
+    value = site.get("transport", {})
+    return str(value.get("adapter") or "http-post") if isinstance(value, Mapping) else ""
+
+
+def configuration_error(site: Mapping[str, Any]) -> str:
+    """Validate the selected closed adapter contract without performing I/O."""
+    adapter, config, error = _configured_adapter(site)
+    return error if adapter is None or config is None else ""
+
+
+def send(
+    path: Path, site: Mapping[str, Any], *, workspace: Path | None = None,
+) -> SendResult:
     """Send one document through the configured, built-in adapter."""
     adapter, config, error = _configured_adapter(site)
     if adapter is None or config is None:
         return False, error
+    if configured_name(site) == "spool" and workspace is not None:
+        configured = Path(str(config["directory"])).expanduser()
+        if not configured.is_absolute():
+            configured = workspace / configured
+        config = {**config, "directory": str(configured.resolve())}
     return adapter(path, config)

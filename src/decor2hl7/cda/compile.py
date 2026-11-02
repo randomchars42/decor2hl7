@@ -3263,6 +3263,8 @@ def _compiled_content_roles(
                 node["system_value"] = "document_set_identifier"
             elif path == ("ClinicalDocument", "versionNumber"):
                 node["system_value"] = "document_version_number"
+            elif path == ("ClinicalDocument", "relatedDocument"):
+                node["content_role"] = "document_replacement"
             elif path == ("ClinicalDocument", "effectiveTime"):
                 node["system_value"] = "document_generation_time"
             elif path == ("ClinicalDocument", "author", "time"):

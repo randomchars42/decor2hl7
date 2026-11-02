@@ -1562,6 +1562,78 @@ def _render_node_once(
     return [element]
 
 
+def _inject_document_replacement(
+    root: ET.Element,
+    document: list[Mapping[str, Any]],
+    previous: Mapping[str, Any],
+    current_set_id: Mapping[str, Any],
+    document_version: int,
+) -> None:
+    """Render CDA RPLC lineage through the compiled, owner-admitted slot."""
+    if len(document) != 1:
+        raise ValueError("compiled CDA model has no unique document root")
+    children = list(document[0].get("children", []))
+    slots = [
+        node for node in children
+        if (
+            node.get("content_role") == "document_replacement"
+            or str(node.get("name") or "").split(":", 1)[-1].split("[", 1)[0]
+            == "relatedDocument"
+        )
+    ]
+    if len(slots) != 1 or slots[0].get("max") == 0:
+        raise ValueError(
+            "compiled CDA model does not admit one relatedDocument replacement slot"
+        )
+    previous_document = previous.get("document_id", {})
+    previous_set = previous.get("set_id", {})
+    if not isinstance(previous_document, Mapping) or not isinstance(previous_set, Mapping):
+        raise ValueError("previous CDA identity is incomplete")
+    required = (
+        previous_document.get("root"), previous_document.get("extension"),
+        previous_set.get("root"), previous_set.get("extension"),
+    )
+    if not all(str(value or "") for value in required):
+        raise ValueError("previous CDA identity is incomplete")
+    if int(previous.get("version") or 0) + 1 != document_version:
+        raise ValueError("previous CDA version is not the direct predecessor")
+    if (
+        str(previous_set.get("root")) != str(current_set_id.get("root"))
+        or str(previous_set.get("extension")) != str(current_set_id.get("extension"))
+    ):
+        raise ValueError("previous CDA setId differs from the current document setId")
+
+    namespace = root.tag[1:].split("}", 1)[0] if root.tag.startswith("{") else ""
+    def tag(name: str) -> str:
+        return f"{{{namespace}}}{name}" if namespace else name
+
+    related = ET.Element(tag("relatedDocument"), {"typeCode": "RPLC"})
+    parent = ET.SubElement(related, tag("parentDocument"))
+    ET.SubElement(parent, tag("id"), {
+        "root": str(previous_document["root"]),
+        "extension": str(previous_document["extension"]),
+    })
+    ET.SubElement(parent, tag("setId"), {
+        "root": str(previous_set["root"]),
+        "extension": str(previous_set["extension"]),
+    })
+    ET.SubElement(parent, tag("versionNumber"), {
+        "value": str(previous["version"]),
+    })
+    root.append(related)
+
+    def local_name(value: str) -> str:
+        return value.rsplit("}", 1)[-1].split(":", 1)[-1]
+
+    order = {
+        local_name(str(node.get("name") or "")): int(node.get("render_order") or index)
+        for index, node in enumerate(children)
+    }
+    root[:] = sorted(
+        list(root), key=lambda element: order.get(local_name(element.tag), 1_000_000)
+    )
+
+
 def emit(
     record: Mapping[str, Any],
     model: Mapping[str, Any],
@@ -1570,6 +1642,7 @@ def emit(
     site: Mapping[str, Any],
     *,
     document_version: int = 1,
+    previous_document: Mapping[str, Any] | None = None,
 ) -> tuple[bytes, list[str]]:
     targets = cda.get("targets", {})
     assignments, problems = build_assignments(record, model, cda, mapping, site)
@@ -1722,6 +1795,14 @@ def emit(
         )
     if len(roots) != 1:
         raise ValueError(f"compiled CDA model rendered {len(roots)} root elements, expected one")
+    if previous_document is not None:
+        current_set_id = system_values["document_set_identifier"]
+        if not isinstance(current_set_id, Mapping):
+            raise ValueError("current CDA setId is incomplete")
+        _inject_document_replacement(
+            roots[0], list(document), previous_document,
+            current_set_id, document_version,
+        )
     assertion_errors, assertion_warnings = validate_contexts(roots[0], assertion_contexts)
     problems.extend(assertion_warnings)
     if assertion_errors:

@@ -13,8 +13,11 @@ selection
              -> mapping analysis -> audit + proposal
                   -> reviewed mapping bundle
 
-external input + site configuration
-   -> ingest -> normalize -> validate -> bind -> render -> state -> transport
+external CSV snapshot + site configuration
+   -> ingest -> normalize -> validate -> bind -> render -> transport -> state
+
+optional ODBC source
+   -> bounded extraction -> atomic CSV snapshot -> the same runtime pipeline
 ```
 
 `model.json` is target-neutral. `cda.json` is the current physical target model.
@@ -73,6 +76,7 @@ src/decor2hl7/
 │   └── render.py           representation-driven XML output
 ├── domain.py               target-neutral dataset value domains
 ├── data.py                 CSV ingestion and occurrence normalization
+├── source.py               bounded ODBC extraction and snapshot publication
 ├── bindings.py             mappings, structures, and construction values
 ├── transforms.py           declarative scalar transforms
 ├── cooccurrence.py         datatype-shape admissibility
@@ -80,7 +84,7 @@ src/decor2hl7/
 ├── validate.py             model/config/record validation
 ├── conformance.py          package and CDA validation gates
 ├── testing.py              synthetic and authored scenarios
-├── state.py                transformation fingerprints and history
+├── state.py                SQLite lineage, delivery history, runs, and locking
 └── transport.py            bounded delivery adapters
 ```
 
@@ -147,10 +151,15 @@ See [`topics/mapping-and-construction.md`](topics/mapping-and-construction.md).
 
 ## Runtime data flow
 
-The input root is external and explicit. Runtime accepts a reviewed mapping
-file and a site bundle rather than individual flags for each JSON file.
+The input root is external and explicit. It may be producer-supplied or an
+immutable snapshot created by the built-in ODBC source adapter. Runtime accepts
+a reviewed mapping file and a site bundle rather than individual flags for
+each JSON file.
 
 ```text
+ODBC source (optional)
+  -> source.extract -> atomically published INPUT/
+
 INPUT/
   -> data.ingest
   -> target-neutral normalized records
@@ -158,8 +167,9 @@ INPUT/
   -> bindings build occurrence-aware assignments
   -> cda.render consumes compiled representations
   -> assertions evaluate the complete tree
-  -> state fingerprints relevant semantics
-  -> transport optionally sends the document
+  -> state fingerprints relevant semantics and selects the next version
+  -> transport optionally publishes or sends the document
+  -> SQLite commits delivery state and CDA lineage
 ```
 
 Mapping verification uses the same ingestion, validation, binding, rendering,
@@ -180,7 +190,9 @@ model + target model -> mapping analysis
 input + reviewed configuration + compiled models -> runtime target adapter
 ```
 
-Source ingestion, occurrence normalization, and state must not depend on CDA.
+Source extraction, ingestion, occurrence normalization, and stream revision
+state must not depend on CDA. CDA document and replacement identities are
+target artifact metadata attached to each committed version.
 Target-specific rules must not leak into site input configuration. Adding a
 future output target should introduce a target compiler, mapping specialization,
 renderer, and conformance gate without redesigning the normalized dataset
@@ -196,8 +208,8 @@ rather than runtime-oriented `validate.py`.
 
 - Generated model and test directories are rebuildable; reviewed mapping and
   site configuration have distinct owners.
-- Runtime is standard-library-only; setup/build validation may use pinned Java
-  tooling.
+- Runtime uses the standard library plus the bounded `pyodbc` source driver;
+  setup/build validation may also use pinned Java tooling.
 - Mapping review, site validation, and document conformance are independent
   gates.
 - Transport adapters are code-defined and bounded rather than dynamically

@@ -95,12 +95,7 @@
           "codeSystem": "2.16.840.1.113883.5.25",
           "displayName": "normal"
         },
-        "CDAlanguageCode.languageCode": "de-DE",
-        "CDArecordTargetnnar.administrativeGenderCode": {
-          "code": "F",
-          "codeSystem": "2.16.840.1.113883.5.1",
-          "displayName": "Female"
-        }
+        "CDAlanguageCode.languageCode": "de-DE"
       },
       "fallback_if_active": {
         "Medikation.moodCode": "EVN",
@@ -113,6 +108,11 @@
     }
   },
   "codes": {
+    "patient.geschlecht": {
+      "m": "Male",
+      "w": "Female",
+      "d": "Undifferentiated"
+    },
     "hauptkostentrager.versicherungsverhaltnis.weitere_versichertenstatuskodierung": {
       "LOCAL-A": {
         "code": "LOCAL-A",

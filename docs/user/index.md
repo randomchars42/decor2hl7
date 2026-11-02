@@ -11,8 +11,8 @@ owners and different reuse scopes:
 | Workflow and user group | Receives | Produces | Main responsibility |
 |---|---|---|---|
 | **Specification and target mapping** — specification maintainer and clinical mapping reviewer | An exact ART-DECOR release and transaction | A reviewed, shareable dataset-to-target mapping | Decide what the specification means and which mappings are clinically valid |
-| **Site and input configuration** — site integration administrator | The compiled dataset and a reviewed mapping, plus one site's export | A site-local input configuration | Describe files, columns, joins, local codes, identifiers, and deployment values |
-| **Runtime operation** — runtime operator | Compiled models, reviewed mapping, site configuration, and an input snapshot | Validated output documents and delivery state | Check, transform, validate, monitor, and optionally send |
+| **Site and input configuration** — site integration administrator | The compiled dataset and a reviewed mapping, plus one site's export or read-only replica | A site-local input and optional extraction configuration | Describe queries, files, columns, joins, local codes, identifiers, and deployment values |
+| **Runtime operation** — runtime operator | Compiled models, reviewed mapping, site configuration, and an input snapshot or configured source | Validated output documents and delivery state | Extract when configured, check, transform, validate, monitor, and optionally deliver |
 
 These are handoffs, not one shared configuration task:
 

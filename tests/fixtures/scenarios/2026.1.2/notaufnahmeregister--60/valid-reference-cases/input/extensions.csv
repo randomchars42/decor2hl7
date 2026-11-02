@@ -1,7 +1,7 @@
-case_id,hauptkostentrager.versicherungsverhaltnis.versichertenstatus,hauptkostentrager.versicherungsverhaltnis.versichertenstatus_gkv,hauptkostentrager.versicherungsverhaltnis.weitere_versichertenstatuskodierung,hauptkostentrager.versicherungsverhaltnis.kv_fall,administrative_aufnahmeinformationen.transport.ankunftszeit,administrative_verlegungsentlassungsinformationen.aufnehmende_fachabteilung
-SCENARIO-01,self,Mitglied,LOCAL-A,KV-Fall,2026-05-01T09:55:00+02:00,Innere Medizin
-SCENARIO-02,self,Mitglied,LOCAL-A,KV-Fall,2026-05-02T09:55:00+02:00,Innere Medizin
-SCENARIO-03,self,Familienangehörige,LOCAL-A,KV-Fall,2026-05-03T09:55:00+02:00,Neurologie
-SCENARIO-04,self,Mitglied,LOCAL-A,kein KV-Fall,2026-05-04T09:55:00+02:00,
-SCENARIO-05,self,Rentner,LOCAL-A,KV-Fall,2026-05-05T09:55:00+02:00,
-SCENARIO-06,self,Familienangehörige,LOCAL-A,kein KV-Fall,2026-05-06T09:55:00+02:00,
+case_id,patient.geschlecht,hauptkostentrager.versicherungsverhaltnis.versichertenstatus,hauptkostentrager.versicherungsverhaltnis.versichertenstatus_gkv,hauptkostentrager.versicherungsverhaltnis.weitere_versichertenstatuskodierung,hauptkostentrager.versicherungsverhaltnis.kv_fall,administrative_aufnahmeinformationen.transport.ankunftszeit,administrative_verlegungsentlassungsinformationen.aufnehmende_fachabteilung
+SCENARIO-01,m,self,Mitglied,LOCAL-A,KV-Fall,2026-05-01T09:55:00+02:00,Innere Medizin
+SCENARIO-02,w,self,Mitglied,LOCAL-A,KV-Fall,2026-05-02T09:55:00+02:00,Innere Medizin
+SCENARIO-03,d,self,Familienangehörige,LOCAL-A,KV-Fall,2026-05-03T09:55:00+02:00,Neurologie
+SCENARIO-04,w,self,Mitglied,LOCAL-A,kein KV-Fall,2026-05-04T09:55:00+02:00,
+SCENARIO-05,m,self,Rentner,LOCAL-A,KV-Fall,2026-05-05T09:55:00+02:00,
+SCENARIO-06,d,self,Familienangehörige,LOCAL-A,kein KV-Fall,2026-05-06T09:55:00+02:00,

@@ -312,7 +312,9 @@ and [`reference-transaction.md`](reference-transaction.md#other-reviewed-constru
 ### DEC-034 — Bounded receiver transport adapters
 
 Transport selects a built-in adapter with a closed validated option schema;
-arbitrary imports and unspecified protocol behavior are excluded. See
+arbitrary imports and unspecified protocol behavior are excluded. The local
+spool adapter publishes an immutable XML/sidecar directory atomically and
+commits state afterward; downstream acknowledgement is a separate boundary. See
 [`topics/input-runtime-and-delivery.md`](topics/input-runtime-and-delivery.md#transport).
 
 ## Maintenance
