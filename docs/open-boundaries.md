@@ -95,12 +95,20 @@ labelled Diagnostics-section narrative wording, without claiming structured
 semantics. Reopen the structured mapping only with an active region target and
 formal binding, or a complete reviewed structured mapping contract.
 
-### EDIS containment remains a local profile overlay
+### Structured EDIS placement awaits AKTIN clarification
 
 Entries `.10.85`, `.10.86`, and `.10.87` are not contained by the selected
-document. Exact reviewed attachments make them available locally. Explicit
-upstream containment would allow those overlays to be removed and remains
-preferable.
+document. The current Addendum definition declares only the discharge-timestamp
+entries, while the structural overview still lists the EDIS entries. The
+unchanged provided receiver rejects the reviewed local attachments.
+
+Their structured mappings are suspended, with values retained as Addendum
+narrative facts. Exact former assignments and attachment records remain in the
+[restoration list](recovery/2026.1.2-notaufnahmeregister--60-suspended-cda-mappings.json).
+The compiled attachments remain inactive candidate evidence. Closing this
+requires AKTIN confirmation of each datum's intended use, exact placement and
+revision for the selected transition profile, followed by reviewed mapping and
+successful validation against the unchanged intended receiver.
 
 ### Isolation cardinality conflicts with the negative branch
 
@@ -122,16 +130,18 @@ by the cached open source templates and the reviewed local EDIS attachments.
 Redundant automatic coded wording and the duplicate insurance identifier in the
 Hauptkostenträger participant are omitted under the reviewed compatibility
 policy. The code/display name and the insurance number in the explicitly
-declared generic payer slot remain. EDIS containment and the rejection of the
-runtime replacement link (`relatedDocument typeCode="RPLC"`) remain unresolved.
+declared generic payer slot remain. Structured EDIS assignments are suspended
+under DEC-048; the source facts remain in narrative while their intended
+placement is clarified. Rejection of the runtime replacement link
+(`relatedDocument typeCode="RPLC"`) remains unresolved.
 
 Local exact-closure conformance therefore does not establish acceptance by that
 receiver publication. The unchanged provided receiver is the acceptance target.
-Closing this boundary requires reviewed output/mapping changes that preserve the
-intended facts, including a decision on structured versus narrative EDIS content
-and the receiver's correction protocol. Do not silently delete mapped content,
-change selected template revisions, or replace receiver validation to obtain a
-pass.
+Closing this boundary requires AKTIN clarification of structured EDIS placement
+and the receiver's correction protocol. Initial-document validation does not
+establish successful import, database storage, or correction acceptance. Do not
+silently delete mapped content, change selected template revisions, or replace
+receiver validation to obtain a pass.
 
 ### Pharmacy extension XSD is not pinned
 

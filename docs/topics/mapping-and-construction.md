@@ -7,7 +7,7 @@ contains concise executable selections and review metadata.
 Related decisions: DEC-007, DEC-008, DEC-009, DEC-011, DEC-015, DEC-016,
 DEC-017, DEC-018, DEC-020, DEC-023, DEC-024, DEC-025, DEC-029, DEC-030,
 DEC-033, DEC-035, DEC-038, DEC-040, DEC-041, DEC-042, DEC-043, DEC-044,
-and DEC-046.
+DEC-046, and DEC-048.
 
 ## Evidence and gates
 
@@ -123,6 +123,16 @@ own non-repeated section, but it does not assert a structured CDA value, create
 or coalesce structured entry occurrences, or provide a terminology crosswalk.
 Unknown block types, keys, sources, repeated shapes, and targets fail portable
 mapping validation.
+
+A reviewed structured selection may be suspended by an explicit `null` in
+`fields`, with a narrative-only rule retaining the fact where that presentation
+is appropriate. Record its former assignment, exact source/target identity,
+reason, and reopening evidence in a source-controlled suspension list. Recovery
+overrides must retain that explicit null so a generated proposal cannot silently
+restore the rejected selection. Reintroduction requires a new review of the
+owner placement and intended receiver, followed by refreshed mapping reports
+and conformance checks. The reference EDIS suspension is described in
+[`../reference-transaction.md`](../reference-transaction.md#suspended-edis-mappings).
 
 ## Completion and ownership
 
