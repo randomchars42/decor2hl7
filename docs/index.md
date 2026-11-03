@@ -53,7 +53,8 @@ these groups and helps readers choose the correct workflow.
 - [`mapping-documentation-format.md`](mapping-documentation-format.md) specifies
   the generated mapping-review documents.
 - [`recovery/`](recovery/) contains source-controlled, identity-pinned reviewed
-  mapping overrides that cannot be regenerated from owner rules alone.
+  mapping overrides that cannot be regenerated from owner rules alone, and the
+  [suspended EDIS mapping restoration list](recovery/2026.1.2-notaufnahmeregister--60-suspended-cda-mappings.json).
 
 ## Authority
 

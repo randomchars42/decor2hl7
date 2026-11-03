@@ -318,6 +318,18 @@ provided receiver remains the acceptance target. See
 [`reference-transaction.md`](reference-transaction.md#other-reviewed-construction)
 and [`topics/cda-compilation-and-validation.md`](topics/cda-compilation-and-validation.md#examples-fixed-values-and-construction-roles).
 
+### DEC-048 — Suspend rejected EDIS entries while preserving narrative facts
+
+For the selected reference profile, suspend the structured export-delay, EDIS
+name, and EDIS version mappings pending AKTIN clarification. Preserve the facts
+as reviewed Addendum narrative blocks, keep explicit null recovery overrides,
+and retain exact former mappings and attachment identities in the restoration
+list. Reintroduction requires confirmed profile placement and validation against
+the unchanged intended receiver. The discharge-timestamp entries and runtime
+replacement handling retain their existing rules. See
+[`reference-transaction.md`](reference-transaction.md#suspended-edis-mappings)
+and [`topics/mapping-and-construction.md`](topics/mapping-and-construction.md#narrative-presentation).
+
 ## Runtime and delivery
 
 ### DEC-034 — Bounded receiver transport adapters

@@ -10,7 +10,7 @@ Organization and profile names in source artifacts identify provenance only;
 they do not imply endorsement of decor2hl7 by an artifact publisher.
 
 Related decisions: DEC-008, DEC-009, DEC-018, DEC-029, DEC-033, DEC-036,
-DEC-038, DEC-041, DEC-042, DEC-043, DEC-044, DEC-045, and DEC-046.
+DEC-038, DEC-041, DEC-042, DEC-043, DEC-044, DEC-045, DEC-046, and DEC-048.
 
 ## Evidence boundary
 
@@ -153,8 +153,8 @@ does not infer organism specificity, suspicion, or absence. The former request
 to map the whole performer interval was withdrawn, so its parent is satisfied
 only through the independently mapped low/high leaves.
 
-- The three EDIS metadata entries are attached to the open Addendum section by
-  exact reviewed profile overlays until upstream containment exists.
+- The EDIS structured assignments are suspended; their source facts are retained
+  in the Addendum narrative as described below.
 - Document confidentiality and language are unconditional site values.
 - Author name is an activation-scoped site fallback.
 - Document identifiers, versioning, creation time, custodian content, and
@@ -162,6 +162,35 @@ only through the independently mapped low/high leaves.
   mappings.
 - The retained documentation-start concept is intentionally unmapped because
   the profile owner reports that no current target template uses it.
+
+## Suspended EDIS mappings
+
+The unchanged provided receiver rejects these structured entries in Addendum
+Dokumentationsinformationen. Their assignments under `fields` are explicitly
+`null`; reviewed `fact` blocks retain the values, including the export-delay
+unit, at `addendum-dokumentationsinformationen.text`.
+
+| Dataset point | Former structured target | Entry template |
+|---|---|---|
+| Zeit bis zum Export | `zeit_bis_zum_export.value` | `1.2.276.0.76.3.1.195.10.85@2024-05-24T00:00:00` |
+| Name des EDIS | `name_des_edis.value` | `1.2.276.0.76.3.1.195.10.86@2024-05-24T00:00:00` |
+| Version des EDIS | `version_des_edis.value` | `1.2.276.0.76.3.1.195.10.87@2024-05-24T00:00:00` |
+
+The [restoration list](recovery/2026.1.2-notaufnahmeregister--60-suspended-cda-mappings.json)
+preserves the full dataset paths and concept OIDs, original mappings, exact
+target identities, reviewed attachment records, published links, and the
+evidence required for reintroduction. The local compiled attachments remain
+inactive candidate evidence; retaining them does not emit these entries. The
+recovery override explicitly suspends their generated selections.
+
+The current [Addendum definition](https://aktin.art-decor.pub/aktin-cda-ig-20260427T185033/tmp-1.2.276.0.76.3.1.195.10.73-2024-08-15T110815.html)
+declares the timestamp entries `.10.75`, `.10.76`, and `.10.77`. Their structured
+assignments remain. The publication's
+[structural overview](https://aktin.art-decor.pub/aktin-cda-ig-20260427T185033/4b95b0b7-c65b-4343-95b0-b7c65b334377.html)
+still lists the EDIS entries, so AKTIN must clarify their intended use and exact
+placement before they are restored. A standalone leaf definition does not
+establish containment or receiver acceptance. RPLC correction handling is a
+separate delivery question and is not removed by this mapping decision.
 
 Remaining profile and publication questions are in
 [`open-boundaries.md`](open-boundaries.md).

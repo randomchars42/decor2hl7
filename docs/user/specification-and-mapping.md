@@ -86,6 +86,14 @@ Check repeated groups occurrence by occurrence. Independent repetitions must
 not be aligned by row number or display order. For coded values, verify the
 exact code system and ValueSet revision rather than relying on similar labels.
 
+When suspending a rejected structured mapping pending an owner's answer, retain
+its exact former assignment and reopening conditions in a restoration list.
+Set its `fields` assignment to `null`; a reviewed narrative block may preserve
+the fact as readable text. Preserve that null in any recovery overrides, then
+refresh the reports with `init-cda-mapping` without `--reset`. The reference
+[EDIS restoration list](../reference-transaction.md#suspended-edis-mappings)
+shows the current case. Reintroduction requires review and receiver validation.
+
 ## 4. Validate the reviewed choices
 
 ```bash
