@@ -98,3 +98,8 @@ The English catalog defines the complete message-ID set. Other catalogs must
 use the same IDs and formatting placeholders. Invalid IDs, missing messages, placeholder drift,
 unsupported languages, and translation of protected technical terms are test
 failures.
+
+Mapping-analysis reasons and suggested actions use stable catalog IDs with full
+English and German messages. Dynamic owner warnings remain unchanged parameters;
+localization does not replace substrings in owner text or mapping metadata.
+Current source-preview conflicts and date diagnostics use the same catalog path.

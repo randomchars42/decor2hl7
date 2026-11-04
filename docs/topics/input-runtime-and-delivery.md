@@ -31,6 +31,9 @@ unknown executable keys and invalid transforms fail configuration admission.
 CSV headers must be non-empty and unique, and every row must have exactly the
 header width. Integer parsing preserves exact values and rejects fractions;
 all numeric input must be finite. An invalid scalar quarantines its record.
+Runtime, authored scenarios and input proposals share the same strict CSV parser.
+Header discovery and observed-value sampling can stream files; runtime and
+scenario preparation materialize validated tables.
 
 A scalar field read from multiple rows requires exactly one explicitly marked
 primary row. Source order alone never selects a scalar clinical fact. Repeated
@@ -168,6 +171,14 @@ current stream revision, append-only version history, exact current and prior
 CDA identities, delivery status, and a run ledger. Only the current SQLite
 schema is supported; legacy JSON state and older schemas require an explicit
 external conversion rather than an automatic migration. A workspace lock prevents overlapping transforming or delivering commands.
+
+`status` reports `delivered_documents` and `pending_documents`. The delivery count
+includes durable spool publication. Both status and explicit resend consult
+append-only committed history, so archived delivered revisions never become
+pending or get resent merely because a later correction changed the fingerprint.
+Status uses the same checked current sidecar contract as reuse and delivery;
+it does not reconstruct missing keys. The redundant `sent_documents` status
+alias is absent.
 
 State advances only after the selected transport reports a successful
 handover. A crash before that point leaves the record pending; retry therefore
