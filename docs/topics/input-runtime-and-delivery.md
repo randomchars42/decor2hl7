@@ -113,6 +113,12 @@ Validation is layered:
 5. normalized record validity;
 6. target construction, assertions, XSD, and Schematron.
 
+Configuration validation coordinates separate checks for mapping shapes and
+identity, field assignments, construction requirements, input aliases and site
+values. Record validation separately traverses occurrences, checks group
+cardinality and checks scalar constraints. Diagnostic order and severity are
+part of the existing contract.
+
 Mapping review can therefore run without site input, while actual
 transformation requires the selected site bundle and its declared construction
 values.
@@ -122,7 +128,9 @@ values.
 Loading the runtime bundle checks the stable shapes of its models, mappings
 and site configuration. The returned bundle has named products; malformed
 nested executable data fails before ingestion. These structural checks do not
-replace terminology, occurrence or construction validation.
+replace terminology, occurrence or construction validation. Each command admits
+one bundle and reuses it for recovery, transformation and delivery; runtime
+functions receive explicit options rather than parser argument objects.
 
 Before input processing or delivery, the selected mapping lock must match the
 release key/date, transaction key/OID/date, and exact compiled model and CDA
@@ -214,6 +222,11 @@ Authored scenarios are versioned CSV source sets with a manifest pinned to the
 release and exact transaction. The manifest declares every source relationship,
 case identity, expected present/absent fields or templates, and optional local
 site/code values. Generated CDA is never accepted as its own oracle.
+
+Scenario admission first builds a complete validated input plan without changing
+files or site values. Only an admitted plan can copy sources and apply its site
+configuration. The fixture command still stages those files before replacing an
+existing fixture.
 
 `setup-test --scenario` creates an isolated fixture; `test-cda-mapping` runs the
 ordinary ingestion, validation, binding, rendering, and assertion modules
