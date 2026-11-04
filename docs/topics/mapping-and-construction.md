@@ -16,6 +16,12 @@ formal concept origins, exact implementation XPath, terminology, value-set and
 datatype compatibility, unique context/description roles, CDA/RIM owner slots,
 and generated Schematron support. Relationship paths remain review-only.
 
+Candidate discovery and executable admission finish before audit serialization
+or report rendering. The audit has checked field/group decision, candidate, gap
+and summary shapes; the two presentations share evidence classification without
+mutating the proposal. Report context is explicit rather than captured by a
+large nested rendering function.
+
 Evidence strength and executability are separate. An executable selection must
 pass the applicable physical, datatype, terminology, cardinality, occurrence,
 claim, companion, and co-occurrence gates. Shared targets and ambiguous

@@ -3,10 +3,11 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 import xml.etree.ElementTree as ET
 
 from decor2hl7 import validate
+from decor2hl7.contracts import JsonObject
 from decor2hl7.cda import render as cda
 from decor2hl7.cda.datatypes import (
     base_datatype,
@@ -307,9 +308,9 @@ class CdaDatatypeTests(unittest.TestCase):
                 for target in compiled["targets"].values()
             ))
 
-            choices: list[dict[str, Any]] = []
+            choices: list[Mapping[str, Any]] = []
 
-            def collect(nodes: list[dict[str, Any]]) -> None:
+            def collect(nodes: Sequence[Mapping[str, Any]]) -> None:
                 for node in nodes:
                     if node.get("kind") == "datatype_choice":
                         choices.append(node)
@@ -999,7 +1000,7 @@ class CdaDatatypeTests(unittest.TestCase):
 
             # A stale compiled model may still carry the former metadata. The
             # renderer must ignore it rather than emit example instance data.
-            example_default = {
+            example_default: JsonObject = {
                 "value": {"code": "OPB", "codeSystem": "1.2.3"},
                 "source": "template-example",
             }
@@ -1833,7 +1834,7 @@ class CdaDatatypeTests(unittest.TestCase):
                 if str(target.get("path") or "").endswith("/hl7:code")
             )
             self.assertEqual(
-                code_target["value_representation"]["kind"], "coded",
+                (code_target["value_representation"] or {})["kind"], "coded",
             )
             self.assertFalse(code_target["writable"])
             payload, problems = cda.emit(
@@ -1956,7 +1957,7 @@ class CdaDatatypeTests(unittest.TestCase):
             )
             self.assertEqual(
                 {
-                    target.get("value_representation", {}).get("xsi_type")
+                    (target.get("value_representation") or {}).get("xsi_type")
                     for target in observation_value if target.get("writable")
                 },
                 {"BL", "CD", "II", "INT", "PQ", "ST", "TS"},
@@ -2053,9 +2054,9 @@ class CdaDatatypeTests(unittest.TestCase):
                 core_definition_paths=[schema],
             )
 
-            sections: list[dict[str, Any]] = []
+            sections: list[Mapping[str, Any]] = []
 
-            def collect(nodes: list[dict[str, Any]]) -> None:
+            def collect(nodes: Sequence[Mapping[str, Any]]) -> None:
                 for node in nodes:
                     if node.get("name") == "hl7:section":
                         sections.append(node)
@@ -2268,7 +2269,7 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(len(choices), 1)
             name, target = choices[0]
             self.assertTrue(target["writable"])
-            self.assertEqual(target["value_representation"]["xsi_type"], "ST")
+            self.assertEqual((target["value_representation"] or {})["xsi_type"], "ST")
             self.assertEqual(
                 verify_compiled_against_artdecor(compiled, [source]), []
             )
@@ -2362,8 +2363,8 @@ class CdaDatatypeTests(unittest.TestCase):
             compiled = compile_cda([source], model, core_definition_paths=[schema])
             postcode_name, postcode = target_at(compiled, "/hl7:addr/hl7:postalCode")
             given_name, given = target_at(compiled, "/hl7:name/hl7:given")
-            self.assertEqual(postcode["value_representation"]["kind"], "element_text")
-            self.assertEqual(given["value_representation"]["kind"], "element_text")
+            self.assertEqual((postcode["value_representation"] or {})["kind"], "element_text")
+            self.assertEqual((given["value_representation"] or {})["kind"], "element_text")
             self.assertTrue(any(
                 item.get("source") == "datatype" and item.get("datatype") == "AD"
                 for item in postcode["provenance"]
@@ -3006,8 +3007,8 @@ class CdaDatatypeTests(unittest.TestCase):
             )
             self.assertEqual(compiled["stats"]["reachable_templates"], 4)
             self.assertEqual(compiled["stats"]["reviewed_extensions"], 1)
-            sections: list[dict[str, Any]] = []
-            def collect(nodes: list[dict[str, Any]]) -> None:
+            sections: list[Mapping[str, Any]] = []
+            def collect(nodes: Sequence[Mapping[str, Any]]) -> None:
                 for node in nodes:
                     if node.get("name") == "hl7:section":
                         sections.append(node)

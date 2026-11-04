@@ -756,3 +756,10 @@ behavior.
 - State conflict, fallback and missing-value behavior explicitly.
 - Do not maintain duplicate hand-written mapping facts in the Markdown
   generator.
+
+## Implementation boundary
+
+Mapping reports render completed decisions. Candidate discovery, executable
+admission and audit serialization are separate stages. Coverage and qualification
+classification is shared by the audit and presentations. Report-only changes
+must preserve the executable proposal and complete audit evidence.
