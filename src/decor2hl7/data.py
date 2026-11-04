@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .i18n import message as _msg
 
-import csv
 import datetime as dt
 import math
 from decimal import Decimal, InvalidOperation
@@ -12,6 +11,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from .csv_input import read_csv_table
 from .contracts import InputLocator, NormalizedRecord, normalized_record, locator as checked_locator
 from .domain import accepted_values, logical_values
 from .transforms import OMIT, apply_transform, validate_transform
@@ -369,7 +369,8 @@ def _canonical_ordinal(
     if info is None:
         for key, candidate in values.items():
             if str(candidate.get("display_name") or "").casefold() == text.casefold():
-                text = str(key); break
+                text = str(key)
+                break
     match = re.match(r"^\s*([+-]?\d+(?:[.,]\d+)?)", text)
     if match:
         return _parse_number(match.group(1), site, integer=True)
@@ -559,35 +560,6 @@ def _order_rows(rows: list[dict[str, str]], primary: Mapping[str, Any] | None) -
     return ordered, []
 
 
-def _read_csv(path: Path, site: Mapping[str, Any]) -> tuple[list[dict[str, str]], list[str]]:
-    with path.open(encoding=str(site.get("input", {}).get("encoding") or "utf-8-sig"), newline="") as handle:
-        delimiter = site.get("input", {}).get("delimiter")
-        if delimiter:
-            reader = csv.reader(handle, delimiter=str(delimiter), strict=True)
-        else:
-            sample = handle.read(8192)
-            handle.seek(0)
-            try:
-                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-            except csv.Error:
-                dialect = csv.excel
-            reader = csv.reader(handle, dialect=dialect, strict=True)
-        try:
-            headers = next(reader, [])
-            if not headers or any(not name.strip() for name in headers):
-                raise ValueError(_msg('ui.csv_header_empty', path=path))
-            if len(headers) != len(set(headers)):
-                raise ValueError(_msg('ui.csv_header_duplicate', path=path))
-            rows: list[dict[str, str]] = []
-            for row in reader:
-                if not row:
-                    continue
-                if len(row) != len(headers):
-                    raise ValueError(_msg('ui.csv_row_width', path=path, reader_line_num=reader.line_num, row_length=len(row), headers_length=len(headers)))
-                rows.append(dict(zip(headers, row)))
-            return rows, headers
-        except csv.Error as error:
-            raise ValueError(_msg('ui.csv_invalid', path=path, error=error)) from error
 
 
 def field_value(record: Mapping[str, Any], path: str, field: Mapping[str, Any]) -> Any:
@@ -602,7 +574,8 @@ def field_value(record: Mapping[str, Any], path: str, field: Mapping[str, Any]) 
         result: list[Any] = []
         for row in rows if isinstance(rows, list) else []:
             if not isinstance(row, Mapping):
-                result.append(None); continue
+                result.append(None)
+                continue
             if depth == len(chain) - 1:
                 result.append(row.get("values", {}).get(path))
             else:
@@ -767,7 +740,12 @@ def ingest(
             raise ValueError(f"source {name!r} has invalid cardinality {cardinality!r}")
         if not path.exists():
             raise FileNotFoundError(f"mapped source {name!r} not found: {path}")
-        rows, headers = _read_csv(path, site)
+        input_format = site.get("input", {})
+        table = read_csv_table(
+            path, encoding=str(input_format.get("encoding") or "utf-8-sig"),
+            delimiter=str(input_format["delimiter"]) if input_format.get("delimiter") else None,
+        )
+        rows, headers = table.rows, table.columns
         join = str(source_join or default_join)
         required_columns = set(mapped_columns.get(name, set())) | {join}
         if primary and primary.get("column"):
@@ -781,11 +759,14 @@ def ingest(
         for row_number, row in enumerate(rows, 2):
             key = str(row.get(join) or "").strip()
             if not key:
-                empty_key_rows.append(row_number); continue
-            copy = dict(row); copy["__decor2hl7_row__"] = str(row_number)
+                empty_key_rows.append(row_number)
+                continue
+            copy = dict(row)
+            copy["__decor2hl7_row__"] = str(row_number)
             grouped.setdefault(key, []).append(copy)
         if empty_key_rows:
-            shown = ", ".join(str(value) for value in empty_key_rows[:10]); more = " ..." if len(empty_key_rows) > 10 else ""
+            shown = ", ".join(str(value) for value in empty_key_rows[:10])
+            more = " ..." if len(empty_key_rows) > 10 else ""
             raise ValueError(f"source {name!r} has empty join key {join!r} on row(s) {shown}{more}")
         if cardinality == "1:1":
             duplicates = sorted((key, len(group)) for key, group in grouped.items() if len(group) > 1)
@@ -795,8 +776,10 @@ def ingest(
         source_problems: dict[str, list[dict[str, str]]] = {}
         if cardinality == "1:n" and primary:
             for key, group in list(grouped.items()):
-                ordered, row_problems = _order_rows(group, primary); grouped[key] = ordered
-                if row_problems: source_problems[key] = row_problems
+                ordered, row_problems = _order_rows(group, primary)
+                grouped[key] = ordered
+                if row_problems:
+                    source_problems[key] = row_problems
         source_rows[name] = {"cardinality": cardinality, "rows": grouped, "problems": source_problems, "occurrence_keys": occurrence_keys}
     if not source_names:
         return []
@@ -807,14 +790,18 @@ def ingest(
             raise ValueError(f"configured case source {case_source!r} is not available")
     else:
         one_to_one = [name for name in source_names if source_rows[name]["cardinality"] == "1:1"]
-        if len(one_to_one) == 1: case_source = one_to_one[0]
-        elif len(source_names) == 1: case_source = source_names[0]
+        if len(one_to_one) == 1:
+            case_source = one_to_one[0]
+        elif len(source_names) == 1:
+            case_source = source_names[0]
         else: raise ValueError("multiple CSV sources are mapped; configure site.input.case_source to define the record universe")
     if source_rows[case_source]["cardinality"] != "1:1":
         raise ValueError(f"case source {case_source!r} must have cardinality 1:1")
-    keys = list(source_rows[case_source]["rows"]); case_keys = set(keys)
+    keys = list(source_rows[case_source]["rows"])
+    case_keys = set(keys)
     for name, source_data in source_rows.items():
-        if name == case_source: continue
+        if name == case_source:
+            continue
         orphans = sorted(set(source_data["rows"]) - case_keys)
         if orphans:
             raise ValueError(f"source {name!r} contains key(s) absent from case source {case_source!r}: " + ", ".join(orphans[:10]))

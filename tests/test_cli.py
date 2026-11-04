@@ -92,7 +92,7 @@ class CliTests(unittest.TestCase):
                     "decor2hl7.cda.compile.write_cda_model", return_value=cda_model
                 ),
                 patch(
-                    "decor2hl7.compile.mapping.write_mapping_model",
+                    "decor2hl7.compile.mapping.write_cda_mapping",
                     return_value={"fields": {}},
                 ),
                 patch(

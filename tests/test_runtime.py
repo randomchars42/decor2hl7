@@ -4,9 +4,11 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 import shutil
+import json
 import sqlite3
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
 from decor2hl7 import state
@@ -137,6 +139,64 @@ class RuntimeRecoveryTests(unittest.TestCase):
             with sqlite3.connect(root / "state/state.sqlite") as connection:
                 self.assertEqual(connection.execute("SELECT document_version FROM history ORDER BY document_version").fetchall(), [(1,), (2,)])
 
+    def test_status_and_send_skip_committed_archived_revisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site_path = self.prepare(root)
+            self.assertEqual(self.run_source(root)[0], 0)
+            with sqlite3.connect(site_path.parent / "source.sqlite") as connection:
+                connection.execute("UPDATE cases SET note = 'Corrected note'")
+            self.assertEqual(self.run_source(root)[0], 0)
+            output = StringIO()
+            with redirect_stdout(output), redirect_stderr(output):
+                self.assertEqual(main(["--root", str(root), "status"]), 0)
+            self.assertEqual(json.loads(output.getvalue())["pending_documents"], 0)
+            output = StringIO()
+            with redirect_stdout(output), redirect_stderr(output), patch("decor2hl7.transport.send") as send:
+                self.assertEqual(main(["--root", str(root), "send"]), 0)
+            send.assert_not_called()
+            self.assertEqual(json.loads(output.getvalue()), {"sent": 0, "failed": 0})
+            self.assertEqual(len(list(transaction_out_dir(root).glob("*.xml"))), 2)
+
+    def test_status_rejects_missing_current_pending_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.prepare(root)
+            self.assertEqual(self.run_source(root, send=False)[0], 0)
+            sidecar = next(transaction_out_dir(root).glob("*.json"))
+            info = load_json(sidecar)
+            del info["state_key"]
+            write_json(sidecar, info)
+            output = StringIO()
+            with redirect_stdout(output), redirect_stderr(output):
+                self.assertEqual(main(["--root", str(root), "status"]), 2)
+            self.assertIn("state_key", output.getvalue())
+
+    def test_source_and_rendering_use_the_same_admitted_site(self) -> None:
+        from decor2hl7.runtime_config import load_runtime_bundle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site_path = self.prepare(root)
+            shutil.copyfile(site_path.parent / "source.sqlite", site_path.parent / "other.sqlite")
+            with sqlite3.connect(site_path.parent / "other.sqlite") as connection:
+                connection.execute("UPDATE cases SET note = 'New datasource'")
+
+            def admit_updated_site(*args: object, **kwargs: object) -> object:
+                site = load_json(site_path)
+                site["source"]["database"] = "other.sqlite"
+                site["identifiers"]["document_root"] = "2.3.4.5"
+                write_json(site_path, site)
+                return load_runtime_bundle(root)
+
+            with patch("decor2hl7.runtime.load_runtime_bundle", side_effect=admit_updated_site):
+                status, output = self.run_source(root)
+            self.assertEqual(status, 0, output)
+            document = next(transaction_out_dir(root).glob("*.xml"))
+            self.assertIn("New datasource", "".join(ET.parse(document).getroot().itertext()))
+            delivered = next(iter(state.load_state(root / "state")["documents"].values()))
+            self.assertEqual(delivered["document_id"]["root"], "2.3.4.5")
+
     def test_source_switch_and_query_change_have_independent_watermarks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -220,6 +280,20 @@ class RuntimeRecoveryTests(unittest.TestCase):
                 self.assertEqual(status, 2, output)
                 self.assertFalse((root / "spool").exists())
                 self.assertEqual(state.load_state(root / "state")["documents"], {})
+
+    def test_naive_pending_timestamp_has_a_timezone_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.prepare(root)
+            self.assertEqual(self.run_source(root, send=False)[0], 0)
+            sidecar = next(transaction_out_dir(root).glob("*.json"))
+            value = load_json(sidecar)
+            value["prepared_at"] = "2026-06-01T12:00:00"
+            write_json(sidecar, value)
+            status, output = self.run_source(root)
+            self.assertEqual(status, 2, output)
+            self.assertIn("timezone", output)
+            self.assertFalse((root / "spool").exists())
 
     def test_transport_options_fail_before_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

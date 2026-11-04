@@ -25,79 +25,70 @@ def evidence(candidate: Mapping[str, Any]) -> str:
     return " → ".join(str(item) for item in candidate.get("chain", [])) or str(candidate.get("kind") or "—")
 
 
-def reason_for(path: str, detail: Mapping[str, Any]) -> str:
+def reason_for(detail: Mapping[str, Any]) -> str:
     primary = detail.get("primary")
     if primary:
         blocked = detail.get("runtime_blocked")
         if blocked:
             if str(blocked).startswith("REQUIRED_COMPANION("):
                 companions = detail.get("required_companions", [])
-                return (
-                    "The best CDA target is supported by mapping evidence, but a "
-                    "non-null compound value also requires the companion target(s) "
-                    + ", ".join(f"`{item}`" for item in companions)
-                    + ". No source mapping currently supplies that companion."
+                return _msg(
+                    'markdown.mapping_reason.companion',
+                    companions=", ".join(f"`{item}`" for item in companions),
                 )
             return (
-                "The best CDA target is supported by mapping evidence, but it is shared "
-                "with another dataset field and therefore needs an explicit rule before execution."
+                _msg('markdown.mapping_reason.shared_target')
             )
         if detail.get("structural_rule"):
-            return (
-                "The CDA target is supported by mapping evidence and the shared occurrence "
-                f"semantics are made explicit by structural rule `{detail['structural_rule']}`."
+            return _msg(
+                'markdown.mapping_reason.structure', rule=detail['structural_rule'],
             )
         if primary.get("kind") == "OPEN_CODED_DOMAIN":
             return (
-                "The source declares an unconstrained coded domain. Inside the "
-                "mapped container, one unique coded target binds an OTH exception "
-                "and exposes originalText, so unmatched wording has a formal "
-                "target representation without inventing a terminology crosswalk."
+                _msg('markdown.mapping_reason.open_code')
             )
         mapping = primary.get("mapping")
         if isinstance(mapping, Mapping) and mapping.get("mode") == "presence":
             return (
-                "Exact source terminology identifies an optional ART-DECOR statement "
-                "whose clinical payload is fixed by the template. Boolean true activates "
-                "that statement and false omits it."
+                _msg('markdown.mapping_reason.presence')
             )
         if primary.get("mapping") is not None:
             return (
-                "The datapoint and CDA target represent the same information with different "
-                "representations, so a declarative transform is required."
+                _msg('markdown.mapping_reason.representation')
             )
         kind = str(primary.get("kind") or "")
         reasons = {
-            "XPATH": "An explicit ART-DECOR implementation XPath identifies this CDA target.",
-            "TA": "A formal template association connects the datapoint or one of its formal origins to this CDA element.",
-            "STATIC_ASSOC": "An ART-DECOR static association connects the datapoint to this CDA element.",
+            "XPATH": _msg('markdown.mapping_reason.xpath'),
+            "TA": _msg('markdown.mapping_reason.formal_association'),
+            "STATIC_ASSOC": _msg('markdown.mapping_reason.static_association'),
             "STATIC_ASSOC_SLOT": (
-                "An ART-DECOR static association identifies a CDA/RIM base slot, "
-                "which resolves uniquely in the mapped target context."
+                _msg('markdown.mapping_reason.base_slot')
             ),
-            "TERM+VS": "Terminology locates the CDA template and compatible value-set evidence identifies the target.",
-            "TERM+DT": "Terminology locates the CDA template and datatype compatibility identifies its unique payload.",
-            "TERM": "Compatible terminology provides an indirect bridge to this CDA target.",
-            "NAME": "A unique semantic template-name match provides the bridge to this CDA target.",
-            "DESC": "Published descriptions provide a semantic bridge to this CDA target.",
-            "TRANSFORM": "CDA semantics match, but the dataset value must be transformed before rendering.",
+            "TERM+VS": _msg('markdown.mapping_reason.value_set'),
+            "TERM+DT": _msg('markdown.mapping_reason.datatype'),
+            "TERM": _msg('markdown.mapping_reason.indirect_terminology'),
+            "NAME": _msg('markdown.mapping_reason.name'),
+            "DESC": _msg('markdown.mapping_reason.description'),
+            "TRANSFORM": _msg('markdown.mapping_reason.dataset_transform'),
         }
-        text = reasons.get(kind, "The available ART-DECOR evidence identifies this as the best CDA target.")
+        text = reasons.get(kind, _msg('markdown.mapping_reason.best_evidence'))
         if primary.get("confidence") == "WEAK":
-            text += " The evidence is indirect, so the selection should be reviewed."
+            text += _msg('markdown.mapping_reason.weak_review')
         qualification = mapping_qualification(detail, primary)
         if qualification.startswith("MULTIPLE("):
-            text += " Another actionable target has a comparable score."
+            text += _msg('markdown.mapping_reason.comparable')
         if primary.get("warnings"):
-            text += " Warning: " + "; ".join(str(item) for item in primary["warnings"]) + "."
+            text += _msg(
+                'markdown.mapping_reason.warnings',
+                warnings="; ".join(str(item) for item in primary["warnings"]),
+            )
         return text
     if detail.get("context"):
         return (
-            "No executable CDA element could be established; the nearest mapped structural "
-            "group supplies only contextual placement."
+            _msg('markdown.mapping_reason.context_only')
         )
     if detail.get("alternatives"):
-        return "Candidate evidence exists, but none is safe enough to become an executable mapping automatically."
+        return _msg('markdown.mapping_reason.unsafe_candidates')
     return (_msg('markdown.no_usable_cda_target_evidence_for_datapoint'))
 
 
@@ -125,7 +116,7 @@ def status_for(model_fields: Mapping[str, Any], fields: Mapping[str, Any], path:
     return f"YES · {primary.get('confidence')} · {qualification} · {execution}"
 
 
-def candidate_rows(path: str, detail: Mapping[str, Any], limit: int) -> list[tuple[Mapping[str, Any], str]]:
+def candidate_rows(detail: Mapping[str, Any], limit: int) -> list[tuple[Mapping[str, Any], str]]:
     rows: list[tuple[Mapping[str, Any], str]] = []
     primary = detail.get("primary")
     if primary:
@@ -171,9 +162,6 @@ def field_section(context: ReportContext, path: str, *, detailed: bool) -> list[
     heading = f"## {field.get('name') or path}" + (f" [{short}]" if short else "")
     out = [heading, "", f"`{path}`", "", f"**{status_for(model_fields, fields, path, detail)}**", ""]
     if primary:
-        selected = detail.get("selected")
-        if selected is None:
-            selected = primary.get("mapping") if primary.get("mapping") is not None else primary.get("target")
         if str(detail.get("runtime_blocked") or "").startswith(
             "REQUIRED_COMPANION("
         ):
@@ -194,7 +182,7 @@ def field_section(context: ReportContext, path: str, *, detailed: bool) -> list[
     else:
         out += ["**Selected:** none", ""]
 
-    out += ["**Reason:**", "", reason_for(path, detail), ""]
+    out += ["**Reason:**", "", reason_for(detail), ""]
     gap = detail.get("gap")
     if isinstance(gap, Mapping):
         reopening_items = []
@@ -204,14 +192,14 @@ def field_section(context: ReportContext, path: str, *, detailed: bool) -> list[
                 label if label != str(item) else f"`{item}`"
             )
         reopening = ", ".join(dict.fromkeys(reopening_items)) \
-            or "none currently recorded"
+            or _msg('markdown.mapping_reason.none_recorded')
         out += [
             f"**Gap:** `{gap.get('gate')}:{gap.get('kind')}` — "
             f"reopens with: {reopening}",
             "",
         ]
 
-    rows = candidate_rows(path, detail, 8 if detailed else 5)
+    rows = candidate_rows(detail, 8 if detailed else 5)
     if rows:
         if detailed:
             out += ["### Candidates", "", "| Target | Datatype | Confidence | Evidence | Score | Result |", "|---|---|---|---|---:|---|"]
@@ -257,27 +245,27 @@ def field_section(context: ReportContext, path: str, *, detailed: bool) -> list[
     suggestions: list[str] = []
     if not primary:
         if detail.get("alternatives"):
-            suggestions.append("Review the candidates and set the intended target in `cda-mapping.json`, or leave the field explicitly `null`.")
+            suggestions.append(_msg('markdown.mapping_reason.review_candidates'))
         elif detail.get("context"):
-            suggestions.append("Use the contextual target to navigate the CDA structure, then choose an actual value-bearing element or leave the field unmapped.")
+            suggestions.append(_msg('markdown.mapping_reason.review_context'))
         else:
-            suggestions.append("Find the intended CDA representation manually or leave the field explicitly `null`.")
+            suggestions.append(_msg('markdown.mapping_reason.manual_selection'))
     else:
         if detail.get("runtime_blocked"):
             if str(detail.get("runtime_blocked")).startswith(
                 "REQUIRED_COMPANION("
             ):
                 suggestions.append(
-                    "Map the required companion for the same occurrence before enabling this candidate."
+                    _msg('markdown.mapping_reason.map_companion')
                 )
             else:
-                suggestions.append("Define an explicit merge/repetition rule before enabling this mapping.")
+                suggestions.append(_msg('markdown.mapping_reason.merge_rule'))
         if primary.get("confidence") == "WEAK":
-            suggestions.append("Verify the selected target because the evidence is indirect.")
+            suggestions.append(_msg('markdown.mapping_reason.verify_target'))
         if qualification.startswith("MULTIPLE("):
-            suggestions.append("Compare the similarly ranked candidates before accepting the selection.")
+            suggestions.append(_msg('markdown.mapping_reason.compare_candidates'))
         if primary.get("mapping") is not None:
-            suggestions.append("Verify the generated transform and its value mapping before use.")
+            suggestions.append(_msg('markdown.mapping_reason.verify_transform'))
     if suggestions:
         out += ["**Suggested action:**", "", " ".join(suggestions), ""]
     return out
