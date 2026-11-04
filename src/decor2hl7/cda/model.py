@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from ..contracts import JsonObject
 
 
 class DatatypeKind(str, Enum):
@@ -34,12 +34,21 @@ class ValueRepresentation:
     scalar_attribute: str | None = None
     xsi_type: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        result = asdict(self)
-        result["kind"] = self.kind.value
-        result["logical_types"] = list(self.logical_types)
-        result["attributes"] = list(self.attributes)
-        return {key: value for key, value in result.items() if value not in (None, (), [])}
+    def to_dict(self) -> JsonObject:
+        result: JsonObject = {"kind": self.kind.value}
+        if self.logical_types:
+            result["logical_types"] = list(self.logical_types)
+        if self.attribute is not None:
+            result["attribute"] = self.attribute
+        if self.attributes:
+            result["attributes"] = list(self.attributes)
+        for key, value in (
+            ("scalar_attribute", self.scalar_attribute),
+            ("xsi_type", self.xsi_type),
+        ):
+            if value is not None:
+                result[key] = value
+        return result
 
 
 @dataclass(frozen=True)
@@ -80,9 +89,16 @@ class Provenance:
     datatype: str | None = None
     datatype_part: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, str]:
         return {
-            key: value for key, value in asdict(self).items() if value is not None
+            key: value for key, value in (
+                ("source", self.source),
+                ("template_id", self.template_id),
+                ("template_effective_date", self.template_effective_date),
+                ("element_id", self.element_id),
+                ("datatype", self.datatype),
+                ("datatype_part", self.datatype_part),
+            ) if value is not None
         }
 
 
@@ -94,11 +110,11 @@ class CdaValueTarget:
     representation: ValueRepresentation
     provenance: tuple[Provenance, ...]
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonObject:
         return {
             "name": self.name,
             "path": self.path,
             "logical_types": list(self.logical_types),
             "value_representation": self.representation.to_dict(),
-            "provenance": [item.to_dict() for item in self.provenance],
+            "provenance": [dict(item.to_dict()) for item in self.provenance],
         }

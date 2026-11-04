@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping, Sequence, Iterable, Mapping
 
 from decor2hl7 import validate
 from decor2hl7.bindings import build_assignments, validate_structures
@@ -35,9 +35,9 @@ def find_required(parent: ET.Element[str], path: str) -> ET.Element[str]:
 
 def complete_fixture_value_targets(cda_model: Mapping[str, Any]) -> None:
     """Apply the compiler's value-target pass to intentionally small fixtures."""
-    locations: dict[str, dict[str, object]] = {}
+    locations: dict[str, Mapping[str, Any]] = {}
 
-    def walk(nodes: list[dict[str, Any]], prefix: tuple[int, ...] = ()) -> None:
+    def walk(nodes: Sequence[Mapping[str, Any]], prefix: tuple[int, ...] = ()) -> None:
         for index, node in enumerate(nodes):
             here = prefix + (index,)
             locations[".".join(map(str, here))] = node
@@ -393,7 +393,7 @@ class MappingInferenceTests(unittest.TestCase):
 </project>''', encoding="utf-8")
             compiled = compile_cda([project], {"meta": {"template_id": "doc", "template_effective_date": "2026-01-01"}, "groups": {}, "fields": {}})
             contains: list[str] = []
-            def walk(nodes: list[dict[str, Any]]) -> None:
+            def walk(nodes: Sequence[Mapping[str, Any]]) -> None:
                 for node in nodes:
                     if node.get("contains"):
                         contains.append(str(node["contains"]))
@@ -1103,7 +1103,7 @@ class MappingInferenceTests(unittest.TestCase):
             "target": "direct_contact.observation", "mode": "presence",
         })
         self.assertEqual(
-            audit["fields"]["triage.direct_contact"]["primary"]["kind"],
+            (audit["fields"]["triage.direct_contact"]["primary"] or {})["kind"],
             "CONDITIONAL_PRESENCE",
         )
 
@@ -1707,7 +1707,9 @@ class MappingInferenceTests(unittest.TestCase):
             )
             child = audit["groups"]["root.insurance"]
             self.assertIsNone(child["selected"])
-            self.assertEqual(child["context"]["target"], "Active.root")
+            context = child["context"]
+            assert context is not None
+            self.assertEqual(context["target"], "Active.root")
             candidate = audit["fields"][
                 "root.insurance.identifier"
             ]["alternatives"][0]

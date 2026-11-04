@@ -18,7 +18,7 @@ from ..cda.narrative import narrative_blocks, narrative_source_rules
 from ..cda.tree import document_index, parse_location
 from ..i18n import message as _msg, localized
 from ..transforms import mapping_rules
-from .mapping import gap_reopening_evidence_label
+from .mapping_decisions import gap_reopening_evidence_label
 
 
 def _comment(value: str) -> ET.Element:

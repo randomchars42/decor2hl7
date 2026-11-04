@@ -689,17 +689,18 @@ class MappingAnalysisTests(unittest.TestCase):
                 and str(target.get("path") or "").rsplit("/", 1)[0]
                 == target_path
             )
-            ambiguous = {**compiled, "targets": dict(compiled["targets"])}
-            duplicate = {
-                **compiled["targets"][target_name],
+            ambiguous = compiled.copy()
+            ambiguous["targets"] = compiled["targets"].copy()
+            duplicate = compiled["targets"][target_name].copy()
+            duplicate.update({
                 "path": "hl7:ClinicalDocument/hl7:section/hl7:other/hl7:code",
                 "locations": ["0.0.999.0"],
-            }
-            duplicate_text = {
-                **compiled["targets"][original_text_name],
+            })
+            duplicate_text = compiled["targets"][original_text_name].copy()
+            duplicate_text.update({
                 "path": duplicate["path"] + "/hl7:originalText",
                 "locations": ["0.0.999.0.0"],
-            }
+            })
             ambiguous["targets"]["Alternative.code"] = duplicate
             ambiguous["targets"]["Alternative.code.originalText"] = duplicate_text
             ambiguous_proposal, _ = mapping_proposal(

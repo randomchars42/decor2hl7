@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..contracts import DatasetModel, dataset_model
+
 from collections import Counter
 import hashlib
 import json
@@ -1541,7 +1543,7 @@ def compile_model(
     terminology_paths: Iterable[Path] = (),
     transaction_source: Path | None = None,
     model_extensions: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> DatasetModel:
     if not transaction.exists():
         raise FileNotFoundError(f"missing {transaction}")
     root, repairs = parse_file(transaction)
@@ -1764,14 +1766,14 @@ def compile_model(
         ],
         **({"model_extensions": extension_meta} if extension_meta else {}),
     }
-    return {
+    return dataset_model({
         "version": 2,
         "meta": meta,
         "order": order,
         "groups": groups,
         "fields": fields,
         "value_sets": value_sets,
-    }
+    })
 
 
 def write_model(
@@ -1781,7 +1783,7 @@ def write_model(
     terminology_paths: Iterable[Path] = (),
     transaction_source: Path | None = None,
     model_extensions: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> DatasetModel:
     model = compile_model(
         transaction, resource_paths, terminology_paths,
         transaction_source=transaction_source,
@@ -1798,7 +1800,7 @@ def write_transaction_model(
     terminology: Iterable[Path],
     model_dir: Path,
     model_extensions: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> DatasetModel:
     """Write ``model.json`` from the authoritative source/analysis pair."""
     return write_model(
         analysis, resources, model_dir, terminology,
