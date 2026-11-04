@@ -129,7 +129,7 @@ def _mapping_view(
         location = parse_location(locations[0])
         if location is None:
             continue
-        rule = {
+        narrative_rule = {
             "target": physical_name,
             "mode": "narrative",
             "reason": block.get("reason"),
@@ -146,7 +146,7 @@ def _mapping_view(
             "target": physical_name,
             "cda_target": physical_name,
             "target_model": target,
-            "rule": rule,
+            "rule": narrative_rule,
             "selection": block,
             "structure": {},
             "entity": _template_label(target),

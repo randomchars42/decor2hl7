@@ -119,6 +119,11 @@ values.
 
 ## Runtime
 
+Loading the runtime bundle checks the stable shapes of its models, mappings
+and site configuration. The returned bundle has named products; malformed
+nested executable data fails before ingestion. These structural checks do not
+replace terminology, occurrence or construction validation.
+
 Before input processing or delivery, the selected mapping lock must match the
 release key/date, transaction key/OID/date, and exact compiled model and CDA
 digests. The same admission function serves runtime and mapping checks. The

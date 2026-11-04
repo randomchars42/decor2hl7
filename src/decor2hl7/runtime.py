@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 from . import __version__
 from .hashing import json_digest as _json_digest
 from .pending import read_pending
+from .contracts import OperationConfig
 from .i18n import message as _msg, Translator, OUTPUT_LANGUAGE as _OUTPUT_LANGUAGE
 from .ui import say as _say
 from .runtime_config import _root, _require, _explicit_path, _site_paths, _runtime_files, _safe_key
@@ -183,9 +184,12 @@ def _transform(
 
     release = selected_release(root)
     transaction = selected_transaction(root)
-    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(
+    bundle = _runtime_files(
         root, cda_mapping_override, site_config_override
     )
+    model, cda = bundle.model, bundle.cda
+    csv_mapping, codes_mapping = bundle.csv_mapping, bundle.codes_mapping
+    cda_mapping, site = bundle.cda_mapping, bundle.site
     config_errors = validate.verify_compiled_cda(cda)
     config_errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
     if config_errors:
@@ -306,10 +310,8 @@ def _failure_threshold(
     cda_mapping_override: str | Path | None,
     site_config_override: str | Path | None,
 ) -> int:
-    *_, site = _runtime_files(
-        root, cda_mapping_override, site_config_override
-    )
-    operation = site.get("operation", {})
+    site = _runtime_files(root, cda_mapping_override, site_config_override).site
+    operation: OperationConfig = site.get("operation") or {}
     return int(operation.get("failure_threshold") or 0) if isinstance(operation, Mapping) else 0
 
 
@@ -351,7 +353,7 @@ def _send_paths(
 
     release = selected_release(root)
     transaction = selected_transaction(root)
-    _, _, _, _, _, site = _runtime_files(root, cda_mapping_override, site_config_override)
+    site = _runtime_files(root, cda_mapping_override, site_config_override).site
     error = transport.configuration_error(site)
     if error:
         raise ValueError(error)
@@ -470,7 +472,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         try:
             if args.send:
                 from .transport import configuration_error
-                *_, site = _runtime_files(root, args.cda_mapping, args.site_config)
+                site = _runtime_files(root, args.cda_mapping, args.site_config).site
                 error = configuration_error(site)
                 if error:
                     raise ValueError(error)
