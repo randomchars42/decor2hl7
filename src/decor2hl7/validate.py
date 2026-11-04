@@ -7,6 +7,7 @@ from .i18n import message as _msg
 from collections import defaultdict
 from typing import Any, Mapping
 
+from .contracts import NormalizedRecord
 from .domain import accepted_values, logical_values
 from .i18n import Translator
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -847,7 +848,7 @@ def validate_record(record: Mapping[str, Any], model: Mapping[str, Any]) -> list
                     problems.append(_problem("error", item_path, "value is longer than maximum length"))
     return problems
 
-def validate_records(records: list[dict[str, Any]], model: Mapping[str, Any]) -> dict[str, int]:
+def validate_records(records: list[NormalizedRecord], model: Mapping[str, Any]) -> dict[str, int]:
     counts = {"records": len(records), "errors": 0, "warnings": 0}
     for record in records:
         problems = validate_record(record, model); record["problems"] = problems

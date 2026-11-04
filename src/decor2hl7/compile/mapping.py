@@ -4198,13 +4198,13 @@ def mapping_target_identities(
         structures.values() if isinstance(structures, Mapping) else structures
         if isinstance(structures, list) else []
     )
-    for rule in structure_items:
-        if not isinstance(rule, Mapping):
+    for structure in structure_items:
+        if not isinstance(structure, Mapping):
             continue
         for key in ("target", "discriminator"):
-            if rule.get(key):
-                remember(rule[key], rule.get("cda_target"))
-        for branch in rule.get("branches", []):
+            if structure.get(key):
+                remember(structure[key], structure.get("cda_target"))
+        for branch in structure.get("branches", []):
             if not isinstance(branch, Mapping):
                 continue
             for key in ("target", "discriminator"):
@@ -4214,7 +4214,7 @@ def mapping_target_identities(
             if isinstance(constants, Mapping):
                 for name in constants:
                     remember(name)
-        constants = rule.get("constants", {})
+        constants = structure.get("constants", {})
         if isinstance(constants, Mapping):
             for name in constants:
                 remember(name)
