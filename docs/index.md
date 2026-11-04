@@ -25,6 +25,9 @@ for implementation and maintenance.
 The overview in [`user/index.md`](user/index.md) explains the handoffs between
 these groups and helps choose the correct workflow.
 
+For test workspaces, authored cases, site input checks, and delivery rehearsals,
+see [Set up tests for each workflow](user/testing.md).
+
 ## Developer and technical reference
 
 ### Where should I look?

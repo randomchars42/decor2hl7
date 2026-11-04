@@ -27,6 +27,10 @@ A portable mapping can be reviewed once and reused by several sites. Each site
 keeps its source layout and deployment policy separate. Runtime consumes both
 products but does not revise either one.
 
+Each guide begins with its relevant workspace folders and practice setup. Follow
+the three guides in order to reuse the same fictional records, or use the
+population instructions when starting at a later workflow.
+
 ## Choose your workflow
 
 - Start with [Review a specification and publish a mapping](specification-and-mapping.md)
@@ -39,5 +43,18 @@ products but does not revise either one.
   data.
 
 For installation and workspace creation, see the [project README](../../README.md).
+
+## Set up testing
+
+Use the [testing guide](testing.md) to prepare an isolated workspace, then choose
+the level you are working on:
+
+- [Specification and mapping tests](testing.md#1-test-the-specification-and-mapping):
+  authored cases, expected fields/templates, mapping coverage, and CDA validation.
+- [Site input tests](testing.md#2-test-the-site-input): your copied configuration,
+  representative CSVs or a test database, and invalid-input checks.
+- [Runtime and delivery tests](testing.md#3-test-runtime-and-delivery): local spool
+  handover, unchanged replay, corrections, and failure diagnosis.
+
 Developers and technical maintainers should use the
 [technical documentation index](../index.md#developer-and-technical-reference).

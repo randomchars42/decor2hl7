@@ -1,144 +1,213 @@
 # Operate document generation
 
-This workflow is for the runtime operator. It begins after the specification
-mapping and site configuration have been reviewed. Its outcome is validated
-target documents plus local transformation and delivery state.
+Process an approved source snapshot, inspect the generated documents, then
+deliver them.
 
-## Before each run
+## Workspace for runtime
 
-Confirm that the following belong to the same selected release and transaction:
+Runtime consumes the reviewed setup and external input. It writes documents
+and delivery history to this workspace:
 
-- compiled models;
-- reviewed mapping and its identity lock;
-- approved site configuration;
-- the external input snapshot.
+```text
+/data/decor2hl7-test-input/                 complete fictional source snapshot
+WORKSPACE/
+├── decor2hl7.json                          selected release and transaction
+├── spec/2026.1.2/                          cached validation packages
+├── model/2026.1.2/notaufnahmeregister--60/   compiled models and validator
+├── mapping/2026.1.2/notaufnahmeregister--60/ cda-mapping.json and mapping-lock.json
+├── site/2026.1.2/
+│   ├── site.json                          input relationships, identifiers, transport
+│   └── notaufnahmeregister--60/            csv-mapping.json and codes-mapping.json
+├── out/2026.1.2/notaufnahmeregister--60/     XML documents and JSON sidecars
+├── spool/                                 local test handover
+└── state/                                 SQLite history, snapshots, quarantine
+```
 
-Then run the non-delivering checks:
+`out/` holds prepared and delivered revisions; `state/state.sqlite` records
+which revisions were handed over. A site override changes configuration paths,
+while output and history still belong to the selected workspace.
+
+## Populate the practice workspace
+
+If you followed guide 2, use its `/data/decor2hl7-test` workspace and complete
+`/data/decor2hl7-test-input` snapshot, then continue at step 1. Keep its reviewed
+site configuration, including the renamed columns and local spool.
+
+To start directly, first create the practice workspace from
+[guide 1](specification-and-mapping.md#set-up-the-practice-workspace). Then
+populate a fresh site and input directory from the authored cases:
+
+```bash
+cd /data/decor2hl7-test
+decor2hl7 setup-test --scenario test/scenarios/valid-reference-cases \
+  --test-dir test/runtime-fixture
+cp -a test/runtime-fixture/input /data/decor2hl7-test-input
+mkdir -p site/2026.1.2/notaufnahmeregister--60
+cp test/runtime-fixture/config/site.json site/2026.1.2/
+cp test/runtime-fixture/config/csv-mapping.json site/2026.1.2/notaufnahmeregister--60/
+cp test/runtime-fixture/config/codes-mapping.json site/2026.1.2/notaufnahmeregister--60/
+```
+
+The copied bundle supplies fictional identifiers, local aliases, and required
+CDA values. In `site/2026.1.2/site.json`, replace `transport` with the local
+practice destination:
+
+```json
+{
+  "transport": { "adapter": "spool", "directory": "/data/decor2hl7-test/spool" }
+}
+```
+
+Use unused input and site paths for this direct-start route. Examples below use
+`2026.1.2 / notaufnahmeregister--60`; run commands from the practice workspace
+root. For correction, retry, and rejection exercises, follow the
+[runtime testing guide](testing.md#3-test-runtime-and-delivery).
+
+## 1. Check the files for this run
+
+Check configuration first, then the actual input. Resolve identity,
+configuration, or input errors before preparing delivery.
 
 ```bash
 decor2hl7 check
-decor2hl7 check-input --input /data/clinical-export
+decor2hl7 check-input --input /data/decor2hl7-test-input
 ```
 
-Do not proceed to delivery when identity, configuration, input, or required
-construction values fail validation.
+For a configured database source, first create a snapshot with
+`extract-source --output /data/snapshots/review-1` and use that path as
+`--input` throughout the review. The destination must be new; inspect its
+`.decor2hl7-snapshot.json` for the selected window and row counts.
 
-## Transform without sending
+## 2. Prepare and inspect the documents
+
+Transform the snapshot without sending. Changed valid records produce paired
+files under `out/2026.1.2/notaufnahmeregister--60/`:
+
+```text
+SCENARIO-01--<hash>-v1.xml     CDA document for the case
+SCENARIO-01--<hash>-v1.json    identity, validation messages, warnings, source provenance
+```
+
+The filename contains a sanitized case key and a hash; the sidecar's `key`
+identifies the original case. Inspect these in order:
+
+1. Read the command summary. `emitted` reports prepared documents;
+   `unchanged` reports records already committed with the same relevant content;
+   `invalid` and `quarantined` need investigation.
+2. Open the matching JSON sidecar. Check `validation`, `render_warnings`, and
+   the document version. For `run-source`, `source_snapshot` records extraction
+   provenance.
+3. Open the XML and compare it with the input. For the site guide's example,
+   find the postal code under `recordTarget/patientRole/addr/postalCode` and
+   compare diagnosis texts with their source occurrences.
+4. Validate the XML independently. Open `validation/first-run.md` for the
+   overall status and validation stages; the adjacent JSON contains complete
+   diagnostics, including affected files and locations.
+
+Prepare, validate, and check pending status:
 
 ```bash
-decor2hl7 transform --input /data/clinical-export
+decor2hl7 transform --input /data/decor2hl7-test-input
+decor2hl7 validate-cda out/2026.1.2/notaufnahmeregister--60/*.xml \
+  --report out/2026.1.2/notaufnahmeregister--60/validation/first-run
+decor2hl7 status
 ```
 
-This ingests, normalizes, validates, maps, and renders changed documents. It
-does not advance delivery or lineage state until a transport handover succeeds.
-Inspect the generated output and, where required, run independent CDA
-conformance validation:
+Expect pending documents after a successful first transformation. Delivery and
+lineage advance after successful handover. Keep pending XML and JSON sidecars
+together and unchanged; delivery checks their identity and XML checksum.
+Independent CDA conformance is a separate gate from mapping and input validity.
 
-```bash
-decor2hl7 validate-cda out/RELEASE/TRANSACTION/*.xml \
-  --report /tmp/cda-conformance
+## 3. Deliver the reviewed output
+
+Send the pending documents after inspection and validation. To deliver only
+specific reviewed documents, pass their XML filenames to `send`.
+
+With the site guide's spool configuration, a successful handover creates:
+
+```text
+/data/decor2hl7-test/spool/
+└── YYYY-MM/
+    └── <document-stem>/
+        ├── <document-stem>.xml
+        └── <document-stem>.json
 ```
 
-A valid mapping does not by itself prove that a complete generated document
-passes every XSD and Schematron constraint; keep these gates distinct.
-
-## Send approved output
-
-Send already generated, pending documents with:
+The pair becomes visible atomically. Check `status`: `pending_documents`
+should clear for the delivered batch, and `delivered_documents` includes local
+spool handovers. Confirm downstream import through the receiver's own interface.
 
 ```bash
 decor2hl7 send
 decor2hl7 status
 ```
 
-Or transform and send in one invocation after the process has been established:
+An identical spool retry is safe; conflicting content at the same destination
+is rejected. Retry reuses the pending document and preparation month. If spool
+publication succeeded before a process stopped, a subsequent transforming run
+can recover its local state commit; the summary reports this as `recovered`.
+
+## 4. Repeat or schedule the established workflow
+
+An unchanged record produces no new committed version. Relevant changes to
+source data, mapping, compiled specification, site policy, or the renderer
+produce a correction. Inspect its new document `id`, stable `setId`, incremented
+`versionNumber`, and `relatedDocument typeCode="RPLC"` reference to the prior
+committed document. Older delivered XML and sidecars remain available.
+
+For an approved CSV pipeline, transformation and delivery can be combined:
 
 ```bash
-decor2hl7 run --input /data/clinical-export --send
+decor2hl7 run --input /data/decor2hl7-test-input --send
 decor2hl7 status
 ```
 
-When `site.json:source.adapter` is `odbc` or `sqlite`, the equivalent scheduled
-path is:
+For a configured ODBC or SQLite source, first preview extraction and
+classification, then enable delivery:
 
 ```bash
 decor2hl7 run-source --dry-run
-decor2hl7 run-source --limit 20 --send
 decor2hl7 run-source --send
+decor2hl7 status
 ```
 
-Each invocation first creates a uniquely named, replayable snapshot below
-`state/snapshots/` unless `--snapshot-output` selects a new explicit path.
-`--since YYYY-MM-DD` widens or narrows the configured trailing window.
-The dry run creates that source evidence and reports classification but emits,
-delivers, and commits no document.
-`--limit` is a first-look development aid: its run is recorded as partial and
-does not advance the completed-snapshot watermark. Do not use it as production
-batching.
+Each invocation creates a replayable snapshot under `state/snapshots/`.
+The dry run creates source evidence but no XML or document-state commit.
+`--snapshot-output PATH` selects a new snapshot directory, and
+`--since YYYY-MM-DD` changes the rescan window. `--limit 20` is a development
+preview recorded as partial, so it does not advance the completed-snapshot
+watermark.
 
-`status` shows pending documents, recorded delivery state, and recent runs.
-Unchanged records are not emitted again. Relevant changes to normalized data,
-occurrence structure, compiled specification, mapping, site policy, or renderer
-identity create a new document version. A correction keeps its CDA `setId`,
-increments `versionNumber`, and identifies the prior committed document through
-`relatedDocument typeCode="RPLC"`.
+When the freshness guard rejects a snapshot, check replication and the maximum
+case write timestamp before retrying. Changing the database, query, or input
+relationships starts a separate source baseline.
 
-Retry preserves the exact pending document and its original source evidence.
-With the local spool adapter, a transforming command also records an existing
-publication if the previous process stopped before committing delivery state.
-The summary reports these recovered commits as `recovered`; recovery does not
-publish new content and is disabled in a dry run. Do not edit pending XML or
-sidecars: new artifacts carry an XML checksum that is checked before reuse or
-delivery.
+## 5. Investigate failures and preserve state
 
-Source freshness checks compare only runs of the same transaction, database,
-input relationships, and queries. A changed source configuration starts its own
-baseline. Upgrading an old ledger preserves its rows but does not assign its
-unscoped timestamps to a source by guesswork.
+For an individual rejected record, open
+`state/quarantine/<run-id>/<case-stem>.json`. Its `stage`, `problems`, and
+`record` identify the failing step and normalized values. Later records can
+continue; `operation.failure_threshold` controls the overall exit result.
+Configuration, extraction, locking, and SQLite failures abort the run.
 
-With `transport.adapter: spool`, successful handover means an XML document and
-its JSON sidecar are atomically visible under
-`<directory>/YYYY-MM/<document-stem>/`. An existing different artifact is an
-error and is never overwritten. Downstream removal or acknowledgement is a
-separate integration responsibility.
-The month is fixed when the document is prepared, so delayed delivery and retry
-use the same destination across month boundaries.
-
-The generic HTTP adapter sends one document at a time. Authentication,
-acknowledgement parsing, batching, receiver idempotency, and exactly-once
-delivery require a receiver-specific adapter; do not assume the generic adapter
-provides those guarantees.
-
-Input-validation and rendering failures for individual records are written to
-`state/quarantine/<run-id>/`, while later records continue. The configured
-`operation.failure_threshold` determines whether the overall command still
-succeeds. Configuration, extraction, locking, and SQLite failures abort the
-run. Preserve `state/state.sqlite`; it is the authority for version and
-replacement lineage. Only the current SQLite schema and complete current
-sidecars are accepted; no automatic legacy state import is performed. Delivered
-XML and sidecars remain available for every committed revision. The mapping
-lock must match the exact selected release, transaction and compiled models.
-
-Snapshots, pending output, sidecars, and quarantine records can contain
-clinical data. Apply the deployment's access, retention, backup, and secure
-deletion policy to the complete workspace and configured spool; the runtime
-does not substitute for those controls.
-
-## Diagnose a failed run by ownership
-
-| Symptom | Return to |
+| Finding | Inspect or return to |
 |---|---|
-| Missing artifact, checksum, or selected identity | Specification maintainer or technical maintainer |
-| Disputed clinical correspondence or unresolved target | Clinical mapping reviewer |
-| Missing file/column, join, parsing, code alias, identifier, or timezone | Site integration administrator |
-| Stale snapshot maximum or database/query failure | Database/replication and site integration owner |
-| CDA XSD, Schematron, or assertion failure | Mapping reviewer and technical maintainer |
-| Authentication, acknowledgement, or receiver protocol failure | Runtime/integration owner |
+| Missing artifact, checksum, or selected identity | Specification setup and build diagnostics |
+| File, column, join, parsing, alias, identifier, or timezone error | Site JSON and the original snapshot |
+| Unresolved clinical correspondence | Mapping decision card and clinical review |
+| XSD or Schematron failure | Validation Markdown/JSON, affected XML, and mapping reviewer |
+| Database error or stale snapshot | SQL files, snapshot manifest, and replication owner |
+| Delivery or receiver rejection | Transport settings and the receiver's response |
 
-Keep failed output and reports with the exact input and configuration identity
-needed for diagnosis. Do not repair a runtime incident by changing the portable
-mapping or site configuration without sending that change back through its
-own review workflow.
+Preserve the input snapshot, failed output, and reports for diagnosis. Back up
+`state/state.sqlite`: it owns version and replacement lineage. Only current
+state and complete current sidecar formats are accepted; legacy import requires
+an explicit conversion. Apply site access and retention rules to snapshots,
+output, quarantine, state, and the spool.
 
-The technical runtime and state contract is documented in
-[`topics/input-runtime-and-delivery.md`](../topics/input-runtime-and-delivery.md).
+The generic HTTP adapter requires a separately agreed receiver protocol for
+authentication, acknowledgements, and idempotency. Local CDA conformance and
+spool success do not establish receiver acceptance; known receiver constraints
+are recorded in [open boundaries](../open-boundaries.md#validation-and-delivery).
+Further state and delivery details are in the
+[technical runtime contract](../topics/input-runtime-and-delivery.md#runtime).

@@ -1,109 +1,232 @@
 # Configure a site's input
 
-This workflow is for the site integration administrator. Its outcome is a
-site-local configuration that converts one deployment's source export into the
-target-neutral dataset model. It does not change the reviewed dataset-to-CDA
-mapping.
+Connect your source export to the reviewed dataset model.
 
-## Before you start
+## Workspace for site configuration
 
-You need:
+Start with the matching specification and reviewed mapping from guide 1. This
+workflow adds the source snapshot and site configuration:
 
-- compiled models and the reviewed mapping for the exact selected release and
-  transaction;
-- one coherent source-data snapshot outside the decor2hl7 workspace;
-- knowledge of source files, relationships, identifiers, code conventions,
-  units, timestamps, and timezone;
-- approved values for deployment-owned document fields.
+```text
+/data/decor2hl7-test-input/                 source CSVs, outside the workspace
+WORKSPACE/
+├── decor2hl7.json                          selected specification
+├── model/2026.1.2/notaufnahmeregister--60/   dataset fields and compiled CDA model
+├── mapping/2026.1.2/notaufnahmeregister--60/ reviewed portable mapping and lock
+├── site/2026.1.2/
+│   ├── site.json                          input relationships and deployment values
+│   └── notaufnahmeregister--60/            CSV/code mappings and extraction SQL
+└── test/site-fixture/                     complete fictional records and seed config
+```
 
-Use non-production data while developing the configuration. Source data remains
-producer-owned and should not be copied into the specification or mapping
-directories.
+Read field names from `model/` and mapping decisions from `mapping/`. Record
+local filenames, columns, codes, and joins in `site/`.
 
-## 1. Inspect the source snapshot
+## Populate the practice workspace
+
+Continue in `/data/decor2hl7-test` from
+[guide 1's setup](specification-and-mapping.md#set-up-the-practice-workspace).
+If starting here, complete that setup first. It supplies the exact models,
+reviewed mapping, and authored cases needed below.
+
+Generate a complete fixture, copy its fictional input to a new external
+directory, and seed the default site files with its test values:
 
 ```bash
-decor2hl7 propose-input --input /data/clinical-export
+cd /data/decor2hl7-test
+decor2hl7 setup-test --scenario test/scenarios/valid-reference-cases \
+  --test-dir test/site-fixture
+cp -a test/site-fixture/input /data/decor2hl7-test-input
+mkdir -p site/2026.1.2/notaufnahmeregister--60
+cp test/site-fixture/config/site.json site/2026.1.2/
+cp test/site-fixture/config/csv-mapping.json site/2026.1.2/notaufnahmeregister--60/
+cp test/site-fixture/config/codes-mapping.json site/2026.1.2/notaufnahmeregister--60/
+```
+
+Use an unused input directory. Expect the fixture's complete CSV set, including
+cases, diagnoses, medications, and vital signs. The copied site files already
+contain fictional identifiers, local aliases, and required CDA construction
+values. The following steps adapt two column mappings and a diagnosis key;
+keep the other supplied data and configuration.
+
+Examples use release `2026.1.2`, transaction `notaufnahmeregister--60`, and
+commands run from the workspace root. JSON examples are excerpts to merge into
+the named generated files; retain the rest of their configuration.
+
+## 1. Prepare a small source snapshot
+
+In `/data/decor2hl7-test-input/`, rename only these CSV headers to simulate a
+local export:
+
+| File | Existing header | New header |
+|---|---|---|
+| `cases.csv` | `patient.anschrift.postleitzahl` | `postcode` |
+| `diagnoses.csv` | `occurrence_1` | `diagnosis_id` |
+| `diagnoses.csv` | `abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose` | `diagnosis_text` |
+
+Keep every other column and row. The relevant part of the input layout is:
+
+```text
+/data/decor2hl7-test-input/
+├── cases.csv
+└── diagnoses.csv
+```
+
+These excerpts show only the renamed columns. `cases.csv` has one row per case:
+
+```csv
+case_id,postcode
+SCENARIO-01,10111
+SCENARIO-02,10112
+```
+
+`diagnoses.csv` has one row per diagnosis, with the same case key and a stable
+diagnosis identifier:
+
+```csv
+case_id,diagnosis_id,diagnosis_text
+SCENARIO-01,diagnosis-1,"Kreislaufstillstand, erfolgreich reanimiert"
+SCENARIO-02,diagnosis-1,Akute schwere Asthmaexazerbation
+```
+
+All files in a snapshot describe the same cases and related rows. For your own
+site, replace this fictional export with representative source files and retain
+the selected dataset's required values.
+
+Generate proposals using the actual join column, then initialize the site files:
+
+```bash
+decor2hl7 propose-input --input /data/decor2hl7-test-input --join-column case_id
 decor2hl7 init-site-config
 ```
 
-`propose-input` can suggest filenames, columns, and observed codes. Suggestions
-are a starting point: the tool does not infer joins, record identity,
-cardinality, or occurrence keys.
+## 2. Review the generated files in order
 
-`init-site-config` creates the site-owned bundle under `site/`. Review its files
-rather than editing generated models or the portable mapping.
+The default layout separates release-wide settings from transaction mappings:
 
-## 2. Record site-owned decisions
+```text
+site/2026.1.2/
+├── site.json
+└── notaufnahmeregister--60/
+    ├── csv-mapping.json
+    ├── csv-mapping.md
+    ├── codes-mapping.json
+    ├── codes-mapping.md
+    └── *.proposed.json
+```
 
-The site bundle describes:
+1. Open `csv-mapping.md`. Find the intended dataset path and compare the
+   proposed source and column with the CSV headers. Expect gaps where names do
+   not match. Record the corrected choices in `csv-mapping.json`.
+2. Open `codes-mapping.md`. Look for raw local values without a canonical
+   dataset value. Record approved aliases in `codes-mapping.json`.
+3. Edit `site.json` to describe the files, joins, repeated rows, timezone,
+   identifiers, and deployment values.
 
-- source filenames and the relationships between them;
-- columns and parsing rules;
-- record identity and occurrence keys;
-- local code and unit aliases;
-- identifiers, timezone, and deployment values;
-- optional ODBC or SQLite extraction queries, window, and replication guard;
-- transport configuration when delivery is enabled.
-
-Keep values from one repeated source occurrence together. If two tables repeat
-independently, configure explicit keys for each level; do not align them by row
-position.
-
-For direct extraction from a read-only replica, set `source.adapter` to
-`odbc`, put one query below the transaction site bundle for every configured
-input source, and name each query in `source.queries`. For example:
-
-`site.json`:
+The Markdown guides explain generated proposals; your edited JSON controls the
+run. Initialization preserves the seeded JSON choices. Align them with the
+renamed sample columns by merging these entries into
+`site/2026.1.2/notaufnahmeregister--60/csv-mapping.json`:
 
 ```json
 {
-  "source": {
-    "adapter": "odbc",
-    "dsn_env": "DECOR2HL7_ODBC_DSN",
-    "written_at_column": "replica_written_at",
-    "window_days": 90,
-    "queries": {
-      "cases": "sql/cases.sql",
-      "diagnoses": "sql/diagnoses.sql"
-    },
-    "require_snapshot_advance": true
-  },
-  "operation": { "failure_threshold": 0 },
-  "transport": { "adapter": "spool", "directory": "var/spool" }
+  "join": { "column": "case_id" },
+  "fields": {
+    "patient.anschrift.postleitzahl": "cases:postcode",
+    "abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose": "diagnoses:diagnosis_text"
+  }
 }
 ```
 
-For a repeated input source whose row order carries meaning, add an ordered
-`order_by` column list to that source under `input.sources` (for example,
-`"order_by": ["diagnosis_rank"]`). Occurrence keys still define identity;
-`order_by` defines presentation/order, and all remaining columns are used only
-as deterministic tie-breakers.
+In `site/2026.1.2/site.json`, configure the corresponding input relationships:
 
-Each SQL file must accept one positional `?` lower-bound date. The case query
-returns exactly one row per case plus its configured join column and the
-configured write timestamp. A child query returns its global or
-source-specific join column, configured occurrence/primary columns, and zero or
-more rows for cases in the same window. Keep clinical selection and joins
-explicit in SQL; decor2hl7 does not generate site queries. Set the environment
-variable to the DSN or connection string outside JSON.
+```json
+{
+  "input": {
+    "join_column": "case_id",
+    "case_source": "cases",
+    "delimiter": ",",
+    "sources": {
+      "cases": { "file": "cases.csv", "cardinality": "1:1" },
+      "diagnoses": {
+        "file": "diagnoses.csv",
+        "cardinality": "1:n",
+        "occurrence_keys": {
+          "abschlussdiagnosen.abschlussdiagnose": "diagnosis_id"
+        }
+      }
+    }
+  }
+}
+```
 
-Enable `require_snapshot_advance` only if the selected write timestamp or
-replication watermark advances for every successful scheduled replication.
-Otherwise a legitimate quiet day is indistinguishable from a stale replica;
-disable the guard and monitor replication separately.
+The case identifier connects the files. `diagnosis_id` identifies each diagnosis
+within its case; different cases may both use `diagnosis-1`. Keep the other
+fixture sources and their occurrence keys when merging this excerpt. For a new
+site, review every generated `1:1` assumption. If order matters, add `order_by`
+columns to the source; keys still define identity.
 
-### SQLite input and a local integration test
+The practice configuration supplies `timezone`, `organization`, and fictional
+identifiers. For a real site, replace them with approved deployment values.
+For coded input, map local aliases to accepted values shown in the code guide;
+a value outside the dataset domain needs review. Use the site requirements in
+`mapping/2026.1.2/notaufnahmeregister--60/cda-mapping-trees-extended.md` (`◆`
+and `R:` lines) and the `check-cda-mapping` output to fill `cda.values` and
+`cda.fallback_if_active` in `site.json`.
 
-Set `source.adapter` to `sqlite` and `source.database` to an existing SQLite
-filename. Keep the same input sources, SQL query contract, joins, occurrence
-keys, and site mappings. For example:
+For a local file handover, replace the generated `transport` block with:
+
+```json
+{
+  "transport": { "adapter": "spool", "directory": "/data/decor2hl7-test/spool" }
+}
+```
+
+A relative spool directory resolves from the workspace root. Preserve the
+portable mapping when adapting local files and codes.
+
+## 3. Add database extraction when needed
+
+For a ready-to-run database exercise, use the
+[SQLite baseline](testing.md#build-a-runnable-sqlite-baseline). The SQL excerpts
+below illustrate adapting queries to your own source schema.
+
+For ODBC or SQLite, keep the same CSV mappings and input relationships. Create
+one query per input source under the transaction directory:
+
+```text
+site/2026.1.2/notaufnahmeregister--60/sql/
+├── cases.sql
+└── diagnoses.sql
+```
+
+For example, adapt these queries to your schema. Each accepts one lower-bound
+date parameter, and its column names match the snapshot above.
+
+`sql/cases.sql`:
+
+```sql
+SELECT case_id, postcode, written_at
+FROM source_cases
+WHERE written_at >= ?;
+```
+
+`sql/diagnoses.sql`:
+
+```sql
+SELECT d.case_id, d.diagnosis_id, d.diagnosis_text
+FROM source_diagnoses d
+JOIN source_cases c ON c.case_id = d.case_id
+WHERE c.written_at >= ?;
+```
+
+In `site/2026.1.2/site.json`, a native SQLite source could use:
 
 ```json
 {
   "source": {
     "adapter": "sqlite",
-    "database": "/data/synthetic/source.sqlite",
+    "database": "/data/source/clinical.sqlite",
     "written_at_column": "written_at",
     "window_days": 90,
     "queries": {
@@ -115,87 +238,58 @@ keys, and site mappings. For example:
 }
 ```
 
-A relative database filename resolves beside `site.json`; SQL filenames resolve
-against the transaction bundle. The adapter opens an existing database
-read-only and holds one consistent read transaction across all queries. No
-SQLite ODBC driver or `pyodbc` installation is needed. Use ISO text timestamps
-in one consistent timezone/format; the lower-bound `?` is `YYYY-MM-DD` text.
-Write queries for SQLite's SQL dialect.
+The database must exist. Relative database paths resolve beside `site.json`;
+SQL paths resolve from the transaction directory. SQLite reads all queries in
+one read transaction and expects ISO text timestamps in a consistent timezone.
 
-For a repeatable integration test, use the authored reference scenarios already
-maintained in this repository. From the source checkout, after preparing the
-matching compiled models and reviewed mapping in the companion workspace:
+For ODBC, set `source.adapter` to `odbc` and `source.dsn_env` to the name of
+the environment variable supplying the DSN or connection string. Install the
+optional [ODBC dependency and driver](../../README.md#requirements), and adapt
+SQL to that database's dialect. Keep credentials outside JSON.
 
-```bash
-decor2hl7 --root ../test-workplace setup-test \
-  --scenario tests/fixtures/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases \
-  --test-dir /tmp/decor2hl7-authored
-python3 scripts/create_sqlite_test_source.py \
-  --fixture /tmp/decor2hl7-authored --output /tmp/decor2hl7-sqlite \
-  --written-at 2026-06-01T12:00:00Z
-decor2hl7 --root ../test-workplace check --site-config /tmp/decor2hl7-sqlite
-decor2hl7 --root ../test-workplace run-source \
-  --site-config /tmp/decor2hl7-sqlite --since 2026-01-01 --dry-run
-decor2hl7 --root ../test-workplace run-source \
-  --site-config /tmp/decor2hl7-sqlite --since 2026-01-01 --send
-```
+Enable `require_snapshot_advance` only when the case write timestamp or
+replication watermark advances after every successful replication. Otherwise
+leave it disabled and monitor replication separately.
 
-Choose new fixture and output paths for each setup. The builder preserves raw
-CSV values, adds an explicit synthetic case-write timestamp, and creates a
-SQLite database, SQL queries, copied site mappings, provenance, and a site
-configuration that publishes to the bundle's `spool/` directory. It refuses
-existing output. Its source data is the authored fixture; generated CDA is not
-used as the expected result.
+## 4. Validate a snapshot and hand over
 
-The test configuration disables `require_snapshot_advance` so the same fixture
-can be replayed. The initial send publishes documents; an unchanged repeat
-publishes no new versions. A change to a mapped source value exercises the
-normal correction and replacement-lineage path. Source and runtime-state
-SQLite files have separate ownership. Runtime output and delivery history still
-belong to the selected workspace, even with a test site override; use a
-separate test workspace to keep an independent history.
+First follow the [site test setup](testing.md#2-test-the-site-input) to copy your
+site bundle, prepare representative input, and check both valid and invalid
+cases in an isolated workspace.
 
-The spool is a local handover. Testing an AKTIN container additionally requires
-its supported import interface and confirmation that it accepted the documents.
-
-## 3. Validate the configuration and input
+For CSV input, run the checks below. Review errors for the source filename,
+column, dataset path, and offending value before changing the owning JSON file.
 
 ```bash
 decor2hl7 check
-decor2hl7 check-input --input /data/clinical-export
+decor2hl7 check-input --input /data/decor2hl7-test-input
+```
+
+For a database source, `check` also verifies queries and connectivity. Extract
+into a **new** directory, then validate that exact snapshot:
+
+```bash
+decor2hl7 check
 decor2hl7 extract-source --output /data/snapshots/acceptance-1
 decor2hl7 check-input --input /data/snapshots/acceptance-1
 ```
 
-`check` verifies the selected workspace products and configuration. For either
-database adapter it also checks query files and connectivity; ODBC additionally
-requires its credential environment variable.
-`check-input` reads and validates the source snapshot without generating CDA.
-`extract-source` is optional and never changes document lineage; its output is
-an immutable CSV snapshot that can be replayed through `check-input`,
-`transform`, or `run`.
-Resolve errors at the layer that owns them:
+Expect the configured CSV files and `.decor2hl7-snapshot.json` in the extracted
+directory. The manifest records the window, row counts, and maximum case write
+timestamp; compare these with the intended export. Extraction does not advance
+document lineage.
 
-- file, column, join, parsing, local code, or timezone errors belong to the
-  site configuration;
-- missing or disputed dataset-to-CDA meaning belongs to the mapping review;
-- missing specification artifacts belong to the specification workflow.
+Hand over the reviewed `site/2026.1.2/` directory, matching compiled setup and
+mapping, input location or database queries, and credential instructions.
+Continue with a transformation and output inspection in
+[Operate document generation](runtime-operation.md). For unresolved join,
+occurrence, or source behavior, consult the
+[technical input contract](../topics/input-runtime-and-delivery.md).
 
-If a deployment always uses one input directory, it may be recorded as the
-optional site default. An explicit `--input` path remains useful for testing a
-specific snapshot.
+## SQLite input and a local integration test
 
-## 4. Hand off to operations
-
-Provide the approved site bundle, the matching reviewed mapping, and either the
-location of the external input snapshot or the reviewed SQL query bundle to the
-runtime operator. Record how source and transport credentials are supplied; do
-not place secrets in shared mapping documentation.
-
-Before production use, run the first transformation without delivery and
-inspect its validation result and output. Continue with
-[Operate document generation](runtime-operation.md).
-
-Technical details about joins, occurrences, validation layers, state, and
-transport are in
-[`topics/input-runtime-and-delivery.md`](../topics/input-runtime-and-delivery.md).
+The testing guide provides a [runnable SQLite baseline](testing.md#build-a-runnable-sqlite-baseline)
+from complete authored records. It shows how to create the database, SQL files,
+and test-site bundle, then check extraction and input. Continue with its
+[runtime rehearsal](testing.md#3-test-runtime-and-delivery) for local delivery,
+unchanged replay, corrections, and rejected records.
