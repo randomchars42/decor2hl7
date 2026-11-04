@@ -86,7 +86,8 @@ src/decor2hl7/
 │   ├── narrative.py        checked section-narrative rules and presentation IR
 │   └── render.py           representation-driven XML output
 ├── domain.py               target-neutral dataset value domains
-├── data.py                 CSV ingestion and occurrence normalization
+├── csv_input.py            strict streaming and materialized CSV tables
+├── data.py                 input ingestion and occurrence normalization
 ├── source.py               bounded ODBC/SQLite extraction and snapshot publication
 ├── bindings.py             mappings, structures, and construction values
 ├── transforms.py           declarative scalar transforms
@@ -253,3 +254,8 @@ rather than runtime-oriented `validate.py`.
   importable.
 - Current unresolved technical and external boundaries are listed only in
   [`open-boundaries.md`](open-boundaries.md).
+
+Shared configuration path and bundle functions are explicit module interfaces.
+Compiler entry points write their owned artifacts directly, without compatibility
+wrappers or duplicate hash exports. Compact compound statements use separate
+lines so validation and mutation order remain visible.

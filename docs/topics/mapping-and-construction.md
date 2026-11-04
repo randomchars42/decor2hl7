@@ -22,6 +22,11 @@ and summary shapes; the two presentations share evidence classification without
 mutating the proposal. Report context is explicit rather than captured by a
 large nested rendering function.
 
+Set-derived terminology and formal-origin candidates are traversed in sorted
+identity order. Equal scores therefore do not make generated proposals, audits
+or reports depend on process hash randomization; scoring and admission gates
+remain unchanged.
+
 Evidence strength and executability are separate. An executable selection must
 pass the applicable physical, datatype, terminology, cardinality, occurrence,
 claim, companion, and co-occurrence gates. Shared targets and ambiguous

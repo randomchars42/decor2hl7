@@ -5,7 +5,6 @@ The fixture owner applies the plan only after admission succeeds.
 """
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import re
@@ -15,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .workspace import load_json
+from .csv_input import read_csv_table
 
 
 def case_filename_key(value: str) -> str:
@@ -145,12 +145,8 @@ def _read_source(
     source_spec = dict(raw_spec)
     source_spec["file"] = relative_text
 
-    with source.open(encoding=encoding, newline="") as handle:
-        reader = csv.DictReader(handle, delimiter=delimiter)
-        rows = list(reader)
-        headers = list(reader.fieldnames or [])
-    if len(headers) != len(set(headers)):
-        raise ValueError(f"scenario source {name!r} has duplicate CSV columns")
+    table = read_csv_table(source, encoding=encoding, delimiter=delimiter)
+    rows, headers = table.rows, table.columns
     source_join = str(raw_spec.get("join_column") or join_column)
     if source_join not in headers:
         raise ValueError(

@@ -11,9 +11,8 @@ def _audit_candidate(
 ) -> dict[str, Any] | None:
     if candidate is None:
         return None
-    # ``node`` is an internal XML element used while matching. It is not
-    # serializable and the persisted evidence already contains its stable
-    # identity and path.
+    # Matching carries the complete compiled target in ``node``. Persist the
+    # stable identity/evidence instead of duplicating that target snapshot.
     return {str(key): value for key, value in candidate.items() if key != "node"}
 
 
