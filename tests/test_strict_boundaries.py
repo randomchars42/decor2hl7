@@ -7,6 +7,7 @@ from typing import Any
 import unittest
 import xml.etree.ElementTree as ET
 
+from decor2hl7.csv_input import read_csv_table
 from decor2hl7 import assertions, data, validate
 from decor2hl7.hashing import sha256_file
 from decor2hl7.retrieval.artifacts import artifact_integrity_problems
@@ -72,7 +73,7 @@ class StrictBoundaryTests(unittest.TestCase):
                 path = Path(tmp) / "cases.csv"
                 path.write_text(content)
                 with self.assertRaises(ValueError):
-                    data._read_csv(path, {"input": {"delimiter": ","}})
+                    read_csv_table(path, delimiter=",")
 
     def test_singleton_from_multiple_source_rows_requires_one_primary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

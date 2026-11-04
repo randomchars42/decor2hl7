@@ -119,7 +119,9 @@ def _spool(path: Path, config: Mapping[str, Any]) -> SendResult:
         for item in files:
             destination = temporary / item.name
             with destination.open("wb") as handle:
-                handle.write(item.read_bytes()); handle.flush(); os.fsync(handle.fileno())
+                handle.write(item.read_bytes())
+                handle.flush()
+                os.fsync(handle.fileno())
         temporary.rename(final)
         return True, f"published at {final}"
     except OSError as error:
