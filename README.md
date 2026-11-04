@@ -155,3 +155,9 @@ Release verification also regenerates the companion reference workspace and
 reviews its baseline changes with `make baseline`. Generated coverage counts
 and conformance diagnostics belong in generated artifacts and fixtures rather
 than durable prose.
+
+Runtime accepts the current configuration, SQLite state and sidecar formats.
+Malformed non-null mappings, mismatched mapping locks, invalid CSV structure and
+incomplete pending metadata fail explicitly. Existing delivered revisions remain
+available when a correction is generated. No automatic old-format migration is
+provided; keep the reviewed mapping lock beside the mapping when moving a bundle.

@@ -8,6 +8,10 @@ This module creates that view without introducing a service-object hierarchy.
 
 from __future__ import annotations
 
+from ..i18n import message as _msg
+
+from ..hashing import sha256_file
+
 from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping, TypedDict
 
@@ -227,6 +231,12 @@ def artifact_integrity_problems(record: Mapping[str, Any]) -> list[str]:
                 path = form.get("path")
                 if isinstance(path, Path) and not path.is_file():
                     problems.append(f"{key}[{name}]: missing file {path}")
+                elif isinstance(path, Path):
+                    expected = form.get("sha256")
+                    if not expected:
+                        problems.append(_msg('ui.cache_checksum_missing', key=key, name=name))
+                    elif sha256_file(path) != expected:
+                        problems.append(_msg('ui.cache_checksum_mismatch', key=key, name=name, path=path))
     return problems
 
 

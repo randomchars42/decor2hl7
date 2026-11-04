@@ -114,8 +114,10 @@ Input-validation and rendering failures for individual records are written to
 `operation.failure_threshold` determines whether the overall command still
 succeeds. Configuration, extraction, locking, and SQLite failures abort the
 run. Preserve `state/state.sqlite`; it is the authority for version and
-replacement lineage. A legacy `state/index.json` is imported automatically
-once but is no longer updated.
+replacement lineage. Only the current SQLite schema and complete current
+sidecars are accepted; no automatic legacy state import is performed. Delivered
+XML and sidecars remain available for every committed revision. The mapping
+lock must match the exact selected release, transaction and compiled models.
 
 Snapshots, pending output, sidecars, and quarantine records can contain
 clinical data. Apply the deployment's access, retention, backup, and secure

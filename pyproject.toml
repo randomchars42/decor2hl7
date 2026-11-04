@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "decor2hl7"
-version = "0.1.0"
+version = "0.2.0"
 description = "Transform flat clinical data using ART-DECOR specifications"
 readme = "README.md"
 requires-python = ">=3.10.8"

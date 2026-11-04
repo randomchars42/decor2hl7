@@ -19,7 +19,7 @@ from .i18n import Translator
 SendResult = tuple[bool, str]
 SendAdapter = Callable[[Path, Mapping[str, Any]], SendResult]
 ConfigResult = tuple[dict[str, Any] | None, str]
-ConfigValidator = Callable[[Mapping[str, Any]], ConfigResult]
+ConfigValidator = Callable[[Mapping[str, Any], bool], ConfigResult]
 
 
 def _http_post(path: Path, config: Mapping[str, Any]) -> SendResult:
@@ -40,18 +40,18 @@ def _http_post(path: Path, config: Mapping[str, Any]) -> SendResult:
         return False, str(error)
 
 
-def _http_post_config(config: Mapping[str, Any]) -> ConfigResult:
+def _http_post_config(config: Mapping[str, Any], require_destination: bool) -> ConfigResult:
     url = config.get("url")
-    if not isinstance(url, str) or not url.strip():
+    if require_destination and (not isinstance(url, str) or not url.strip()):
         return None, "transport.url is not configured"
     try:
-        parsed = urlsplit(url)
+        parsed = urlsplit(url if isinstance(url, str) else "")
         scheme = parsed.scheme
         hostname = parsed.hostname
     except ValueError:
         scheme = ""
         hostname = None
-    if scheme not in {"http", "https"} or not hostname:
+    if (require_destination or url not in (None, "")) and (scheme not in {"http", "https"} or not hostname):
         return None, "transport.url must be an absolute HTTP or HTTPS URL"
 
     timeout = config.get("timeout", 60)
@@ -83,18 +83,13 @@ def _http_post_config(config: Mapping[str, Any]) -> ConfigResult:
 def _spool_destination(path: Path, config: Mapping[str, Any]) -> Path:
     root = Path(str(config["directory"]))
     sidecar = path.with_suffix(".json")
-    # Retrying across a month boundary must address the same destination.
-    # Legacy artifacts have no prepared_at; their unchanged mtime is the anchor.
-    prepared = dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc)
-    if sidecar.is_file():
-        try:
-            timestamp = load_json(sidecar).get("prepared_at")
-            if timestamp is not None:
-                prepared = dt.datetime.fromisoformat(str(timestamp))
-                if prepared.tzinfo is None:
-                    raise ValueError("missing timezone")
-        except (ValueError, OSError):
-            raise ValueError(Translator().text("ui.spool_invalid_prepared_at", path=sidecar))
+    try:
+        timestamp = load_json(sidecar)["prepared_at"]
+        prepared = dt.datetime.fromisoformat(timestamp)
+        if prepared.tzinfo is None:
+            raise ValueError("missing timezone")
+    except (KeyError, TypeError, ValueError, OSError) as error:
+        raise ValueError(Translator().text("ui.spool_invalid_prepared_at", path=sidecar)) from error
     return root / prepared.astimezone(dt.timezone.utc).strftime("%Y-%m") / path.stem
 
 
@@ -132,9 +127,9 @@ def _spool(path: Path, config: Mapping[str, Any]) -> SendResult:
         return False, str(error)
 
 
-def _spool_config(config: Mapping[str, Any]) -> ConfigResult:
+def _spool_config(config: Mapping[str, Any], require_destination: bool) -> ConfigResult:
     directory = config.get("directory")
-    if not isinstance(directory, str) or not directory.strip():
+    if (require_destination or directory not in (None, "")) and (not isinstance(directory, str) or not directory.strip()):
         return None, "transport.directory is not configured"
     return {"adapter": "spool", "directory": directory}, ""
 
@@ -161,7 +156,7 @@ def adapter_names() -> tuple[str, ...]:
 
 
 def _configured_adapter(
-    site: Mapping[str, Any],
+    site: Mapping[str, Any], *, require_destination: bool = True,
 ) -> tuple[SendAdapter | None, Mapping[str, Any] | None, str]:
     value = site.get("transport", {})
     if not isinstance(value, Mapping):
@@ -179,7 +174,7 @@ def _configured_adapter(
             None,
             f"unsupported transport option(s) for {name}: {', '.join(unknown)}",
         )
-    config, error = validate(value)
+    config, error = validate(value, require_destination)
     return (adapter, config, "") if config is not None else (None, None, error)
 
 
@@ -188,9 +183,9 @@ def configured_name(site: Mapping[str, Any]) -> str:
     return str(value.get("adapter") or "http-post") if isinstance(value, Mapping) else ""
 
 
-def configuration_error(site: Mapping[str, Any]) -> str:
+def configuration_error(site: Mapping[str, Any], *, require_destination: bool = True) -> str:
     """Validate the selected closed adapter contract without performing I/O."""
-    adapter, config, error = _configured_adapter(site)
+    adapter, config, error = _configured_adapter(site, require_destination=require_destination)
     return error if adapter is None or config is None else ""
 
 

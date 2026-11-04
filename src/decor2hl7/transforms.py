@@ -10,6 +10,8 @@ CDA constraints (for example ``negationInd`` plus ``nullFlavor``).
 """
 from __future__ import annotations
 
+from .i18n import message as _msg
+
 import calendar
 from datetime import date
 from typing import Any, Mapping
@@ -39,12 +41,23 @@ def mapping_rules(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
     items = value if isinstance(value, list) else [value]
+    if not items:
+        raise ValueError(_msg('ui.mapping_empty_list'))
+    allowed = {"target", "cda_target", "transform", "mode", "structure", "reason", "active_if", "branch"}
     out: list[dict[str, Any]] = []
     for item in items:
-        if isinstance(item, str):
+        if isinstance(item, str) and item.strip():
             out.append({"target": item})
-        elif isinstance(item, Mapping) and item.get("target"):
-            out.append(dict(item))
+            continue
+        if not isinstance(item, Mapping) or not isinstance(item.get("target"), str) or not str(item["target"]).strip():
+            raise ValueError(_msg('ui.mapping_target_required'))
+        unknown = set(item) - allowed
+        if unknown:
+            raise ValueError(_msg('ui.mapping_unknown_keys') + ", ".join(sorted(map(str, unknown))))
+        for key in allowed - {"transform"}:
+            if key in item and not isinstance(item[key], str):
+                raise ValueError(_msg('ui.mapping_rule_type', key=key))
+        out.append(dict(item))
     return out
 
 
@@ -397,6 +410,26 @@ def validate_transform(transform: Any) -> list[str]:
         "narrative", "reviewed_coded_map", "quarter_end",
     }:
         return [f"unknown transform type {kind!r}"]
+    allowed_keys = {
+        "identity": {"type"},
+        "enum": {"type", "select", "map", "default"},
+        "ordinal": {"type", "select", "map"},
+        "not": {"type"},
+        "quarter_end": {"type"},
+        "code_system": {"type", "code_system", "select"},
+        "coded_fallback": {"type", "allowed", "null_flavor", "value_set"},
+        "coded_only": {"type"},
+        "coded_or_original_text": {"type", "null_flavor"},
+        "narrative": {"type", "prefix", "only_if_uncoded"},
+        "reviewed_coded_map": {"type", "reason", "value_set", "source_options", "map"},
+    }
+    unknown = set(transform) - allowed_keys[kind]
+    if unknown:
+        return [_msg('ui.transform_unknown_keys') + ", ".join(sorted(map(str, unknown)))]
+    if "only_if_uncoded" in transform and not isinstance(transform["only_if_uncoded"], bool):
+        return [_msg('ui.narrative_condition_type')]
+    if "prefix" in transform and not isinstance(transform["prefix"], str):
+        return [_msg('ui.narrative_prefix_type')]
     if kind in {"enum", "ordinal"} and not isinstance(transform.get("map"), Mapping):
         return [f"{kind} transform requires an object map"]
     if kind == "code_system" and not str(transform.get("code_system") or ""):

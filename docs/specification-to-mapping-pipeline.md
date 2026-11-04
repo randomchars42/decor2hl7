@@ -249,14 +249,15 @@ format contract is
 `init-cda-mapping` moves the proposal across the ownership boundary into
 `mapping/<release>/<transaction>/`. A new mapping starts from the proposal; an
 existing mapping preserves reviewer-owned selections while refreshing derived
-guides, compatible identities, and generated notes. Its `cda-mapping.md` is
+guides and generated notes. Its `cda-mapping.md` is
 rendered from the reviewed mapping and contains only decisions that remain open;
 reviewed mappings, intentional nulls, and narrative-only decisions remain in
 the headline, details, and exhaustive trees but not in that work queue.
 
-`init-cda-mapping --reset` explicitly replaces reviewed state. Ordinary target
-renaming migrates only through one unique stored owner identity. Structure type
-names are not migrated or treated as aliases.
+`init-cda-mapping --reset` explicitly replaces reviewed state. Target names
+are not automatically migrated; changed targets require explicit review.
+Structure type names are not aliased. Runtime and setup checks share the same
+exact mapping-lock admission.
 
 `check-cda-mapping` validates compiled targets, structural rules, completion
 policy, intentional nulls, site requirement contracts, and the mapping lock

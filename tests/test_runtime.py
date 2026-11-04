@@ -10,6 +10,8 @@ import unittest
 from unittest.mock import patch
 
 from decor2hl7 import state
+from decor2hl7.bundle import mapping_lock
+from decor2hl7.workspace import selected_release, selected_transaction
 from decor2hl7.cli import main
 from decor2hl7.workspace import (
     init_workspace, load_json, set_release, set_transaction,
@@ -47,6 +49,12 @@ class RuntimeRecoveryTests(unittest.TestCase):
         write_json(transaction_mapping_dir(root) / "cda-mapping.json", {
             "version": 2, "fields": {"note": "Document.note"}, "structures": {},
         })
+        write_json(transaction_mapping_dir(root) / "mapping-lock.json", mapping_lock(
+            selected_release(root), selected_transaction(root),
+            load_json(transaction_model_dir(root) / "model.json"),
+            load_json(transaction_model_dir(root) / "cda.json"),
+            load_json(transaction_mapping_dir(root) / "cda-mapping.json"),
+        ))
         bundle = transaction_site_dir(root)
         write_json(bundle / "csv-mapping.json", {"fields": {"note": "cases:note"}})
         write_json(bundle / "codes-mapping.json", {"fields": {}})
@@ -121,6 +129,8 @@ class RuntimeRecoveryTests(unittest.TestCase):
             status, output = self.run_source(root)
             self.assertEqual(status, 0, output)
             self.assertIn('"recovered": 1', output)
+            self.assertEqual(len(list(transaction_out_dir(root).glob("*-v1.xml"))), 1)
+            self.assertEqual(len(list(transaction_out_dir(root).glob("*-v1.json"))), 1)
             delivered = state.load_state(root / "state")["documents"]["1.2.3::case"]
             self.assertEqual(delivered["document_version"], 2)
             self.assertEqual(len(list((root / "spool").glob("*/*"))), 2)
@@ -156,8 +166,91 @@ class RuntimeRecoveryTests(unittest.TestCase):
             for directory in (transaction_model_dir(root), transaction_mapping_dir(root), transaction_site_dir(root)):
                 shutil.copytree(directory, directory.with_name("other-example"))
             set_transaction(root, {"key": "other-example", "id": "1.2.99", "effective_date": "2024-01-01T00:00:00"})
+            write_json(transaction_mapping_dir(root) / "mapping-lock.json", mapping_lock(
+                selected_release(root), selected_transaction(root),
+                load_json(transaction_model_dir(root) / "model.json"),
+                load_json(transaction_model_dir(root) / "cda.json"), {},
+            ))
             status, output = self.run_source(root, send=False)
             self.assertEqual(status, 0, output)
+
+    def test_mapping_lock_is_admitted_before_extraction_and_handover(self) -> None:
+        from decor2hl7.runtime import _send_paths
+        for key, invalid in (("model_sha256", "wrong"), ("cda_sha256", "wrong"), ("transaction", {"id": "wrong"}), ("release", {"key": "wrong"}), ("version", 99)):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.prepare(root)
+                lock_path = transaction_mapping_dir(root) / "mapping-lock.json"
+                lock = load_json(lock_path)
+                lock[key] = invalid
+                write_json(lock_path, lock)
+                with patch("decor2hl7.source.extract") as extract:
+                    status, output = self.run_source(root)
+                self.assertEqual(status, 2, output)
+                self.assertIn("mapping-lock.json", output)
+                extract.assert_not_called()
+                with patch("decor2hl7.transport.send") as send, self.assertRaisesRegex(ValueError, "mapping-lock.json"):
+                    _send_paths(root, [])
+                send.assert_not_called()
+
+    def test_send_rejects_a_stale_artifact_before_transport_io(self) -> None:
+        from decor2hl7.runtime import _send_paths
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.prepare(root)
+            self.assertEqual(self.run_source(root, send=False)[0], 0)
+            document = next(transaction_out_dir(root).glob("*.xml"))
+            info = load_json(document.with_suffix(".json"))
+            state.record_delivery(root / "state", key=info["state_key"], digest="different", document_version=1, file="other.xml", spec_version="example-release", document_id=info["document_id"], set_id=info["set_id"])
+            with patch("decor2hl7.transport.send") as send, redirect_stderr(StringIO()):
+                self.assertEqual(_send_paths(root, [document]), (0, 1))
+            send.assert_not_called()
+
+    def test_missing_current_sidecar_fields_are_rejected(self) -> None:
+        for key in ("state_key", "document_id", "set_id", "previous_document", "prepared_at", "payload_sha256"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.prepare(root)
+                self.assertEqual(self.run_source(root, send=False)[0], 0)
+                sidecar = next(transaction_out_dir(root).glob("*.json"))
+                value = load_json(sidecar)
+                del value[key]
+                write_json(sidecar, value)
+                status, output = self.run_source(root)
+                self.assertEqual(status, 2, output)
+                self.assertFalse((root / "spool").exists())
+                self.assertEqual(state.load_state(root / "state")["documents"], {})
+
+    def test_transport_options_fail_before_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = self.prepare(root)
+            site = load_json(path)
+            site["transport"]["typo"] = True
+            write_json(path, site)
+            with patch("decor2hl7.source.extract") as extract:
+                status, output = self.run_source(root)
+            self.assertEqual(status, 2, output)
+            self.assertIn("unsupported transport", output)
+            extract.assert_not_called()
+
+    def test_all_committed_revision_artifacts_survive_corrections_and_absence(self) -> None:
+        from decor2hl7.runtime import _prune_absent_pending
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site = self.prepare(root)
+            for note in ("First", "Second", "Third"):
+                with sqlite3.connect(site.parent / "source.sqlite") as connection:
+                    connection.execute("UPDATE cases SET note = ?", (note,))
+                status, output = self.run_source(root)
+                self.assertEqual(status, 0, output)
+            out = transaction_out_dir(root)
+            self.assertEqual(len(list(out.glob("*.xml"))), 3)
+            self.assertEqual(_prune_absent_pending(out, set(), root / "state"), 0)
+            with sqlite3.connect(root / "state/state.sqlite") as connection:
+                for (filename,) in connection.execute("SELECT file FROM history"):
+                    self.assertTrue(Path(filename).is_file())
+                    self.assertTrue(Path(filename).with_suffix(".json").is_file())
 
 
 if __name__ == "__main__":

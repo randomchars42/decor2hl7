@@ -1,31 +1,25 @@
 """Transactional runtime state, document lineage, and run bookkeeping.
 
-SQLite is the single production authority. The legacy ``index.json`` is
-imported once when a workspace first opens the database; it is never written
-again. Each delivered document is committed in its own transaction so a
+SQLite is the single production authority. Only the current schema is supported. Each delivered document is committed in its own transaction so a
 process interruption cannot advance lineage past an unpublished artifact.
 """
 
 from __future__ import annotations
 
+from .i18n import message as _msg
+
 from contextlib import contextmanager
 import datetime as dt
-import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterator, Mapping, TextIO
 
-from .workspace import load_json
+from .hashing import json_digest
 
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS metadata (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS documents (
   key TEXT PRIMARY KEY,
   fingerprint TEXT NOT NULL,
@@ -82,32 +76,22 @@ def _database_path(state_dir: Path) -> Path:
 
 def _connect(state_dir: Path) -> sqlite3.Connection:
     state_dir.mkdir(parents=True, exist_ok=True)
+    if (state_dir / "index.json").exists() and not _database_path(state_dir).exists():
+        raise ValueError(_msg('ui.legacy_state_unsupported'))
     connection = sqlite3.connect(_database_path(state_dir), isolation_level=None)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = FULL")
     connection.executescript(_SCHEMA)
-    # Existing ledgers predate scoped source watermarks. Keep their rows as
-    # evidence; an unscoped timestamp must not become a new stream's baseline.
     if "source_stream" not in {
         row["name"] for row in connection.execute("PRAGMA table_info(runs)")
     }:
-        connection.execute("BEGIN IMMEDIATE")
-        try:
-            if "source_stream" not in {
-                row["name"] for row in connection.execute("PRAGMA table_info(runs)")
-            }:
-                connection.execute("ALTER TABLE runs ADD COLUMN source_stream TEXT")
-            connection.commit()
-        except BaseException:
-            connection.rollback()
-            connection.close()
-            raise
+        connection.close()
+        raise ValueError(_msg('ui.state_schema_unsupported'))
     connection.execute(
         "CREATE INDEX IF NOT EXISTS runs_source_stream ON runs(source_stream, status)"
     )
-    _import_legacy_state(connection, state_dir)
     return connection
 
 
@@ -118,40 +102,6 @@ def _opened(state_dir: Path) -> Iterator[sqlite3.Connection]:
         yield connection
     finally:
         connection.close()
-
-
-def _import_legacy_state(connection: sqlite3.Connection, state_dir: Path) -> None:
-    """Import the former JSON authority once without deleting it."""
-    marker = connection.execute(
-        "SELECT value FROM metadata WHERE key = 'legacy-index-imported'"
-    ).fetchone()
-    if marker is not None:
-        return
-    path = state_dir / "index.json"
-    if path.exists():
-        raw = load_json(path)
-        for key, entry in raw.get("documents", {}).items():
-            if not isinstance(entry, Mapping):
-                continue
-            delivered_at = str(entry.get("sent_at") or _now())
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO documents
-                  (key, fingerprint, document_version, delivery_status, file,
-                   spec_version, delivered_at)
-                VALUES (?, ?, ?, 'sent', ?, ?, ?)
-                """,
-                (
-                    str(key), str(entry.get("fingerprint") or ""),
-                    int(entry.get("document_version") or 1),
-                    str(entry.get("file") or ""),
-                    str(entry.get("spec_version") or ""), delivered_at,
-                ),
-            )
-    connection.execute(
-        "INSERT INTO metadata (key, value) VALUES ('legacy-index-imported', ?)",
-        (_now(),),
-    )
 
 
 def fingerprint(record: Mapping[str, Any], context: Mapping[str, Any] | None = None) -> str:
@@ -181,14 +131,11 @@ def fingerprint(record: Mapping[str, Any], context: Mapping[str, Any] | None = N
         value = record
     if context is not None:
         value = {"record": value, "transformation": context}
-    payload = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    return json_digest(value)
 
 
 def load_state(state_dir: Path) -> dict[str, Any]:
-    """Return a compatibility view of the current SQLite document state."""
+    """Return the current committed document state."""
     with _opened(state_dir) as connection:
         rows = connection.execute(
             "SELECT * FROM documents ORDER BY key"
@@ -347,25 +294,13 @@ def record_delivery(
         connection.close()
 
 
-def record_sent(
-    state_dir: Path,
-    *,
-    key: str,
-    digest: str,
-    document_version: int,
-    file: str,
-    spec_version: str,
-    document_id: Mapping[str, Any] | None = None,
-    set_id: Mapping[str, Any] | None = None,
-    previous: Mapping[str, Any] | None = None,
-) -> None:
-    """Backward-compatible name for an HTTP delivery commit."""
-    record_delivery(
-        state_dir, key=key, digest=digest,
-        document_version=document_version, file=file,
-        spec_version=spec_version, status="sent", document_id=document_id,
-        set_id=set_id, previous=previous,
-    )
+def delivered_artifacts(state_dir: Path) -> set[tuple[str, int, str]]:
+    """Identify every committed revision, including superseded deliveries."""
+    with _opened(state_dir) as connection:
+        return {
+            (str(row["key"]), int(row["document_version"]), str(row["fingerprint"]))
+            for row in connection.execute("SELECT key, document_version, fingerprint FROM history")
+        }
 
 
 def start_run(
@@ -457,11 +392,3 @@ def workspace_lock(state_dir: Path) -> Iterator[None]:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             finally:
                 handle.close()
-
-
-def rotate(state_dir: Path, days: int) -> Path | None:
-    """Checkpoint SQLite; document history is intentionally append-only."""
-    del days
-    with _opened(state_dir) as connection:
-        connection.execute("PRAGMA wal_checkpoint(PASSIVE)")
-    return None

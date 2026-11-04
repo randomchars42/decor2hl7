@@ -311,9 +311,10 @@ and [`reference-transaction.md`](reference-transaction.md#other-reviewed-constru
 
 The reference insurance number is mapped only to the generic payer's explicitly
 declared `associatedEntity/id`; the rejected duplicate in the Hauptkostenträger
-participant is omitted. Automatic optional `originalText` also omits exact
-duplicates of an emitted code or display name, while distinct wording, uncoded
-values, required companions and explicit mappings remain. The unchanged
+participant is omitted. Automatic optional `originalText` is omitted for fully
+coded values, including local aliases. The canonical coded meaning is retained;
+source snapshots preserve the original input.
+Uncoded values, required companions and explicit reviewed text mappings remain. The unchanged
 provided receiver remains the acceptance target. See
 [`reference-transaction.md`](reference-transaction.md#other-reviewed-construction)
 and [`topics/cda-compilation-and-validation.md`](topics/cda-compilation-and-validation.md#examples-fixed-values-and-construction-roles).
