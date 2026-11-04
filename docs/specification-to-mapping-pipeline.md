@@ -1,16 +1,4 @@
-# Technical specification-to-mapping pipeline
-
-This developer and technical-maintainer guide follows the setup-time pipeline
-from selected ART-DECOR identity to compiled models, mapping evidence, and the
-portable reviewed CDA mapping. It explains implementation boundaries and stops
-before site input and runtime operation.
-
-Specification maintainers and clinical mapping reviewers who need the
-task-oriented workflow should instead start with
-[`user/specification-and-mapping.md`](user/specification-and-mapping.md).
-
-Detailed semantic rules are not repeated here. Follow the topic links for the
-owner rule, decor2hl7 supplement, current effect, and evidence behind a stage.
+# Specification to mapping
 
 ## Pipeline
 
@@ -42,12 +30,12 @@ release + transaction selection
 
 The four principal products have different meanings:
 
-| Product | Meaning | Owner |
-|---|---|---|
-| fetched closure | Exact reproducible specification inputs | acquisition |
-| `model.json` | Target-neutral dataset and terminology contract | dataset compiler |
-| `cda.json` | Physical CDA constraints and logical mapping interface | CDA compiler |
-| `cda-mapping.json` | Reviewed source-to-target decisions | mapping maintainer |
+| Product            | Meaning                                                | Owner              |
+| ------------------ | ------------------------------------------------------ | ------------------ |
+| fetched closure    | Exact reproducible specification inputs                | acquisition        |
+| `model.json`       | Target-neutral dataset and terminology contract        | dataset compiler   |
+| `cda.json`         | Physical CDA constraints and logical mapping interface | CDA compiler       |
+| `cda-mapping.json` | Reviewed source-to-target decisions                    | mapping maintainer |
 
 ## 1. Select identity
 
@@ -118,16 +106,16 @@ templates, mapping evidence, overlays, and degradation evidence.
 
 Rule sources remain distinct:
 
-| Source | Establishes | Does not establish |
-|---|---|---|
-| selected transaction | selection, usage, direct associations | unrelated dataset content |
-| transaction analysis | resolved definitions and containment | replacement source identity |
-| exact terminology | members and code systems | completeness from a partial response |
-| ART-DECOR templates | stored constraints and executable containment | defaults from examples |
-| CDA/RIM XSD | legal structure and datatype representation | clinical mappings |
-| generated Schematron | validation and bounded supporting evidence | source-to-target meaning |
-| reviewed overlay | one exact local attachment or branch selection | inferred owner containment |
-| reviewed mapping | explicit source-to-target policy | changes to physical models |
+| Source               | Establishes                                    | Does not establish                   |
+| -------------------- | ---------------------------------------------- | ------------------------------------ |
+| selected transaction | selection, usage, direct associations          | unrelated dataset content            |
+| transaction analysis | resolved definitions and containment           | replacement source identity          |
+| exact terminology    | members and code systems                       | completeness from a partial response |
+| ART-DECOR templates  | stored constraints and executable containment  | defaults from examples               |
+| CDA/RIM XSD          | legal structure and datatype representation    | clinical mappings                    |
+| generated Schematron | validation and bounded supporting evidence     | source-to-target meaning             |
+| reviewed overlay     | one exact local attachment or branch selection | inferred owner containment           |
+| reviewed mapping     | explicit source-to-target policy               | changes to physical models           |
 
 Formal concept origins, ordinary relationships, executable template closure,
 and first-SPEC prototypes keep their owner meanings throughout the pipeline.
@@ -229,16 +217,16 @@ Current mapping rules:
 
 `build` writes:
 
-| Artifact | Purpose |
-|---|---|
-| `mapping-audit.json` | structured evidence, candidates, gaps, claims, rules, coverage |
-| `cda-mapping.proposed.json` | concise executable proposal |
-| `cda-mapping.proposed.md` | unresolved review work against the generated proposal |
-| `cda-mapping-details.md` | accepted selections and full evidence |
-| `cda-mapping-trees.md` | exhaustive dataset and CDA coverage |
-| `cda-mapping-trees-extended.md` | Clinical and template-review coverage with exact source/template traceability and rule/gap annotations |
-| `cda-expanded-readable.*` | readable effective target hierarchy |
-| diagnostics and conformance reports | reproducibility and failure evidence |
+| Artifact                            | Purpose                                                                                                |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `mapping-audit.json`                | structured evidence, candidates, gaps, claims, rules, coverage                                         |
+| `cda-mapping.proposed.json`         | concise executable proposal                                                                            |
+| `cda-mapping.proposed.md`           | unresolved review work against the generated proposal                                                  |
+| `cda-mapping-details.md`            | accepted selections and full evidence                                                                  |
+| `cda-mapping-trees.md`              | exhaustive dataset and CDA coverage                                                                    |
+| `cda-mapping-trees-extended.md`     | Clinical and template-review coverage with exact source/template traceability and rule/gap annotations |
+| `cda-expanded-readable.*`           | readable effective target hierarchy                                                                    |
+| diagnostics and conformance reports | reproducibility and failure evidence                                                                   |
 
 The generated Markdown is documentation, not editable configuration. Its
 format contract is
@@ -269,17 +257,17 @@ in [`reference-transaction.md`](reference-transaction.md).
 
 ## Code map
 
-| Stage | Primary implementation |
-|---|---|
-| selection | `workspace.py`, `retrieval/catalog.py`, `cli.py` |
-| reference extraction and resolution | `retrieval/references.py`, `retrieval/resolution.py` |
-| recursive fetch and cache | `retrieval/fetch.py`, `retrieval/artifacts.py` |
-| compiler input validation | `compile/artifacts.py` |
-| dataset and terminology | `compile/transaction.py`, `domain.py` |
-| CDA structure and values | `cda/core.py`, `cda/datatypes.py`, `cda/compile.py` |
-| conformance evidence | `conformance.py`, `compile/schematron.py` |
-| mapping and reports | `compile/mapping.py`, `compile/structural.py`, `compile/reports.py` |
-| site input proposals | `compile/site.py` |
+| Stage                               | Primary implementation                                              |
+| ----------------------------------- | ------------------------------------------------------------------- |
+| selection                           | `workspace.py`, `retrieval/catalog.py`, `cli.py`                    |
+| reference extraction and resolution | `retrieval/references.py`, `retrieval/resolution.py`                |
+| recursive fetch and cache           | `retrieval/fetch.py`, `retrieval/artifacts.py`                      |
+| compiler input validation           | `compile/artifacts.py`                                              |
+| dataset and terminology             | `compile/transaction.py`, `domain.py`                               |
+| CDA structure and values            | `cda/core.py`, `cda/datatypes.py`, `cda/compile.py`                 |
+| conformance evidence                | `conformance.py`, `compile/schematron.py`                           |
+| mapping and reports                 | `compile/mapping.py`, `compile/structural.py`, `compile/reports.py` |
+| site input proposals                | `compile/site.py`                                                   |
 
 Site input, runtime construction, state, and delivery are documented in
 [`topics/input-runtime-and-delivery.md`](topics/input-runtime-and-delivery.md).

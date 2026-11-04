@@ -2,8 +2,7 @@
 
 This workflow is for the specification maintainer and clinical mapping reviewer.
 Its outcome is a portable, reviewed mapping between one exact ART-DECOR dataset
-transaction and the selected target profile. It contains no site's CSV layout
-or delivery settings.
+transaction and the selected target profile.
 
 ## Before you start
 
@@ -12,13 +11,6 @@ You need:
 - a decor2hl7 workspace;
 - the exact release and transaction to review;
 - access to the required ART-DECOR artifacts, or a complete local cache;
-- authority to decide clinical correspondences and intentional omissions.
-
-The work often involves two people: a specification maintainer who can verify
-source concepts and template constraints, and a clinical reviewer who can judge
-whether a proposed correspondence preserves meaning. A developer is needed only
-when the tool cannot express an approved rule or when compilation evidence must
-be investigated.
 
 ## 1. Select the exact specification
 
@@ -102,8 +94,7 @@ decor2hl7 setup-test
 decor2hl7 test-cda-mapping
 ```
 
-`check-cda-mapping` validates the portable mapping without reading a site's
-CSV files. The isolated mapping test exercises construction behavior. If an
+`check-cda-mapping` validates the portable mapping. The isolated mapping test exercises construction behavior. If an
 authored scenario is available, prefer it for clinically meaningful branches:
 
 ```bash
@@ -128,10 +119,10 @@ The receiving site should not rewrite this bundle to match local columns or
 codes. Those choices belong in the
 [site and input configuration workflow](site-configuration.md).
 
-## When to involve a developer
+## When further questions arise
 
-Use the [technical specification-to-mapping pipeline](../specification-to-mapping-pipeline.md)
-when a fetch or build must be diagnosed, evidence provenance is unclear, or an
+See: [technical specification-to-mapping pipeline](../specification-to-mapping-pipeline.md)
+When a fetch or build must be diagnosed, evidence provenance is unclear, or an
 approved clinical rule is not representable by the existing mapping schema.
 Unresolved project-level questions are tracked in
 [`open-boundaries.md`](../open-boundaries.md).

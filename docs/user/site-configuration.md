@@ -50,14 +50,11 @@ Keep values from one repeated source occurrence together. If two tables repeat
 independently, configure explicit keys for each level; do not align them by row
 position.
 
-Local aliases may normalize input into a formal dataset domain, but they do not
-extend the specification's terminology. If a source value has no approved
-meaning in the selected dataset, return it to review instead of inventing a
-code mapping.
-
 For direct extraction from a read-only replica, set `source.adapter` to
 `odbc`, put one query below the transaction site bundle for every configured
 input source, and name each query in `source.queries`. For example:
+
+`site.json`:
 
 ```json
 {
@@ -72,8 +69,8 @@ input source, and name each query in `source.queries`. For example:
     },
     "require_snapshot_advance": true
   },
-  "operation": {"failure_threshold": 0},
-  "transport": {"adapter": "spool", "directory": "var/spool"}
+  "operation": { "failure_threshold": 0 },
+  "transport": { "adapter": "spool", "directory": "var/spool" }
 }
 ```
 

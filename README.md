@@ -1,30 +1,26 @@
 # decor2hl7
 
-`decor2hl7` transforms flat clinical source data using an exact ART-DECOR
-release and transaction. CDA is the first output target; the normalized dataset
-and input pipeline remain target-neutral.
-
-The project is independent of upstream artifact publishers. References to
-organizations, profiles, or projects identify provenance and do not imply
-endorsement.
+`decor2hl7` transforms clinical source data queried from a database to HL7
+(currently CDA) using an ART-DECOR release and transaction. The normalized dataset and input pipeline remain target-neutral and will allow generation of FHIR documents in the future.
 
 ## Documentation
 
-Choose the documentation track that matches your role:
+- [Usage](docs/user/index.md)
+- [Development & technical reference](docs/index.md#developer-and-technical-reference)
 
-- [Clinical and ART-DECOR workflow guides](docs/user/index.md) explain the
-  three workflows from the user's perspective.
-- [Developer and technical reference](docs/index.md#developer-and-technical-reference)
-  explains architecture, evidence rules, generated formats, and implementation
-  behavior.
+ART-DECOR defines a dataset and a template.
 
-The user workflows are deliberately separate:
+With `decor2hl7` the data will flow like this:
 
-| User group | Work product | Guide |
-|---|---|---|
-| Specification maintainer and clinical mapping reviewer | Portable reviewed dataset-to-target mapping | [Review a specification and publish a mapping](docs/user/specification-and-mapping.md) |
-| Site integration administrator | Site-local input and deployment configuration | [Configure a site's input](docs/user/site-configuration.md) |
-| Runtime operator | Validated documents and delivery state | [Operate document generation](docs/user/runtime-operation.md) |
+```
+(config) --> source database -- (mapping) --> normalized dataset -- (mapping) --> template -- (config) --> target
+```
+
+To facilitate this flow `decor2hl7` has three different levels:
+
+1. Import the dataset and template definition from ART-DECOR & review (edit / add to) the recognized mapping between the dataset and the template. _This can be done once per dataset / template version and shared between users_. [Review a specification and publish a mapping](docs/user/specification-and-mapping.md)
+2. Map the source data to the normalized dataset. Configure local access to source database and target. [Configure a site's input](docs/user/site-configuration.md)
+3. Runtime. Data gets fetched from the database, processed and send off to the receiver. Validate documents and delivery state. [Operate document generation](docs/user/runtime-operation.md)
 
 ## Requirements
 
@@ -65,8 +61,7 @@ decor2hl7 init
 ```
 
 CLI text and generated Markdown default to English. To create a workspace with
-German explanatory prose while retaining established English technical terms,
-use:
+German explanatory prose, use:
 
 ```bash
 decor2hl7 --output-language de init
@@ -79,17 +74,16 @@ The workspace separates generated specification/model products, portable
 mapping decisions, site configuration, test output, runtime output, and state:
 
 ```text
-INPUT/                              producer-owned source snapshot
-
-WORKSPACE/                          decor2hl7-owned
-├── decor2hl7.json                  selection and reviewed local model extensions
-├── config/                         acquisition hints and reviewed overlays
-├── spec/<release>/                 fetched cache and transaction closures
-├── model/<release>/<transaction>/  generated models, audit, and proposal
+WORKSPACE/
+├── decor2hl7.json                   version / transaction selection and
+|                                    reviewed local model extensions
+├── config/                          acquisition hints and reviewed overlays
+├── spec/<release>/                  fetched cache and transaction closures
+├── model/<release>/<transaction>/   generated models, audit data, and proposal
 ├── mapping/<release>/<transaction>/ reviewed portable target mapping
-├── site/<release>/                 deployment and transaction input configuration
-├── test/<release>/<transaction>/   isolated mapping verification
-├── out/<release>/<transaction>/    generated runtime documents
+├── site/<release>/                  deployment and transaction input configuration
+├── test/<release>/<transaction>/    isolated mapping verification
+├── out/<release>/<transaction>/     generated runtime documents
 └── state/                           SQLite lineage, snapshots, runs, quarantine
 ```
 
@@ -98,20 +92,43 @@ Preserve reviewed mapping and site configuration before removing a workspace.
 
 ## Command overview
 
-The guides explain when and why to use each command. This is a compact reminder:
-
 ```bash
-# Specification and portable mapping
+#
+# Stage 1: specification and mapping setup, once per version / transaction
+#
+
+# list available versions
 decor2hl7 list-versions
+
+# set the version
 decor2hl7 set-version RELEASE
+
+# list available transactions for this version
 decor2hl7 list-transactions
+
+# set the transaction
 decor2hl7 set-transaction TRANSACTION
+
+# fetch all necessary concepts, templates etc.
+# (this might take a while)
 decor2hl7 fetch
+
+# build the configuration
 decor2hl7 build
+
+# generate mapping proposals
 decor2hl7 init-cda-mapping
+
+# now review those mappings
+
+# check the defined mappings
 decor2hl7 check-cda-mapping
 
-# Site input
+#
+# Stage 2: site configuration, once per site
+#
+
+# generate a mapping proposal / skeleton
 decor2hl7 propose-input --input /data/clinical-export
 decor2hl7 init-site-config
 decor2hl7 check-input --input /data/clinical-export
@@ -120,7 +137,10 @@ decor2hl7 check-input --input /data/clinical-export
 decor2hl7 setup-test
 decor2hl7 test-cda-mapping
 
-# Runtime operation
+#
+# Stage 3: runtime operation
+#
+
 decor2hl7 check
 decor2hl7 extract-source --output /data/snapshots/review-1
 decor2hl7 transform --input /data/clinical-export
@@ -149,7 +169,7 @@ make check
 reference workspace. `make check-reference` requires the exact companion
 workspace and fails rather than skipping when it is absent or stale. The full
 `make check` gate runs both tiers, including the end-to-end reference mapping
-test. No coverage package is required.
+test.
 
 Release verification also regenerates the companion reference workspace and
 reviews its baseline changes with `make baseline`. Generated coverage counts
