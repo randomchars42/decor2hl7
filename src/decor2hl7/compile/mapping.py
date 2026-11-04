@@ -25,7 +25,9 @@ from ..cda.semantics import (
 from ..transforms import cda_target_name, mapping_rules
 from ..cda.datatypes import classify_datatype
 from ..cda.model import ValueRepresentationKind
-from ..cda.terminology import NULL_FLAVORS_WITH_ORIGINAL_TEXT
+from ..cda.terminology import (
+    NULL_FLAVORS_WITH_ORIGINAL_TEXT, finite_mapping_binding_errors,
+)
 from ..bindings import non_null_requirement_satisfied
 from ..cooccurrence import (
     constrained_datatype_components, cooccurrence_problem_message,
@@ -1226,6 +1228,15 @@ def _gap_classification(
         return {
             "gate": "semantic", "kind": "shared_target",
             "reopens_with": reopening,
+        }
+    if blocked == "REQUIRED_BINDING":
+        target = (cda or {}).get("targets", {}).get(primary_target, {})
+        return {
+            "gate": "semantic", "kind": "lossy_domain",
+            "reopens_with": [
+                _request_key("valueset", binding)
+                for binding in target.get("value_set_bindings", [])
+            ] + [association_request(path)],
         }
     if blocked.startswith("REQUIRED_COMPANION("):
         return {
@@ -2801,10 +2812,10 @@ def _bound_enum_mapping(
             or len(required_value_set_ids(target)) != 1
         ):
             continue
-        oid = next(iter(required_value_set_ids(target)))
-        members = value_sets.get(oid, [])
-        if not members:
+        members, binding = _members_for_target(target, value_sets)
+        if not members or binding is None:
             continue
+        oid = binding["id"]
 
         # The source option may have several exact formal codifications. The
         # target binding is allowed to disambiguate only when exactly one of
@@ -2858,7 +2869,7 @@ def _bound_enum_mapping(
                 for item in exact_members
             }) == len(logical_source):
                 transform = {
-                    "type": "enum", "select": "raw", "map": exact_table,
+                    "type": "enum", "select": "canonical", "map": exact_table,
                 }
                 compatible, _ = transformed_compatibility(
                     field, target, transform,
@@ -2916,7 +2927,7 @@ def _bound_enum_mapping(
         else:
             if len({str(item.get("code") or "") for item in selected_members}) != len(source):
                 continue
-            transform = {"type": "enum", "select": "raw", "map": table}
+            transform = {"type": "enum", "select": "canonical", "map": table}
             compatible, _ = transformed_compatibility(field, target, transform)
             if compatible:
                 versions = {
@@ -3169,7 +3180,10 @@ def _mapping_admissibility(
         model,
         cda,
         xml_paths,
-        {path: details[path].get("context") for path in model_fields},
+        {
+            path: _context(path, model, group_results)
+            for path in model_fields
+        },
         fields,
         value_set_members,
     )
@@ -3186,7 +3200,7 @@ def _mapping_admissibility(
                 str(mapping["target"]),
                 cda.get("targets", {}).get(str(mapping["cda_target"]), {}),
                 [
-                    *(details[path].get("context", {}).get("chain", [])),
+                    *_context_chain(_context(path, model, group_results)),
                     (
                         "ART_DECOR_EXAMPLE("
                         f"{template['id']}@{template['effective_date']})"
@@ -3263,6 +3277,19 @@ def _mapping_admissibility(
         ][:8]
         details[path]["context"] = None
         details[path].pop("unresolved_reason", None)
+
+    for path, selection in list(fields.items()):
+        if any(
+            finite_mapping_binding_errors(
+                model_fields[path],
+                cda.get("targets", {}).get(cda_target_name(rule), {}),
+                rule.get("transform"), cda.get("terminology_constraints", {}),
+            )
+            for rule in mapping_rules(selection)
+        ):
+            fields[path] = None
+            details[path]["selected"] = None
+            details[path]["runtime_blocked"] = "REQUIRED_BINDING"
 
     _block_unsatisfied_non_null_requirements(fields, details, cda)
 

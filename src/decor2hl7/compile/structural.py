@@ -26,6 +26,7 @@ def value_set_members(
     use the tuple key and never mix revisions.
     """
     exact: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    identities: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for path in sorted(set(xml_paths)):
         try:
             root, _ = parse_file(path)
@@ -46,7 +47,9 @@ def value_set_members(
             effective = value_set.get("effectiveDate") or ""
             for concept in value_set.iter():
                 kind = local(concept.tag)
-                if kind not in {"concept", "exception", "items"}:
+                if kind == "items":
+                    kind = str(concept.get("is") or "concept")
+                if kind not in {"concept", "exception"}:
                     continue
                 if str(concept.get("type") or "").upper() == "A":
                     continue
@@ -72,8 +75,26 @@ def value_set_members(
                     "valueSet": oid,
                     "valueSetEffectiveDate": effective,
                 }
-                if row not in exact[(oid, effective)]:
+                identity = oid, effective, code, system
+                previous = identities.get(identity)
+                if previous is None:
                     exact[(oid, effective)].append(row)
+                    identities[identity] = row
+                else:
+                    # Source items and analysis concepts represent the same
+                    # exact member. Keep every designation without creating
+                    # competing discriminator candidates. Exceptions remain
+                    # exceptions across representations.
+                    if kind == "exception":
+                        previous["kind"] = kind
+                    if display != previous["displayName"]:
+                        designations = [
+                            {"displayName": display, "language": ""},
+                            *designations,
+                        ]
+                    for designation in designations:
+                        if designation not in previous["designations"]:
+                            previous["designations"].append(designation)
     result: dict[ValueSetKey, list[dict[str, Any]]] = {}
     for key, values in exact.items():
         result[key] = list(values)

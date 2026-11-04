@@ -1340,11 +1340,16 @@ class CdaDatatypeTests(unittest.TestCase):
 <template id="doc" effectiveDate="2026" name="Document">
   <element name="hl7:ClinicalDocument" minimumMultiplicity="1" maximumMultiplicity="1">
     <element name="hl7:left" minimumMultiplicity="0" maximumMultiplicity="1">
-      <include ref="leaf" flexibility="2026"/>
+      <include ref="act" flexibility="2026"/>
     </element>
     <element name="hl7:right" minimumMultiplicity="0" maximumMultiplicity="1">
-      <include ref="leaf" flexibility="2026"/>
+      <include ref="act" flexibility="2026"/>
     </element>
+  </element>
+</template>
+<template id="act" effectiveDate="2026" name="Act">
+  <element name="hl7:act" minimumMultiplicity="0" maximumMultiplicity="1">
+    <include ref="leaf" flexibility="2026"/>
   </element>
 </template>
 <template id="leaf" effectiveDate="2026" name="Leaf">
@@ -1390,7 +1395,7 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(problems, [])
             root = ET.fromstring(payload)
             self.assertEqual(
-                find_required(root, f"{{{HL7}}}left/{{{HL7}}}name").text,
+                find_required(root, f"{{{HL7}}}left/{{{HL7}}}act/{{{HL7}}}name").text,
                 "left only",
             )
             self.assertIsNone(root.find(f"{{{HL7}}}right"))

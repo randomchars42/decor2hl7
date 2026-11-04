@@ -62,6 +62,17 @@ an unresolved formal domain, and revisions are not unioned. A dynamic binding
 uses its frozen resolved revision. Abstract owner options remain evidence but
 cannot be selected.
 
+Logical choices outside a complete formal domain cannot be admitted through raw
+labels or site aliases. A multi-coded logical choice may retain its canonical
+wording for target disambiguation only when an exact owner association proves a
+member of that formal domain. Logical evidence itself is retained unchanged.
+
+Complete frozen `valueSetExpansionSet` envelopes are normalized before parsing.
+Their membership replaces the composition of the same exact ValueSet revision,
+including unresolved includes; it does not union members from other revisions
+or retain stale members outside the expansion. Partial envelopes cannot supply
+executable membership. Exception members retain their exception kind.
+
 An inline concept list owned by a dataset concept is not a standalone external
 ValueSet. An empty owned list with no external reference is explicitly
 `unconstrained`; it is not an unresolved terminology failure. Conversely, a

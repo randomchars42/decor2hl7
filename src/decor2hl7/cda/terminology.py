@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from ..transforms import reviewed_coded_map_binding
+from ..domain import accepted_values
 
 
 NULL_FLAVOR_CODE_SYSTEM = "2.16.840.1.113883.5.1008"
@@ -61,6 +62,35 @@ def required_binding_allows_null_flavor(
     return flavor in {
         str(value) for value in target.get("null_flavor_exceptions", [])
     }
+
+
+def finite_mapping_binding_errors(
+    field: Mapping[str, Any], target: Mapping[str, Any],
+    transform: Mapping[str, Any] | None,
+    registry: Mapping[str, Any],
+) -> list[str]:
+    """Check statically known coded outputs against exact required bindings."""
+    if not target.get("required_binding_constraints"):
+        return []
+    kind = str((transform or {}).get("type") or "identity")
+    outputs: list[Any] = []
+    if kind == "enum":
+        table = (transform or {}).get("map", {})
+        if isinstance(table, Mapping):
+            outputs = [value for value in table.values() if value is not None]
+        if (transform or {}).get("default") is not None:
+            outputs.append((transform or {})["default"])
+    elif kind == "identity" and field.get("type") in {"code", "ordinal"}:
+        formal = field.get("formal_terminology", {})
+        if isinstance(formal, Mapping) and formal.get("complete"):
+            outputs = [
+                value for value in accepted_values(field).values()
+                if isinstance(value, Mapping) and value.get("code")
+            ]
+    return list(dict.fromkeys(
+        error for value in outputs
+        if (error := required_binding_value_error(value, target, registry))
+    ))
 
 
 def complete_required_binding_code(

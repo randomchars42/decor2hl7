@@ -1,0 +1,7 @@
+case_id,occurrence_1,vitalparameter.atemfrequenz,vitalparameter.blutdruck.diastolischer_blutdruck,vitalparameter.blutdruck.systolischer_blutdruck,vitalparameter.herzfrequenz,vitalparameter.korperkerntemperatur.korperkerntemperatur,vitalparameter.puls.pulsfrequenz,vitalparameter.pulsoximetrische_sauerstoffsattigung,vitalparameter.pupillenreaktion.pupillenreaktion_links,vitalparameter.pupillenreaktion.pupillenreaktion_rechts,vitalparameter.pupillenweite.pupillenweite_links,vitalparameter.pupillenweite.pupillenweite_rechts,vitalparameter.zeitpunkt
+SCENARIO-01,vitals-1,12,60,90,110,36.2,110,92,prompt,prompt,mittel,mittel,2026-05-01T10:05:00+02:00
+SCENARIO-02,vitals-1,32,80,130,120,37.8,120,88,prompt,prompt,mittel,mittel,2026-05-02T10:05:00+02:00
+SCENARIO-03,vitals-1,18,75,125,92,38.1,92,97,prompt,prompt,mittel,mittel,2026-05-03T10:05:00+02:00
+SCENARIO-04,vitals-1,16,78,128,84,36.8,84,99,prompt,prompt,mittel,mittel,2026-05-04T10:05:00+02:00
+SCENARIO-05,vitals-1,14,76,122,72,36.7,72,99,prompt,prompt,mittel,mittel,2026-05-05T10:05:00+02:00
+SCENARIO-06,vitals-1,18,70,112,88,37.2,88,98,prompt,prompt,mittel,mittel,2026-05-06T10:05:00+02:00

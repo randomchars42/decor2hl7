@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any
 
 from decor2hl7 import data
 from decor2hl7.compile import mapping as mapping_compiler
@@ -492,7 +493,7 @@ class DatasetCompilationTests(unittest.TestCase):
                 "Scale.value": target,
                 "Scale.translation": source_target,
             }},
-            {"target-vs": members, "source-vs": source_members},
+            {("target-vs", "2026"): members, ("source-vs", "2026"): source_members},
             "Scale.value",
         )
         self.assertIsNotNone(result)
@@ -505,6 +506,8 @@ class DatasetCompilationTests(unittest.TestCase):
         normalized = data.normalize_value("Rot", field, {}, {})
         self.assertEqual(normalized, {"raw": "Rot", "canonical": "Rot"})
         self.assertEqual(apply_transform(normalized, transform)["code"], "R")
+        aliased = data.normalize_value("site-red", field, {"site-red": "Rot"}, {})
+        self.assertEqual(apply_transform(aliased, transform)["code"], "R")
 
     def test_logical_only_domain_never_yields_an_empty_exact_enum(self) -> None:
         field = {
@@ -570,16 +573,154 @@ class DatasetCompilationTests(unittest.TestCase):
     def test_complete_expansion_wrapper_populates_structural_members(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             expansion = Path(tmp) / "valueset.expansion.xml"
-            expansion.write_text('''<valueSetExpansionSet current="1" count="1">
+            expansion.write_text('''<valueSetExpansionSet current="2" count="2">
               <valueSet id="1.2.3" effectiveDate="2025">
                 <conceptList><include codeSystem="9.9"/></conceptList>
               </valueSet>
               <expansion><items is="concept" code="A" codeSystem="9.9"
-                displayName="Active"/></expansion>
+                displayName="Active"/>
+                <items is="exception" code="OTH" codeSystem="null"
+                  displayName="Other"/></expansion>
             </valueSetExpansionSet>''', encoding="utf-8")
             members = value_set_members([expansion])
             self.assertEqual(members[("1.2.3", "2025")][0]["code"], "A")
             self.assertEqual(members[("1.2.3", "2025")][0]["kind"], "concept")
+            self.assertEqual(members[("1.2.3", "2025")][1]["kind"], "exception")
+
+    def test_frozen_expansion_resolves_exact_model_binding_without_codesystem(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transaction = Path(tmp) / "transaction.xml"
+            expansion = Path(tmp) / "expansion.xml"
+            transaction.write_text('''<dataset id="d">
+              <concept type="item" shortName="status" id="status">
+                <name>Status</name><valueDomain type="code"/>
+                <valueSet id="1.2.3" effectiveDate="2025"/>
+              </concept>
+              <valueSet id="1.2.3" effectiveDate="2025"><conceptList>
+                <include codeSystem="unavailable"/>
+                <concept code="STALE" codeSystem="9.9" displayName="Stale"/>
+              </conceptList></valueSet>
+            </dataset>''', encoding="utf-8")
+            payload = '''<valueSetExpansionSet current="1" count="1">
+              <valueSet id="1.2.3" effectiveDate="2025"><conceptList>
+                <include codeSystem="unavailable"/>
+              </conceptList></valueSet>
+              <expansion><items is="concept" code="A" codeSystem="9.9"
+                displayName="Active"/></expansion>
+            </valueSetExpansionSet>'''
+            expansion.write_text(payload, encoding="utf-8")
+            model = compile_model(transaction, terminology_paths=[expansion])
+            field = model["fields"]["status"]
+            self.assertTrue(field["formal_terminology"]["complete"])
+            self.assertEqual(set(accepted_values(field)), {"Active"})
+            compiled_set = model["value_sets"]["1.2.3@2025"]
+            assert isinstance(compiled_set, dict)
+            self.assertEqual(compiled_set["includes"], [])
+
+            expansion.write_text(payload.replace('count="1"', 'count="2"'), encoding="utf-8")
+            partial = compile_model(transaction, terminology_paths=[expansion])
+            self.assertFalse(partial["fields"]["status"]["formal_terminology"]["complete"])
+
+            expansion.write_text(payload.replace('effectiveDate="2025"', 'effectiveDate="2026"'), encoding="utf-8")
+            different = compile_model(transaction, terminology_paths=[expansion])
+            self.assertFalse(different["fields"]["status"]["formal_terminology"]["complete"])
+
+    def test_member_representations_share_identity_and_preserve_exceptions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            analysis = Path(tmp) / "analysis.xml"
+            source = Path(tmp) / "source.xml"
+            analysis.write_text('''<valueSet id="sides" effectiveDate="2025">
+              <concept code="L" codeSystem="9" displayName="Links">
+                <designation language="en" displayName="Left"/>
+              </concept>
+              <exception code="OTH" codeSystem="null" displayName="Other"/>
+            </valueSet>''', encoding="utf-8")
+            source.write_text('''<valueSet id="sides" effectiveDate="2025">
+              <items is="concept" code="L" codeSystem="9" displayName="Links">
+                <designation language="de" displayName="Linkes Auge"/>
+              </items>
+              <items is="exception" code="OTH" codeSystem="null" displayName="Other"/>
+            </valueSet>''', encoding="utf-8")
+            rows = value_set_members([analysis, source])[("sides", "2025")]
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[1]["kind"], "exception")
+            self.assertEqual(
+                {item["displayName"] for item in rows[0]["designations"]},
+                {"Left", "Linkes Auge"},
+            )
+
+    def test_same_valueset_oid_does_not_authorize_cross_revision_enum(self) -> None:
+        field = {
+            "type": "code", "repeat_chain": [],
+            "formal_terminology": {"complete": True},
+            "accepted_values": {
+                "New A": {"code": "NEW-A", "code_system": "9"},
+                "New B": {"code": "NEW-B", "code_system": "9"},
+            },
+        }
+        target = {
+            "writable": True, "locations": ["0"], "logical_types": ["code"],
+            "value_representation": {"kind": "coded", "logical_types": ["code"]},
+            "value_set_bindings": [{"id": "shared", "effective_date": "2015"}],
+            "required_binding_constraints": ["shared@2015"],
+        }
+        old_members = [{"code": "OLD", "codeSystem": "9", "displayName": "Old"}]
+        new_members = [
+            {"code": "NEW-A", "codeSystem": "9", "displayName": "New A"},
+            {"code": "NEW-B", "codeSystem": "9", "displayName": "New B"},
+        ]
+        members: dict[str | tuple[str, str], list[dict[str, Any]]] = {
+                   "shared": new_members, ("shared", "2024"): new_members,
+                   ("shared", "2015"): old_members}
+        cda_model = {"targets": {"Code.value": target}, "terminology_constraints": {
+            "shared@2015": {"resolved": True, "members": [["OLD", "9"]]},
+        }}
+        self.assertIsNone(mapping_compiler._bound_enum_mapping(field, cda_model, members))
+        transform = {"type": "enum", "map": {"New A": new_members[0], "New B": new_members[1]}}
+        from decor2hl7 import validate
+        for selection in ["Code.value", {"target": "Code.value", "transform": transform}]:
+            errors = validate.check_config(
+                {"fields": {"status": field}}, cda_model,
+                {"fields": {"status": None}}, {"fields": {"status": selection}},
+            )
+            self.assertTrue(any("outside required" in error for error in errors), errors)
+
+        # Rejecting a coded output must also invalidate a dependent compound
+        # payload; it must not retain a companion that is no longer supplied.
+        companion = {
+            "writable": True, "locations": ["1"], "logical_types": ["text"],
+            "non_null_requires": ["Code.value"],
+        }
+        cda_model["targets"]["Companion.value"] = companion
+        fields = {"status": field, "text": {"type": "text"}}
+        selections = {"status": "Code.value", "text": "Companion.value"}
+        details: dict[str, dict[str, Any]] = {
+            path: {"selected": selection, "primary": {"target": selection},
+                   "context": None, "alternatives": []}
+            for path, selection in selections.items()
+        }
+        result = mapping_compiler._mapping_admissibility(
+            {"fields": fields, "groups": {}}, cda_model, [], selections,
+            details, {}, members,
+        )
+        self.assertIsNone(result["fields"]["status"])
+        self.assertIsNone(result["fields"]["text"])
+
+    def test_logical_choice_cannot_extend_complete_formal_source_domain(self) -> None:
+        field = {
+            "type": "code", "formal_terminology": {"complete": True},
+            "accepted_values": {"Admitted": {"code": "A", "code_system": "9"}},
+            "logical_domain": {"options": {
+                "Outside": {"terminology_associations": [{"code": "B", "code_system": "9"}]},
+                "Same member": {"terminology_associations": [{"code": "A", "code_system": "9"}]},
+            }},
+        }
+        with self.assertRaisesRegex(ValueError, "not admitted"):
+            data.normalize_value("Outside", field, {}, {})
+        self.assertEqual(
+            data.normalize_value("Same member", field, {}, {})["canonical"],
+            "Same member",
+        )
 
     def test_spec_prototype_does_not_merge_parent_constraints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import xml.etree.ElementTree as ET
 
 from .contracts import NormalizedRecord
-from .domain import accepted_values, logical_values
+from .domain import accepted_values, admitted_logical_values
 from .i18n import Translator, message as _msg
 
 from .assertions import evaluate as evaluate_assertion
@@ -38,6 +38,7 @@ from .transforms import mapping_rules, validate_transform
 from .cda.model import ValueRepresentationKind
 from .cda.narrative import validate_narratives
 from .cda.terminology import (
+    finite_mapping_binding_errors,
     coded_fallback_rule_errors,
     reviewed_coded_map_rule_errors,
 )
@@ -384,6 +385,11 @@ def _target_field_errors(
             if len(locations) != 1:
                 errors.append(f"cda-mapping: {path} target {cda_target_name} has {len(locations)} physical locations")
             transform = rule.get("transform")
+            for binding_reason in finite_mapping_binding_errors(
+                field, target, transform,
+                cda.get("terminology_constraints", {}),
+            ):
+                errors.append(f"cda-mapping: {path} -> {target_name}: {binding_reason}")
             for transform_reason in validate_transform(transform):
                 errors.append(
                     f"cda-mapping: {path} -> {target_name}: {transform_reason}"
@@ -577,7 +583,7 @@ def _input_mapping_errors(
             errors.append(f"codes-mapping: unknown model field {path}")
         for path, translations in codes_mapping.get("fields", {}).items():
             field = model.get("fields", {}).get(path, {})
-            canonical = set(accepted_values(field)) | set(logical_values(field))
+            canonical = set(accepted_values(field)) | set(admitted_logical_values(field))
             formal = field.get("formal_terminology", {})
             formal_status = (
                 str(formal.get("status") or "")

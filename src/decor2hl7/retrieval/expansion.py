@@ -95,7 +95,10 @@ def normalized_value_sets(root: ET.Element) -> list[ET.Element]:
         concept_list = ET.SubElement(value_set, "conceptList")
         for item in members:
             concept = copy.deepcopy(item)
-            concept.tag = "concept"
+            concept.tag = (
+                str(item.get("is") or "concept")
+                if local(item.tag) == "items" else local(item.tag)
+            )
             concept.attrib.pop("is", None)
             concept_list.append(concept)
         result.append(value_set)
@@ -110,5 +113,8 @@ def _coded_members(node: ET.Element | None) -> list[ET.Element]:
         if local(child.tag) in {"concept", "exception", "items"}
         and child.get("code")
         and child.get("codeSystem")
-        and (local(child.tag) != "items" or child.get("is") in {None, "concept"})
+        and (
+            local(child.tag) != "items"
+            or child.get("is") in {None, "concept", "exception"}
+        )
     ]

@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 import re
 
 from ..retrieval.xml import child_text, clean, local, parse_file
+from ..retrieval.expansion import normalized_value_sets
 from ..workspace import write_json
 
 NULLFLAVOR_CS = "2.16.840.1.113883.5.1008"
@@ -104,6 +105,12 @@ def _value_set_key(oid: str, effective: str | None) -> str:
 
 def _parse_value_sets(root: ET.Element) -> dict[str, dict[str, Any]]:
     """Parse value-set revisions without merging different effective dates."""
+    if local(root.tag) == "valueSetExpansionSet":
+        return {
+            key: entry
+            for definition in normalized_value_sets(root)
+            for key, entry in _parse_value_sets(definition).items()
+        }
     out: dict[str, dict[str, Any]] = {}
     for node in root.iter():
         if local(node.tag) != "valueSet" or not node.get("id"):
@@ -1610,12 +1617,19 @@ def compile_model(
             # different keys and are never merged here.
             value_sets[set_key] = _merge_value_set_entry(current, entry)
 
+    frozen_expansions: dict[str, dict[str, Any]] = {}
     for terminology_path in sorted(set(terminology_paths)):
         try:
             terminology_root, _ = parse_file(terminology_path)
         except (ET.ParseError, OSError):
             continue
-        for key, entry in _parse_value_sets(terminology_root).items():
+        parsed_sets = _parse_value_sets(terminology_root)
+        if local(terminology_root.tag) == "valueSetExpansionSet":
+            # Complete frozen membership replaces the intensional definition
+            # for this exact revision, including its unresolved includes.
+            frozen_expansions.update(parsed_sets)
+            continue
+        for key, entry in parsed_sets.items():
             # Transaction/downloaded terminology remains authoritative. The
             # pinned project may enrich an exact stub/composition of the same
             # revision, but never merges across effective dates.
@@ -1624,6 +1638,7 @@ def compile_model(
         for key, entry in _parse_code_systems(terminology_root).items():
             code_systems.setdefault(key, entry)
 
+    value_sets.update(frozen_expansions)
     _expand_value_sets(value_sets, code_systems)
 
     extra_node_sets = [extra_nodes for extra_nodes, _ in extras]

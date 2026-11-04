@@ -1,0 +1,1079 @@
+{
+  "version": 1,
+  "release": {
+    "key": "2026.1.3",
+    "date": "2026-09-21T20:52:02"
+  },
+  "transaction": {
+    "key": "notaufnahmeregister--60",
+    "id": "2.16.840.1.113883.2.6.60.3.4.60",
+    "effective_date": "2026-03-25T00:00:00"
+  },
+  "base": "model/<release>/<transaction>/cda-mapping.proposed.json",
+  "merge_semantics": "Require exact selection, model_sha256 and cda_sha256. Remove exactly the keys listed under removals from their named sections, then shallow-merge each override object, including explicit nulls. Refresh target identities, mapping lock and guides. Apply model_extensions before building and hash admission.",
+  "identity": {
+    "model_sha256": "1b8f820fbab1ec358335217118dec4c1e02aab5bd90b381dbc1d46370b3421e1",
+    "cda_sha256": "a82856cbf4892a1a8a61c874515cdefcebc2f9eeac96632380c6bc185780a424"
+  },
+  "model_extensions": {
+    "version": 1,
+    "status": "reviewed",
+    "collision_policy": "error",
+    "reason": "AKTIN-reviewed additions for CDA values required by the selected Notaufnahmeregister template but absent from the published dataset.",
+    "fields": {
+      "patient.geschlecht": {
+        "name": "Geschlecht",
+        "description": "Administratives Geschlecht des Patienten",
+        "parent": "patient",
+        "type": "code",
+        "min": 0,
+        "max": 1,
+        "value_set": {
+          "id": "2.16.840.1.113883.1.11.1",
+          "effective_date": "2018-08-12T00:00:00"
+        },
+        "reason": "AKTIN approved supplying the administrative gender required by the CDA recordTarget from site source data although the selected dataset omits the field. For release 2026.1.3, retain this approved meaning and bind to the target-selected exact 2018-08-12 revision; its complete expansion admits the same F/M/UN code-system pairs."
+      },
+      "hauptkostentrager.versicherungsverhaltnis.versichertenstatus": {
+        "name": "Versichertenstatus",
+        "description": "Versichertenstatus des Patienten",
+        "parent": "hauptkostentrager.versicherungsverhaltnis",
+        "type": "code",
+        "min": 0,
+        "max": 1,
+        "value_set": {
+          "id": "1.2.276.0.76.11.68",
+          "effective_date": "2011-12-19T00:00:00"
+        },
+        "reason": "AKTIN approved adding the missing dataset value needed for the CDA Kostenträger participant."
+      },
+      "hauptkostentrager.versicherungsverhaltnis.versichertenstatus_gkv": {
+        "name": "Versichertenstatus GKV",
+        "description": "GKV-Codierung des Versichertenstatus",
+        "parent": "hauptkostentrager.versicherungsverhaltnis",
+        "type": "code",
+        "min": 0,
+        "max": 1,
+        "value_set": {
+          "id": "1.2.276.0.76.11.162",
+          "effective_date": "2014-01-01T00:00:00"
+        },
+        "reason": "AKTIN approved adding the missing GKV status coding expected by the CDA Kostenträger translation."
+      },
+      "hauptkostentrager.versicherungsverhaltnis.weitere_versichertenstatuskodierung": {
+        "name": "Weitere Versichertenstatuskodierung",
+        "description": "Weitere lokal konfigurierte Codierung des Versichertenstatus",
+        "parent": "hauptkostentrager.versicherungsverhaltnis",
+        "type": "code",
+        "min": 0,
+        "max": 1,
+        "reason": "AKTIN approved a configurable additional coding for the repeating CDA Versichertenstatus translation."
+      },
+      "hauptkostentrager.versicherungsverhaltnis.kv_fall": {
+        "name": "Als KV-Fall abgerechnet",
+        "description": "Gibt an, ob der Fall als KV-Fall abgerechnet wird",
+        "parent": "hauptkostentrager.versicherungsverhaltnis",
+        "type": "code",
+        "min": 0,
+        "max": 1,
+        "value_set": {
+          "id": "1.2.276.0.76.3.1.195.11.19",
+          "effective_date": "2024-08-08T20:33:01"
+        },
+        "reason": "AKTIN approved adding the missing dataset value expected by the CDA Hauptkostenträger template."
+      },
+      "administrative_aufnahmeinformationen.transport.ankunftszeit": {
+        "name": "Ankunftszeit",
+        "description": "Ankunftszeit des Transports",
+        "parent": "administrative_aufnahmeinformationen.transport",
+        "type": "datetime",
+        "min": 0,
+        "max": 1,
+        "reason": "AKTIN approved adding the missing arrival timestamp expected by the CDA Transportmethode template."
+      },
+      "abschlussdiagnosen.abschlussdiagnose.lateralitat": {
+        "name": "Lateralität",
+        "description": "Seitenlokalisation der Abschlussdiagnose",
+        "parent": "abschlussdiagnosen.abschlussdiagnose",
+        "type": "code",
+        "min": 0,
+        "max": 1,
+        "value_set": {
+          "id": "1.2.276.0.76.11.412",
+          "effective_date": "2017-02-08T00:00:00"
+        },
+        "reason": "AKTIN approved adding the missing diagnosis-scoped laterality value expected by the CDA qualifier."
+      },
+      "administrative_verlegungsentlassungsinformationen.aufnehmende_fachabteilung": {
+        "name": "Aufnehmende Fachabteilung",
+        "description": "Aufnehmende Fachabteilung nach § 301 SGB V",
+        "parent": "administrative_verlegungsentlassungsinformationen",
+        "type": "code",
+        "min": 0,
+        "max": 1,
+        "value_set": {
+          "id": "1.2.276.0.76.3.1.195.11.17",
+          "effective_date": "2024-08-08T13:35:43"
+        },
+        "reason": "AKTIN approved adding the missing receiving-department key expected by the CDA Weiterbehandlung Verlegung template."
+      }
+    }
+  },
+  "removals": {
+    "structures": [
+      "coalesce-cdaencompassingencounter-id-1"
+    ]
+  },
+  "field_overrides": {
+    "patient.anschrift.postleitzahl": "CDArecordTargetnnar.recordTarget.patientRole.addr.postalCode",
+    "hauptkostentrager.kostentrager.name": [
+      "hauptkostentrager.name",
+      "HeaderParticipantKostentraeger.scopingOrganization::OrganizationElements.name"
+    ],
+    "hauptkostentrager.versicherungsverhaltnis.identifikation": "HeaderParticipantKostentraeger.participant_templateId_root_1.2.276.0.76.10.2022.associatedEntity.id",
+    "hauptkostentrager.versicherungsverhaltnis.versichertenstatus": "HeaderParticipantKostentraeger.code",
+    "hauptkostentrager.versicherungsverhaltnis.versichertenstatus_gkv": "HeaderParticipantKostentraeger.translation_codeSystem_2.16.840.1.113883.3.7.1.1",
+    "hauptkostentrager.versicherungsverhaltnis.weitere_versichertenstatuskodierung": "HeaderParticipantKostentraeger.translation",
+    "hauptkostentrager.versicherungsverhaltnis.kv_fall": "hauptkostentrager.code",
+    "administrative_aufnahmeinformationen.aufnahmezeitpunkt": [
+      "CDAEncompassingEncounter.low",
+      "CDADocumentationOf.documentationOf.serviceEvent.effectiveTime.low",
+      {
+        "target": "HeaderParticipantKostentraeger.participant_templateId_root_1.2.276.0.76.10.2022.time.high",
+        "mode": "if_active",
+        "active_if": "HeaderParticipantKostentraeger.participant_templateId_root_1.2.276.0.76.10.2022.associatedEntity.id",
+        "transform": {
+          "type": "quarter_end"
+        },
+        "reason": "AKTIN approved deriving the insurance-period quarter end from Aufnahmezeitpunkt; the value is emitted only when another mapping activates the generic Kostenträger participant."
+      },
+      {
+        "target": "Allergyconcernact.low",
+        "mode": "fallback_if_active",
+        "reason": "AKTIN confirmed that the emergency-department collection time may populate the Allergy Concern Act start; this reviewed mapping uses Aufnahmezeitpunkt and must not activate an otherwise absent allergy branch."
+      }
+    ],
+    "administrative_aufnahmeinformationen.fallnummer": "CDAEncompassingEncounter.id_1",
+    "administrative_aufnahmeinformationen.episodennummer": "CDAEncompassingEncounter.id_2",
+    "administrative_aufnahmeinformationen.zuweisung_zur_notaufnahme.zuweisung": "Referralfrom.act.participant.participantRole.code",
+    "administrative_aufnahmeinformationen.transport.transportmittel": null,
+    "administrative_aufnahmeinformationen.transport.ankunftszeit": "Transportmethod.high",
+    "administrative_aufnahmeinformationen.transport.medizinische_begleitung": "medizinische-begleitung.code",
+    "ersteinschatzung.parameter_der_ersteinschatzung.ergebnis_der_ersteinschatzung": {
+      "target": "ersteinschatzung.value",
+      "transform": {
+        "type": "enum",
+        "select": "raw",
+        "map": {
+          "rot": {
+            "code": "LA21538-6",
+            "codeSystem": "2.16.840.1.113883.6.1",
+            "displayName": "Resuscitation"
+          },
+          "orange": {
+            "code": "LA19759-2",
+            "codeSystem": "2.16.840.1.113883.6.1",
+            "displayName": "Emergent"
+          },
+          "gelb": {
+            "code": "LA21544-4",
+            "codeSystem": "2.16.840.1.113883.6.1",
+            "displayName": "Urgent"
+          },
+          "grün": {
+            "code": "LA21587-3",
+            "codeSystem": "2.16.840.1.113883.6.1",
+            "displayName": "Less urgent"
+          },
+          "blau": {
+            "code": "LA21545-1",
+            "codeSystem": "2.16.840.1.113883.6.1",
+            "displayName": "Nonurgent"
+          }
+        }
+      }
+    },
+    "ersteinschatzung.parameter_der_ersteinschatzung.verwendetes_ersteinschatzungssystem": "ersteinschatzung.methodCode",
+    "ersteinschatzung.parameter_der_ersteinschatzung.manchester_triage_system.mtsprasentationsdiagramm": "mts-prasentationsdiagramm.value",
+    "ersteinschatzung.parameter_der_ersteinschatzung.esitriage": {
+      "target": "esi-triage-faktoren.value",
+      "transform": {
+        "type": "enum",
+        "select": "raw",
+        "map": {
+          "sofortige lebensrettende Maßnahme notwendig": {
+            "code": "1",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "sofortige lebensrettende Maßnahme notwendig",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "sofortige lebensrettende Maßnahme notwendig",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Rot": {
+            "code": "1",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "sofortige lebensrettende Maßnahme notwendig",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "sofortige lebensrettende Maßnahme notwendig",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Hochrisikosituation": {
+            "code": "2",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "Hochrisikosituation",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "Hochrisikosituation",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Orange": {
+            "code": "10",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "Vitalzeichen in der Gefahrenzone",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "Vitalzeichen in der Gefahrenzone",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Verwirrt": {
+            "code": "3",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "verwirrt",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "verwirrt",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "lethargisch": {
+            "code": "4",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "lethargisch",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "lethargisch",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "desorientiert": {
+            "code": "5",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "desorientiert",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "desorientiert",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Starke Schmerzen": {
+            "code": "6",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "starke Schmerzen",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "starke Schmerzen",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Starkes Unwohlsein": {
+            "code": "7",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "starkes Unwohlsein",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "starkes Unwohlsein",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "großes kindliches Leid": {
+            "code": "8",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "großes kindliches Leid",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "großes kindliches Leid",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Vitalzeichen in der Gefahrenzone": {
+            "code": "10",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "Vitalzeichen in der Gefahrenzone",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "Vitalzeichen in der Gefahrenzone",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Vitalzeichen nicht in der Gefahrenzone": {
+            "code": "11",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "Vitalzeichen nicht in der Gefahrenzone",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "Vitalzeichen nicht in der Gefahrenzone",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Gelb": {
+            "code": "11",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "Vitalzeichen nicht in der Gefahrenzone",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "Vitalzeichen nicht in der Gefahrenzone",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "eine Ressource benötigt": {
+            "code": "12",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "eine Ressource benötigt",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "eine Ressource benötigt",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Grün": {
+            "code": "12",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "eine Ressource benötigt",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "eine Ressource benötigt",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "keine Ressourcen benötigt": {
+            "code": "13",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "keine Ressourcen benötigt",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "keine Ressourcen benötigt",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "Blau": {
+            "code": "13",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.103",
+            "displayName": "keine Ressourcen benötigt",
+            "kind": "concept",
+            "designations": [
+              {
+                "displayName": "keine Ressourcen benötigt",
+                "language": "de-DE"
+              }
+            ],
+            "valueSet": "1.2.276.0.76.3.1.195.11.20",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          }
+        }
+      }
+    },
+    "notfallanamnese.beschwerden_bei_vorstellung.beschwerden_bei_vorstellung_cedis": "Chiefcomplaintreasonforvisit.entry::Problemobservationcedis.value",
+    "notfallanamnese.beschwerden_bei_vorstellung.ereigniseintritt": "Chiefcomplaintreasonforvisit.entry::Problemconcernactcedis.low",
+    "notfallanamnese.notfallanamnese_des_patienten": "Additionalmodulessection.text",
+    "notfallanamnese.unfallanamnese.unfallursache": "unfallursache-kinetik.observation.value",
+    "notfallanamnese.unfallanamnese.fahrzeug_des_verunfallten": "unfall-anamnese.act.participant.participantRole.code",
+    "notfallanamnese.unfallanamnese.unfallkinetik": "unfallursache-kinetik.observation.value.qualifier_name.code_67496-0.value",
+    "notfallanamnese.unfallanamnese.unfallart_trauma_register": "unfallart-traumaregister.value",
+    "notfallanamnese.verdacht_auf_alkohol_drogen_medikamenteneinflussq": "substanz-einfluss.value",
+    "klinische_basisdaten_patient.schwangerschaft": {
+      "target": "Pregnancystatus.value",
+      "transform": {
+        "type": "enum",
+        "select": "raw",
+        "map": {
+          "Patient ist schwanger": {
+            "code": "1",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.46",
+            "displayName": "Patient ist schwanger",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.11.46",
+            "valueSetEffectiveDate": "2018-08-22T15:28:25"
+          },
+          "Patient ist nicht schwanger": {
+            "code": "0",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.46",
+            "displayName": "Patient ist nicht schwanger",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.11.46",
+            "valueSetEffectiveDate": "2018-08-22T15:28:25"
+          },
+          "Unbekannt": {
+            "code": "UNK",
+            "codeSystem": "2.16.840.1.113883.5.1008",
+            "displayName": "Unbekannt",
+            "kind": "exception",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.11.46",
+            "valueSetEffectiveDate": "2018-08-22T15:28:25"
+          }
+        }
+      }
+    },
+    "diagnostik.bildgebende_diagnostik.magnetresonanztomographie.untersuchungsregion": null,
+    "diagnostik.bildgebende_diagnostik.rontgen.untersuchungsregion": null,
+    "diagnostik.abgeleitete_informationen_uber_diagnostik_zur_weitergabe.ct_bzw_mr_bzw_dsangiographie": {
+      "target": "ct-mr-ds-angiographie.value",
+      "transform": {
+        "type": "enum",
+        "select": "raw",
+        "map": {
+          "nein": {
+            "code": "0",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.106",
+            "displayName": "nein",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.3.1.195.11.24",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "0": {
+            "code": "0",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.106",
+            "displayName": "nein",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.3.1.195.11.24",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "vor Aufnahme": {
+            "code": "1",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.106",
+            "displayName": "vor Aufnahme",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.3.1.195.11.24",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "1": {
+            "code": "1",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.106",
+            "displayName": "vor Aufnahme",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.3.1.195.11.24",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "direkt im Anschluss an native Bildgebung": {
+            "code": "2",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.106",
+            "displayName": "direkt im Anschluss an native Bildgebung",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.3.1.195.11.24",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "2": {
+            "code": "2",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.106",
+            "displayName": "direkt im Anschluss an native Bildgebung",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.3.1.195.11.24",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "nicht direkt im Anschluss an native Bildgebung aber ≤ 24 h": {
+            "code": "3",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.106",
+            "displayName": "nicht direkt im Anschluss an native Bildgebung aber ≤ 24 h",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.3.1.195.11.24",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "3": {
+            "code": "3",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.106",
+            "displayName": "nicht direkt im Anschluss an native Bildgebung aber ≤ 24 h",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.3.1.195.11.24",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "nicht direkt im Anschluss an native Bildgebung aber > 24 h": {
+            "code": "4",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.106",
+            "displayName": "nicht direkt im Anschluss an native Bildgebung aber > 24 h",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.3.1.195.11.24",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          },
+          "4": {
+            "code": "4",
+            "codeSystem": "1.2.276.0.76.3.1.195.5.106",
+            "displayName": "nicht direkt im Anschluss an native Bildgebung aber > 24 h",
+            "kind": "concept",
+            "designations": [],
+            "valueSet": "1.2.276.0.76.3.1.195.11.24",
+            "valueSetEffectiveDate": "2024-07-22T16:51:10"
+          }
+        }
+      }
+    },
+    "masnahmen.isolation.isolation_begrundung": [
+      "Isolationindication.value",
+      {
+        "target": "ProblemobservationMDRO.observation.value",
+        "transform": {
+          "type": "enum",
+          "select": "raw",
+          "map": {
+            "multiresistenter Keim": {
+              "code": "AMRO",
+              "codeSystem": "1.2.276.0.76.5.441",
+              "displayName": "Multiresistenter Keim"
+            }
+          }
+        },
+        "reason": "AKTIN approved deriving the generic AMRO assertion only from the exact isolation reason 'multiresistenter Keim'; other isolation reasons do not create an MDRO observation."
+      }
+    ],
+    "abschlussdiagnosen.abschlussdiagnose.freitext_abschlussdiagnose": "Problemobservationeddiagnosis.originalText",
+    "abschlussdiagnosen.abschlussdiagnose.icd10": "Problemobservationeddiagnosis.observation.value",
+    "abschlussdiagnosen.abschlussdiagnose.lateralitat": "Laterality.value",
+    "abschlussdiagnosen.abschlussdiagnose.icd10_sekundardiagnose": null,
+    "administrative_verlegungsentlassungsinformationen.typ_verlegung": "Referralto.act.code",
+    "administrative_verlegungsentlassungsinformationen.zeitpunkt_patient_verlegungs_entlassungsfahig": [
+      "zeitpunkt_patient_verlegungs__entlassungsfahig.value",
+      "CDADocumentationOf.documentationOf.serviceEvent.performer.time.high"
+    ],
+    "administrative_verlegungsentlassungsinformationen.zeitpunkt_patient_verlegt_entlassen_nach": [
+      "zeitpunkt_patient_verlegt__entlassen_nach.value",
+      "CDADocumentationOf.documentationOf.serviceEvent.effectiveTime.high",
+      "CDAEncompassingEncounter.high"
+    ],
+    "administrative_verlegungsentlassungsinformationen.aufnehmende_fachabteilung": "Referralto.act.participant.participantRole.code",
+    "dokumentationsinformationen.berechnete_zeitintervalle.zeit_bis_zum_export": null,
+    "dokumentationsinformationen.datenbereitstellung.name_des_edis": null,
+    "dokumentationsinformationen.datenbereitstellung.version_des_edis": null,
+    "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname": [
+      {
+        "target": "UVMedicationInformationsimple.code",
+        "structure": "compose-medication-product-code"
+      },
+      {
+        "target": "Medikation.text",
+        "structure": "concatenate-medication-narrative",
+        "transform": {
+          "type": "narrative",
+          "prefix": "Arzneimittel: "
+        }
+      }
+    ],
+    "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelcode": {
+      "target": "UVMedicationInformationsimple.code",
+      "structure": "compose-medication-product-code"
+    },
+    "masnahmen.medikamentose_therapie.medikation.medikament.darreichungsform": [
+      {
+        "target": "UVSubordinateadministration.administrationUnitCode",
+        "transform": {
+          "type": "coded_only"
+        }
+      },
+      {
+        "target": "Medikation.text",
+        "structure": "concatenate-medication-narrative",
+        "transform": {
+          "type": "narrative",
+          "only_if_uncoded": true,
+          "prefix": "Darreichungsform: "
+        }
+      }
+    ],
+    "masnahmen.medikamentose_therapie.medikation.medikament.wirkstoff.wirkstoffname": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Wirkstoff: "
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.medikament.wirkstoff.wirkstoffcode": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Wirkstoff-Code: "
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.medikament.wirkstoff.arzneilich_wirksamer_bestandteilq": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "enum",
+        "map": {
+          "true": "Arzneilich wirksamer Bestandteil: ja",
+          "false": "Arzneilich wirksamer Bestandteil: nein"
+        }
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.medikament.wirkstoff.wirkstarke": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Wirkstärke: "
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.medikament.chargennummer": "UVMedicationInformationsimple.lotNumberText",
+    "masnahmen.medikamentose_therapie.medikation.anwendungszeiten.startzeitpunkt_der_anwendung": "UVSubordinateadministration.effectiveTime_value_or_nullFlavor",
+    "masnahmen.medikamentose_therapie.medikation.anwendungszeiten.stoppzeitpunkt_der_anwendung": null,
+    "masnahmen.medikamentose_therapie.medikation.dosierung.freitext": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative"
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.zusatzliche_hinweise": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Zusätzlicher Hinweis: "
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.anweisungen_zur_einnahme": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Einnahmeanweisung: "
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.zeitangabe.zeitpunkt": null,
+    "masnahmen.medikamentose_therapie.medikation.dosierung.zeitangabe.ereignisbezogene_wiederholung.ereignis": null,
+    "masnahmen.medikamentose_therapie.medikation.dosierung.zeitangabe.ereignisbezogene_wiederholung.offset": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Ereignisoffset: "
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.einnahme_bei_bedarf": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "enum",
+        "map": {
+          "true": "Einnahme bei Bedarf",
+          "false": null
+        }
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.korperstelle": {
+      "target": "Medikation.approachSiteCode",
+      "transform": {
+        "type": "coded_or_original_text",
+        "null_flavor": "OTH"
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.art_der_anwendung": {
+      "target": "Medikation.routeCode",
+      "structure": "coalesce-medication-route",
+      "transform": {
+        "type": "coded_or_original_text",
+        "null_flavor": "OTH"
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.methode_der_anwendung": {
+      "target": "Medikation.routeCode",
+      "structure": "coalesce-medication-route",
+      "transform": {
+        "type": "coded_or_original_text",
+        "null_flavor": "OTH"
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.dosismenge_und_einheit": "UVSubordinateadministration.doseQuantity",
+    "masnahmen.medikamentose_therapie.medikation.dosierung.kontinuierliche_gabe_rate": "UVSubordinateadministration.rateQuantity",
+    "masnahmen.medikamentose_therapie.medikation.grund_der_medikation.begrundungstext": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Begründung: "
+      }
+    },
+    "masnahmen.medikamentose_therapie.medikation.grund_der_medikation.kodierte_begrundung": {
+      "target": "Medikation.text",
+      "structure": "concatenate-medication-narrative",
+      "transform": {
+        "type": "narrative",
+        "prefix": "Kodierte Begründung: "
+      }
+    }
+  },
+  "narrative_overrides": {
+    "Relevantdiagnostictestsorlaboratorydata.text": {
+      "blocks": [
+        {
+          "type": "fact",
+          "source": "diagnostik.bildgebende_diagnostik.magnetresonanztomographie.untersuchungsregion",
+          "label": "MRT – Untersuchungsregion",
+          "reason": "Preserve the reviewed MRI examination-region wording in the Diagnostics section narrative; no structured imaging-region code target or crosswalk is asserted.",
+          "decision": "DEC-044",
+          "reviewed_at": "2026-09-15"
+        },
+        {
+          "type": "for_each",
+          "source_repeat": "diagnostik.bildgebende_diagnostik.rontgen",
+          "source": "diagnostik.bildgebende_diagnostik.rontgen.untersuchungsregion",
+          "label": "Röntgen – Untersuchungsregion",
+          "reason": "Preserve each reviewed X-ray examination-region occurrence in the Diagnostics section narrative without joining occurrences or coalescing them with structured diagnostic entries.",
+          "decision": "DEC-044",
+          "reviewed_at": "2026-09-15"
+        }
+      ]
+    },
+    "addendum-dokumentationsinformationen.text": {
+      "blocks": [
+        {
+          "type": "fact",
+          "source": "dokumentationsinformationen.berechnete_zeitintervalle.zeit_bis_zum_export",
+          "label": "Zeit bis zum Export",
+          "reason": "Preserve this EDIS datum in the Addendum narrative while its rejected structured mapping is suspended pending AKTIN clarification; see the identity-pinned suspended CDA mappings list.",
+          "decision": "DEC-048",
+          "reviewed_at": "2026-11-03"
+        },
+        {
+          "type": "fact",
+          "source": "dokumentationsinformationen.datenbereitstellung.name_des_edis",
+          "label": "Name des EDIS",
+          "reason": "Preserve this EDIS datum in the Addendum narrative while its rejected structured mapping is suspended pending AKTIN clarification; see the identity-pinned suspended CDA mappings list.",
+          "decision": "DEC-048",
+          "reviewed_at": "2026-11-03"
+        },
+        {
+          "type": "fact",
+          "source": "dokumentationsinformationen.datenbereitstellung.version_des_edis",
+          "label": "Version des EDIS",
+          "reason": "Preserve this EDIS datum in the Addendum narrative while its rejected structured mapping is suspended pending AKTIN clarification; see the identity-pinned suspended CDA mappings list.",
+          "decision": "DEC-048",
+          "reviewed_at": "2026-11-03"
+        }
+      ]
+    },
+    "Transportmethod.section.text": {
+      "blocks": [
+        {
+          "type": "fact",
+          "source": "administrative_aufnahmeinformationen.transport.transportmittel",
+          "label": "Transportmittel",
+          "reason": "The selected source binds to Transportmethod 2024-02-14T09:42:48 (SNOMED CT), while the CDA observation requires the 2015-11-17 local-code revision. No complete lossless crosswalk proves which legacy vehicle category a SNOMED ground/air/none/other value selects. Preserve the exact source fact in Transport narrative and suspend structured coding until owner alignment or an approved crosswalk.",
+          "reviewed_at": "2026-11-04"
+        }
+      ]
+    }
+  },
+  "structure_overrides": {
+    "concatenate-medication-narrative": {
+      "type": "concatenate",
+      "target": "Medikation.text",
+      "separator": "; ",
+      "reason": "Preserve the medication name, ingredient wording, dosage and patient instructions, PRN, reason and uncoded administration-form wording in the one available medication narrative slot; DEC-045 does not claim structured ingredient or instruction semantics.",
+      "sources": [
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Arzneimittel: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.wirkstoff.wirkstoffname",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Wirkstoff: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.wirkstoff.wirkstoffcode",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Wirkstoff-Code: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.wirkstoff.arzneilich_wirksamer_bestandteilq",
+          "transform": {
+            "type": "enum",
+            "map": {
+              "true": "Arzneilich wirksamer Bestandteil: ja",
+              "false": "Arzneilich wirksamer Bestandteil: nein"
+            }
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.wirkstoff.wirkstarke",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Wirkstärke: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.dosierung.freitext",
+          "transform": {
+            "type": "narrative"
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.dosierung.zusatzliche_hinweise",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Zusätzlicher Hinweis: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.dosierung.anweisungen_zur_einnahme",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Einnahmeanweisung: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.dosierung.zeitangabe.ereignisbezogene_wiederholung.offset",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Ereignisoffset: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.dosierung.einnahme_bei_bedarf",
+          "transform": {
+            "type": "enum",
+            "map": {
+              "true": "Einnahme bei Bedarf",
+              "false": null
+            }
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.grund_der_medikation.begrundungstext",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Begründung: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.grund_der_medikation.kodierte_begrundung",
+          "transform": {
+            "type": "narrative",
+            "prefix": "Kodierte Begründung: "
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.darreichungsform",
+          "transform": {
+            "type": "narrative",
+            "only_if_uncoded": true,
+            "prefix": "Darreichungsform: "
+          }
+        }
+      ]
+    },
+    "compose-medication-product-code": {
+      "type": "compose_coded",
+      "target": "UVMedicationInformationsimple.code",
+      "null_flavor": "NA",
+      "reason": "The selected AKTIN simple medication-information template represents the medicinal product in manufacturedMaterial/code. Combine Arzneimittel-Code with Arzneimittel-Name as code plus displayName; when only the name is available, use the template-mandated NA null flavor and preserve the name in originalText.",
+      "sources": [
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelcode",
+          "role": "code",
+          "transform": {
+            "type": "code_system",
+            "code_system": "1.2.276.0.76.4.6"
+          }
+        },
+        {
+          "source": "masnahmen.medikamentose_therapie.medikation.medikament.arzneimittel.arzneimittelname",
+          "role": "display_name",
+          "transform": {
+            "type": "narrative"
+          }
+        }
+      ]
+    },
+    "coalesce-medication-route": {
+      "type": "coalesce",
+      "target": "Medikation.routeCode",
+      "sources": [
+        "masnahmen.medikamentose_therapie.medikation.dosierung.art_der_anwendung",
+        "masnahmen.medikamentose_therapie.medikation.dosierung.methode_der_anwendung"
+      ],
+      "policy": "prefer_first_warn_if_different",
+      "transform": {
+        "type": "coded_or_original_text",
+        "null_flavor": "OTH"
+      },
+      "reason": "Use Art der Anwendung when present, otherwise Methode der Anwendung; warn when both present wordings differ. Preserve uncoded wording as originalText."
+    }
+  },
+  "field_review_overrides": {
+    "abschlussdiagnosen.abschlussdiagnose.icd10_sekundardiagnose": {
+      "status": "intentionally_unmapped",
+      "reason": "AKTIN explicitly states that secondary ICD-10 is not transmitted in the current transaction.",
+      "decision": "DEC-043",
+      "reviewed_at": "2026-09-14"
+    },
+    "masnahmen.medikamentose_therapie.medikation.anwendungszeiten.stoppzeitpunkt_der_anwendung": {
+      "status": "intentionally_unmapped",
+      "reason": "The reviewed rule maps only the application start to the atomic subordinate TS; the active target offers no separate stop slot.",
+      "decision": "DEC-043",
+      "reviewed_at": "2026-09-14"
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.zeitangabe.zeitpunkt": {
+      "status": "intentionally_unmapped",
+      "reason": "Current AKTIN scope documents medication given via the application start; structured dosage timing is deferred.",
+      "decision": "DEC-043",
+      "reviewed_at": "2026-09-14"
+    },
+    "masnahmen.medikamentose_therapie.medikation.dosierung.zeitangabe.ereignisbezogene_wiederholung.ereignis": {
+      "status": "intentionally_unmapped",
+      "reason": "Event-relative repeat timing is outside the current AKTIN medication-given scope and is retained for later review.",
+      "decision": "DEC-043",
+      "reviewed_at": "2026-09-14"
+    }
+  },
+  "target_default_overrides": {
+    "Allergyintoleranceobservation.effectiveTime": {
+      "nullFlavor": "UNK",
+      "reason": "The host transaction does not provide the allergy onset; AKTIN confirmed that the required Allergy Intolerance Observation effectiveTime may therefore carry nullFlavor UNK."
+    },
+    "Allergyintoleranceobservation.statusCode": {
+      "value": "completed",
+      "reason": "This is the status of the Allergy Intolerance Observation assertion, not whether the allergy or concern has ended. The active template examples consistently represent the completed assertion with ActStatus completed."
+    },
+    "Chiefcomplaintreasonforvisit.entry::Problemconcernactcedis.statusCode": {
+      "value": "active",
+      "reason": "The presenting complaint is represented as an actively tracked concern; completed requires explicit closure evidence and a corresponding concern effectiveTime.high."
+    },
+    "Problemconcernacteddiagnoses.statusCode": {
+      "value": "active",
+      "reason": "The final-diagnosis Concern Act represents diagnoses that remain clinically relevant for handoff. The transaction contains no concern-closure datum; completed requires explicit evidence that tracking ended and a corresponding concern effectiveTime.high."
+    },
+    "Problemconcernacteddiagnoses.low": {
+      "nullFlavor": "UNK",
+      "reason": "The transaction does not provide when the final-diagnosis concern became active; the applicable concern-start time exists but is unknown."
+    },
+    "Problemobservationeddiagnosis.code": {
+      "value": "29308-4",
+      "reason": "This element identifies the statement as a diagnosis observation. The template explicitly prefers LOINC 29308-4 over 75324-4."
+    }
+  },
+  "site_requirement_overrides": {
+    "CDAauthor.assignedPerson::PersonElements.name": {
+      "channel": "fallback_if_active",
+      "reason": "The document author identity is deployment configuration and completes the active author participation."
+    },
+    "CDAconfidentialityCode.confidentialityCode": {
+      "channel": "values",
+      "reason": "Document confidentiality is deployment policy and must be supplied by the site."
+    },
+    "CDAlanguageCode.languageCode": {
+      "channel": "values",
+      "reason": "Document language is deployment configuration and must be supplied by the site."
+    },
+    "Medikation.moodCode": {
+      "channel": "fallback_if_active",
+      "reason": "Medication mood depends on the local source and export semantics and must be supplied for each active medication entry."
+    },
+    "UVSubordinateadministration.moodCode": {
+      "channel": "fallback_if_active",
+      "reason": "Subordinate-administration mood depends on the local source and export semantics and must be supplied for each active entry."
+    },
+    "UVSubordinateadministration.statusCode": {
+      "channel": "fallback_if_active",
+      "reason": "Subordinate-administration lifecycle status depends on local export semantics and must be supplied for each active entry."
+    },
+    "Medikation.statusCode": {
+      "channel": "fallback_if_active",
+      "reason": "The 2026.1.3 owner template requires root medication status. The site must supply the lifecycle status for every active medication occurrence; administration timestamps do not establish it."
+    }
+  },
+  "expected": {
+    "dataset_fields": 127,
+    "generated_mapped_fields": 91,
+    "reviewed_mapped_fields": 117,
+    "reviewed_narrative_fields": 6
+  }
+}
