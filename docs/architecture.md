@@ -66,7 +66,10 @@ src/decor2hl7/
 │   ├── transaction.py      target-neutral dataset model
 │   ├── structural.py       generated occurrence rules
 │   ├── schematron.py       bounded supporting evidence
-│   ├── mapping.py          separate candidate, admission and report/audit stages
+│   ├── mapping.py          candidate discovery and proposal admission
+│   ├── mapping_decisions.py shared evidence and qualification labels
+│   ├── mapping_audit.py    checked serialization of final decisions
+│   ├── mapping_reports.py  presentation of completed decisions
 │   ├── site.py             site CSV and input-code proposals
 │   └── reports.py          readable generated products
 ├── cda/                    CDA target implementation
@@ -148,7 +151,10 @@ See
 ### Mapping boundary
 
 `compile/mapping.py` combines the target-neutral model, physical CDA model, and
-bounded evidence graph. It emits a rich audit and concise proposal. Reviewed
+bounded evidence graph. Candidate discovery and admission produce the final
+decision state before `mapping_audit.py` serializes it and `mapping_reports.py`
+renders it. The audit and reports use shared coverage/qualification labels;
+presentation never changes the proposal. It emits a rich audit and concise proposal. Reviewed
 mapping remains outside generated `model/`, is protected by an identity lock,
 and may differ from the proposal.
 
@@ -196,7 +202,10 @@ recovery and delivery within the run.
 
 `contracts.py` defines the shared serialized shapes for dataset fields/groups,
 CDA nodes/targets, input and target mappings, site configuration and normalized
-occurrences. Runtime loading validates these shapes before bundle admission.
+occurrences, plus mapping-audit decisions and summaries. Dataset and CDA
+compilers check their outputs at the producing boundary; runtime loading checks
+serialized input before bundle admission. Nested terminology and diagnostic
+metadata have explicit contracts, including legitimate nullable source values.
 `RuntimeBundle` names its six products explicitly instead of relying on tuple
 positions. Normalization checks its resulting records at the owning boundary.
 
