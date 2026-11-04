@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from decor2hl7.scenario import prepare_scenario_input
+from decor2hl7.scenario import packaged_scenario, prepare_scenario_input
 
 
 TRIAGE_ROOT = "ersteinschatzung.parameter_der_ersteinschatzung"
@@ -33,10 +33,18 @@ GCS_SUM = "scores.glasgow_coma_scale_gcs.gcs_summe"
 
 
 class AuthoredScenarioTests(unittest.TestCase):
+    def test_reference_scenarios_are_packaged_for_each_exact_release(self) -> None:
+        for release in ("2026.1.2", "2026.1.3"):
+            path = packaged_scenario(release, "notaufnahmeregister--60", "valid-reference-cases")
+            manifest = json.loads((path / "scenario.json").read_text())
+            self.assertEqual(manifest["release"], release)
+            for spec in manifest["input"]["sources"].values():
+                self.assertTrue((path / "input" / spec["file"]).is_file())
+
     def test_valid_reference_cases_preserve_clinical_branch_invariants(self) -> None:
         scenario = (
-            Path(__file__).parent
-            / "fixtures/scenarios/2026.1.2/notaufnahmeregister--60"
+            Path(__file__).parents[1]
+            / "src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60"
             / "valid-reference-cases"
         )
         manifest = json.loads((scenario / "scenario.json").read_text())
@@ -100,8 +108,8 @@ class AuthoredScenarioTests(unittest.TestCase):
 
     def test_authored_scenario_carries_explicit_site_cda_values(self) -> None:
         scenario = (
-            Path(__file__).parent
-            / "fixtures/scenarios/2026.1.2/notaufnahmeregister--60"
+            Path(__file__).parents[1]
+            / "src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60"
             / "valid-reference-cases"
         )
         manifest = json.loads((scenario / "scenario.json").read_text())

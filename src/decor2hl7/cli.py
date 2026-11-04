@@ -1038,6 +1038,7 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
 
 def cmd_setup_test(args: argparse.Namespace) -> int:
     from .testing import setup_fixture
+    from .scenario import packaged_scenario
 
     root = _root(args)
     release = selected_release(root)
@@ -1054,13 +1055,30 @@ def cmd_setup_test(args: argparse.Namespace) -> int:
     expected = setup_fixture(
         test_dir, release, transaction, model, cda, cda_mapping,
         force=args.force,
-        scenario_dir=explicit_path(args.scenario) if args.scenario else None,
+        scenario_dir=(
+            explicit_path(args.scenario) if Path(args.scenario).expanduser().is_dir()
+            else packaged_scenario(release["key"], transaction["key"], args.scenario)
+        ) if args.scenario else None,
     )
     _say(f"{_msg('ui.test_fixture')} {test_dir}")
     if args.scenario:
         _say(f"{_msg('ui.authored_scenario_set')} {expected['scenario']['name']}")
     _say(f"{_msg('ui.generated')}{len(expected['generated_fields'])} {_msg('ui.model_datapoint_columns')}")
     _say(f"{_msg('ui.cda_mapped_fields_covered_by_input')} {len(expected['mapped_fields'])}")
+    return 0
+
+
+def cmd_setup_integration_test(args: argparse.Namespace) -> int:
+    from .integration_testing import setup_integration_test
+
+    output = explicit_path(args.output)
+    result = setup_integration_test(
+        _root(args), output, scenario=args.scenario, written_at=args.written_at,
+        cda_mapping_override=args.cda_mapping, receiver_url=args.receiver_url,
+    )
+    _say(_msg("cli.integration_created", path=output))
+    _say(_msg("cli.integration_read_instructions", path=output / "README.md"))
+    print(json.dumps({"workspace": str(output / "workspace"), "cases": result["cases"]}))
     return 0
 
 
@@ -1265,6 +1283,14 @@ def parser(output_language: str = "en") -> argparse.ArgumentParser:
     q.add_argument("--force", action="store_true", help=t("cli.force_help"))
     _add_runtime_config_overrides(q, translator, site=False)
     q.set_defaults(func=cmd_setup_test)
+
+    q = sub.add_parser("setup-integration-test", help=t("cli.integration_help"))
+    q.add_argument("--output", required=True, help=t("cli.integration_output_help"))
+    q.add_argument("--scenario", default="valid-reference-cases", help=t("cli.integration_scenario_help"))
+    q.add_argument("--written-at", default="2026-06-01T12:00:00Z", help=t("cli.sqlite_fixture_written_at_help"))
+    q.add_argument("--receiver-url", help=t("cli.integration_receiver_help"))
+    _add_runtime_config_overrides(q, translator, site=False)
+    q.set_defaults(func=cmd_setup_integration_test)
 
     q = sub.add_parser("test-cda-mapping", help=t("cli.test_mapping_help"))
     q.add_argument("--test-dir", help=t("cli.test_dir_help"))

@@ -13,6 +13,10 @@ checkout path for your selected specification. Python and decor2hl7 must be
 installed; independent CDA validation also needs Java and the fetched validation
 packages.
 
+For a complete fictional SQLite rehearsal, the [integration setup command](integration-testing.md)
+creates an independent workspace and input database in one step. Use the manual
+steps below when adapting authored cases or testing your own site configuration.
+
 ## Prepare a test workspace
 
 The workflow guides begin with [workspace creation](specification-and-mapping.md#set-up-the-practice-workspace)
@@ -43,11 +47,11 @@ Begin in the [test workspace](#prepare-a-test-workspace) prepared above.
 
 ### Prepare authored cases
 
-Start from the complete [reference scenario](../../tests/fixtures/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases/README.md)
+Start from the complete [reference scenario](../../src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases/README.md)
 for this release. Copy it to a new directory before adapting cases:
 
 ```bash
-cp -a /path/to/decor2hl7/tests/fixtures/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases \
+cp -a /path/to/decor2hl7/src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases \
   /data/decor2hl7-test-cases
 ```
 

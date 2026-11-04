@@ -15,6 +15,21 @@ from typing import Any, Iterable, Mapping
 
 from .workspace import load_json
 from .csv_input import read_csv_table
+from .i18n import message as _msg
+
+
+def packaged_scenario(release: str, transaction: str, name: str) -> Path:
+    """Locate exact installed scenario data, without a nearest-version fallback."""
+    for part in (release, transaction, name):
+        if part in {".", ".."} or re.fullmatch(r"[A-Za-z0-9_.-]+", part) is None:
+            raise ValueError(_msg("cli.integration_scenario_name", name=part))
+    path = Path(__file__).parent / "scenarios" / release / transaction / name
+    if not (path / "scenario.json").is_file():
+        raise ValueError(_msg(
+            "cli.integration_scenario_missing", name=name,
+            release=release, transaction=transaction,
+        ))
+    return path
 
 
 def case_filename_key(value: str) -> str:

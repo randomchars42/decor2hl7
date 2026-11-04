@@ -69,7 +69,7 @@ establish containment or receiver acceptance.
 ## Verification boundary
 
 The authored synthetic cases are under
-`tests/fixtures/scenarios/2026.1.3/notaufnahmeregister--60/valid-reference-cases`.
+`src/decor2hl7/scenarios/2026.1.3/notaufnahmeregister--60/valid-reference-cases`.
 They use the new transport domain directly and do not define production aliases
 from legacy vehicle categories. Negative checks retain the rejected referral
 options, legacy transport values and contradictory negative-isolation branch.

@@ -29,6 +29,9 @@ decor2hl7 = [
   "retrieval/*.json",
   "retrieval/external/*.xml",
   "validation/*.java",
+  "scenarios/*/*/*/*.json",
+  "scenarios/*/*/*/*.md",
+  "scenarios/*/*/*/input/*.csv",
 ]
 
 [tool.mypy]

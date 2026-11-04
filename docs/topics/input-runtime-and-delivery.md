@@ -249,6 +249,43 @@ Fixture coverage treats both structured field selections and checked
 narrative-only sources as mapped. This ensures reviewed wording-only fields are
 exercised without pretending they produced structured target assignments.
 
+### Independent integration tests
+
+`setup-integration-test --output DIRECTORY` consumes one selected, reviewed
+workspace and an authored scenario. A packaged scenario is selected by exact
+release key, transaction key, and scenario name; its manifest additionally checks
+transaction OID and effective date. An explicit scenario directory uses the same
+admission rules. Unknown versions do not fall back to another scenario or to
+generated clinical values. `setup-test --scenario` accepts those packaged names
+as well as directories.
+
+The setup command copies the release's fetched specification and selected
+compiled models, validator assets, reviewed mapping and lock. It retains exact
+identities and validates the source manifests, closure and mapping admission.
+Its generated SQLite source and site bundle come only from the authored
+scenario, not from the source workspace's site configuration. The output includes
+an independent `workspace/`, producer-side `input/source.sqlite`, mapping fixture,
+scenario snapshot, instructions and `integration-test.json` with initial file
+checksums and semantic model/mapping hashes. No source runtime state, pending
+documents or delivery history is copied. Existing destinations and overlapping
+source/output directories are rejected; admission and copying occur in a
+temporary sibling before publication.
+
+The shared packaged SQLite builder stores the scenario's raw strings as TEXT
+and generates queries from its explicit case joins. It does not infer clinical
+semantics. A fixed, timezone-qualified write timestamp, explicit extraction lower
+bound and disabled snapshot-advance guard permit synthetic replay and correction
+exercises. Generated site paths are relative to the new setup, and local spool
+delivery is the default. `--receiver-url` only configures explicit HTTP delivery;
+setup itself extracts, transforms and sends nothing.
+
+Runtime, conformance and receiver operations remain ordinary separate commands.
+They report their actual outcomes; creating a setup does not claim that its
+profile, receiver acceptance, import/storage or replacement protocol passed.
+Clinical expectations remain in the versioned scenario, while replay and
+correction mechanics use the common runtime. See the
+[integration test guide](../user/integration-testing.md).
+
 ## Transport
 
 Site configuration selects one built-in adapter by exact name. Each adapter has

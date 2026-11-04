@@ -13,7 +13,7 @@ from decor2hl7.cli import main
 from decor2hl7 import source, state
 from decor2hl7.testing import synthetic_site
 from decor2hl7.workspace import init_workspace, set_release, set_transaction, write_json
-from scripts.create_sqlite_test_source import create_source
+from decor2hl7.sqlite_fixture import create_source
 
 
 class SQLiteFixtureTests(unittest.TestCase):

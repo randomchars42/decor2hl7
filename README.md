@@ -137,6 +137,9 @@ decor2hl7 check-input --input /data/clinical-export
 decor2hl7 setup-test
 decor2hl7 test-cda-mapping
 
+# Independent SQLite integration rehearsal from this reviewed setup
+decor2hl7 setup-integration-test --output /tmp/decor2hl7-integration
+
 #
 # Stage 3: runtime operation
 #
@@ -155,6 +158,9 @@ bounded extraction into a replayable atomic snapshot and then uses the identical
 ingestion, transformation, delivery, and SQLite lineage pipeline. See the
 [site configuration guide](docs/user/site-configuration.md#sqlite-input-and-a-local-integration-test)
 for native SQLite input and a reproducible synthetic integration test.
+The [integration test guide](docs/user/integration-testing.md) explains the
+packaged scenarios, independent setup command, local spool and optional receiver
+configuration.
 
 ## Project maintenance
 
@@ -170,6 +176,10 @@ reference workspace. `make check-reference` requires the exact companion
 workspace and fails rather than skipping when it is absent or stale. The full
 `make check` gate runs both tiers, including the end-to-end reference mapping
 test.
+
+If the exact companion workspace has a different local path, use
+`make check REFERENCE_WORKSPACE=/path/to/reference-workspace`. Its required
+release/transaction identity and baseline checks remain unchanged.
 
 Release verification also regenerates the companion reference workspace and
 reviews its baseline changes with `make baseline`. Generated coverage counts
