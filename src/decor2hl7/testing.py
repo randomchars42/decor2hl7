@@ -7,6 +7,8 @@ production, but writes neither production state nor transport output.
 
 from __future__ import annotations
 
+from .hashing import json_digest as json_digest
+
 import csv
 import hashlib
 import json
@@ -20,17 +22,10 @@ from typing import Any, Iterable, Mapping
 from .compile.site import code_mapping_defaults
 from .data import field_value, ingest
 from .domain import accepted_values
-from .i18n import localize_markdown
+from .i18n import message as _msg, localized
 from .cda.model import ValueRepresentationKind
 from .cda.narrative import narrative_blocks, narrative_source_rules
 from .workspace import load_json, write_json
-
-
-def json_digest(value: Any) -> str:
-    payload = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
 
 
 def _slug(value: str) -> str:
@@ -650,7 +645,6 @@ def synthetic_site(
             "sources": {},
         },
         "cda": {"values": {}, "fallback_if_active": {}},
-        "state": {"rotate_days": 0},
         "transport": {
             "adapter": "http-post", "url": None, "timeout": 60, "headers": {},
         },
@@ -880,6 +874,7 @@ def _case_template_expectation_errors(
     return errors
 
 
+@localized
 def run_fixture(
     test_dir: Path,
     out_dir: Path,
@@ -1031,32 +1026,26 @@ def run_fixture(
     if isinstance(expected.get("scenario"), Mapping):
         result["scenario"] = dict(expected["scenario"])
     write_json(out_dir / "results.json", result)
-    lines = ["# CDA mapping test", "", f"**{result['status']}**", ""]
+    lines = [(_msg('markdown.cda_mapping_test')), "", f"**{result['status']}**", ""]
     if isinstance(expected.get("scenario"), Mapping):
-        lines.append(f"- Authored scenario set: {expected['scenario'].get('name')}")
+        lines.append(f"- {_msg('markdown.authored_scenario_set')} {expected['scenario'].get('name')}")
     lines.extend([
-        f"- Generated documents: {len(documents)}/{expected_count}",
-        f"- Model fields represented in CSV: {len(expected.get('generated_fields', []))}",
-        f"- CDA-mapped fields: {len(expected.get('mapped_fields', []))}",
-        f"- Fields exercised after normalization: {len(exercised)}", "",
+        f"- {_msg('markdown.generated_documents')} {len(documents)}/{expected_count}",
+        f"- {_msg('markdown.model_fields_represented_in_csv')} {len(expected.get('generated_fields', []))}",
+        f"- {_msg('markdown.cda_mapped_fields')} {len(expected.get('mapped_fields', []))}",
+        f"- {_msg('markdown.fields_exercised_after_normalization')} {len(exercised)}", "",
     ])
     if errors:
-        lines.extend(["## Errors", ""] + [f"- {item}" for item in errors] + [""])
+        lines.extend([(_msg('markdown.errors')), ""] + [f"- {item}" for item in errors] + [""])
     if test_warnings:
-        lines.extend(["## Warnings", ""] + [f"- {item}" for item in test_warnings] + [""])
+        lines.extend([(_msg('markdown.warnings')), ""] + [f"- {item}" for item in test_warnings] + [""])
     lines.extend([
-        "## Scope", "",
-        "This test uses the production ingestion, normalization, validation, "
-        "binding, and CDA rendering code.",
-        "It does not write production state and never invokes transport.", "",
+        (_msg('markdown.scope')), "",
+        (_msg('markdown.this_test_uses_the_production_ingestion_normalization_validation')),
+        (_msg('markdown.it_does_not_write_production_state_and_never')), "",
     ])
     (out_dir / "results.md").write_text(
-        localize_markdown(
-            "\n".join(lines), output_language,
-            protected_values=(
-                model, cda, cda_mapping, expected, result, errors, test_warnings,
-            ),
-        ),
+        ("\n".join(lines)),
         encoding="utf-8",
     )
     return result, 0 if result["status"] == "PASS" else 1

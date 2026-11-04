@@ -21,6 +21,21 @@ not infer joins, cardinality, or occurrence identity. `build` and
 
 CSV mappings may specify parsing and small input transforms. Local code or unit
 aliases are input policy and cannot extend a bound formal dataset terminology.
+This also applies when an input transform returns a code/system object: it must
+identify one exact admitted source member. Canonical labels and display names
+come from that member, not from the transform.
+
+Both concise `SOURCE:COLUMN` locators and locator objects are current syntax.
+Only explicit `null` means unmapped; malformed entries, empty mapping lists,
+unknown executable keys and invalid transforms fail configuration admission.
+CSV headers must be non-empty and unique, and every row must have exactly the
+header width. Integer parsing preserves exact values and rejects fractions;
+all numeric input must be finite. An invalid scalar quarantines its record.
+
+A scalar field read from multiple rows requires exactly one explicitly marked
+primary row. Source order alone never selects a scalar clinical fact. Repeated
+group minima and maxima are checked independently within every parent occurrence;
+required children of inactive optional groups remain inactive.
 
 ### Optional database source stage
 
@@ -86,7 +101,7 @@ record's pending artifact.
 
 One source occurrence remains one normalized occurrence. A missing value never
 shifts a sibling occurrence. A one-file, one-level repeated source may retain
-source order for compatibility; independent nested repetitions require explicit
+its declared source order; independent nested repetitions require explicit
 occurrence keys at every independent level. Positional zipping is unsupported.
 
 Validation is layered:
@@ -103,6 +118,14 @@ transformation requires the selected site bundle and its declared construction
 values.
 
 ## Runtime
+
+Before input processing or delivery, the selected mapping lock must match the
+release key/date, transaction key/OID/date, and exact compiled model and CDA
+digests. The same admission function serves runtime and mapping checks. The
+mapping hash recorded at creation is provenance; reviewed mapping edits remain
+possible without silently authorizing a different compilation. Sending commands
+also validate their complete transport contract before extraction or rendering.
+
 
 The runtime sequence is:
 
@@ -129,16 +152,19 @@ preventing unchanged duplicate output.
 
 `state/state.sqlite` is the sole production state authority. It contains the
 current stream revision, append-only version history, exact current and prior
-CDA identities, delivery status, and a run ledger. An existing version-1
-`state/index.json` is imported once and retained as migration evidence. A
-workspace lock prevents overlapping transforming or delivering commands.
+CDA identities, delivery status, and a run ledger. Only the current SQLite
+schema is supported; legacy JSON state and older schemas require an explicit
+external conversion rather than an automatic migration. A workspace lock prevents overlapping transforming or delivering commands.
 
 State advances only after the selected transport reports a successful
 handover. A crash before that point leaves the record pending; retry therefore
 reuses the same version and the exact pending XML and sidecar bytes. Pending
 artifacts record their preparation time and XML checksum; reuse and delivery
-reject checksum mismatches. Existing sidecars without those fields remain
-readable and are preserved unchanged.
+reject incomplete identities, state keys, replacement lineage, timestamps or
+checksums. Missing checksums and file modification times are never substitutes
+for current sidecar metadata. Delivered XML and sidecars remain available for
+every history entry, including superseded versions; cleanup removes only
+uncommitted pending artifacts.
 
 Before pruning or replacing output, a transforming command recovers any exact
 local spool publication whose delivery-state commit was interrupted. It records
@@ -171,9 +197,8 @@ date, adapter, resolved SQLite filename or configured ODBC connection identity,
 input relationships, write-timestamp column, and SQL content hashes. Connection
 identity is stored only as part of an opaque digest, never as a connection
 string. Changing database, queries, or transaction starts an independent
-baseline; changing only the rescan window does not. Existing SQLite ledgers are
-migrated additively and their old unscoped runs are retained as evidence, not
-reused as another stream's baseline.
+baseline; changing only the rescan window does not. Only run entries carrying
+that exact stream identity can establish its baseline.
 
 Sites where quiet days do not advance that timestamp must disable
 this guard or provide a replication watermark with the stated property.
@@ -214,8 +239,8 @@ directory is visible. Consumption and acknowledgement beyond the spool remain
 the downstream system's responsibility.
 
 The month comes from the persisted preparation time, so a retry after a month
-boundary still addresses the same publication. Legacy artifacts without that
-timestamp use their XML modification time. Preserve pending artifacts and their
+boundary still addresses the same publication. A missing or invalid timestamp
+is an error. Preserve pending artifacts and their
 metadata until handover and state recovery have completed.
 
 Authentication, batch envelopes, remote acknowledgement parsing, and receiver

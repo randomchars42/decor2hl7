@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, wraps
+import inspect
 from importlib.resources import files
 import json
 import re
 from string import Formatter
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Mapping, ParamSpec, TypeVar
 
+
+OUTPUT_LANGUAGE: ContextVar[str] = ContextVar("decor2hl7_output_language", default="en")
 
 DEFAULT_OUTPUT_LANGUAGE = "en"
 SUPPORTED_OUTPUT_LANGUAGES = frozenset({"en", "de"})
@@ -123,19 +127,6 @@ def catalog_problems() -> list[str]:
         if _MESSAGE_ID.fullmatch(message_id) is None:
             errors.append(f"en: invalid message ID: {message_id!r}")
 
-    for namespace in ("ui", "markdown"):
-        sources: dict[str, str] = {}
-        for message_id in sorted(message_ids(namespace)):
-            source = english[message_id]
-            previous = sources.get(source)
-            if previous is not None:
-                errors.append(
-                    f"en:{namespace}: duplicate source text for message IDs "
-                    f"{previous!r} and {message_id!r}"
-                )
-            else:
-                sources[source] = message_id
-
     for language, catalog in CATALOGS.items():
         missing = base_keys - set(catalog)
         extra = set(catalog) - base_keys
@@ -178,102 +169,25 @@ class Translator:
         return template.format(**values)
 
 
-@lru_cache(maxsize=None)
-def _replacement_pairs(
-    namespace: str,
-    language: str,
-) -> tuple[tuple[str, str, str], ...]:
-    """Resolve deterministic replacement tuples through stable message IDs."""
-    normalized = normalize_output_language(language)
-    english = CATALOGS[DEFAULT_OUTPUT_LANGUAGE]
-    localized = CATALOGS[normalized]
-    identifiers = sorted(
-        message_ids(namespace),
-        key=lambda message_id: (-len(english[message_id]), message_id),
-    )
-    return tuple(
-        (message_id, english[message_id], localized[message_id])
-        for message_id in identifiers
-    )
+def message(message_id: str, **values: Any) -> str:
+    """Construct presentation text by ID; owner strings never pass through here."""
+    return Translator(OUTPUT_LANGUAGE.get()).text(message_id, **values)
 
 
-def _replace_catalog_messages(value: str, namespace: str, language: str) -> str:
-    for _message_id, source, translated in _replacement_pairs(namespace, language):
-        value = value.replace(source, translated)
-    return value
+P = ParamSpec("P")
+T = TypeVar("T")
 
 
-def localize_ui(value: str, output_language: str = "en") -> str:
-    """Localize one decor2hl7-authored terminal message."""
-    language = normalize_output_language(output_language)
-    if language == DEFAULT_OUTPUT_LANGUAGE:
-        return value
-    return _replace_catalog_messages(value, "ui", language)
-
-
-def _protected_markdown_strings(
-    values: Iterable[Any],
-    language: str,
-) -> set[str]:
-    sources = tuple(
-        source for _message_id, source, _translated
-        in _replacement_pairs("markdown", language)
-    )
-    protected: set[str] = set()
-    visited: set[int] = set()
-
-    def visit(item: Any) -> None:
-        if isinstance(item, str):
-            if any(source in item for source in sources):
-                protected.add(item)
-            return
-        if isinstance(item, Mapping):
-            identity = id(item)
-            if identity in visited:
-                return
-            visited.add(identity)
-            for key, nested in item.items():
-                visit(key)
-                visit(nested)
-            return
-        if isinstance(item, (list, tuple, set, frozenset)):
-            identity = id(item)
-            if identity in visited:
-                return
-            visited.add(identity)
-            for nested in item:
-                visit(nested)
-
-    for value in values:
-        visit(value)
-    return protected
-
-
-def localize_markdown(
-    value: str,
-    output_language: str = "en",
-    *,
-    protected_values: Iterable[Any] = (),
-) -> str:
-    """Localize generated Markdown without translating supplied owner content."""
-    language = normalize_output_language(output_language)
-    if language == DEFAULT_OUTPUT_LANGUAGE:
-        return value
-    tokens: dict[str, str] = {}
-    for index, source in enumerate(
-        sorted(
-            _protected_markdown_strings(protected_values, language),
-            key=len,
-            reverse=True,
-        )
-    ):
-        token = f"\x00decor2hl7-protected-{index}\x00"
-        while token in value:
-            token += "x"
-        if source in value:
-            value = value.replace(source, token)
-            tokens[token] = source
-    value = _replace_catalog_messages(value, "markdown", language)
-    for token, source in tokens.items():
-        value = value.replace(token, source)
-    return value
+def localized(function: Callable[P, T]) -> Callable[P, T]:
+    """Scope a report's explicit output_language without changing semantic data."""
+    signature = inspect.signature(function)
+    @wraps(function)
+    def render(*args: P.args, **kwargs: P.kwargs) -> T:
+        bound = signature.bind(*args, **kwargs)
+        language = normalize_output_language(bound.arguments.get("output_language", OUTPUT_LANGUAGE.get()))
+        token = OUTPUT_LANGUAGE.set(language)
+        try:
+            return function(*args, **kwargs)
+        finally:
+            OUTPUT_LANGUAGE.reset(token)
+    return render

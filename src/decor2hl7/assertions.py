@@ -12,194 +12,243 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from html import escape
-from typing import Any, Mapping
+from typing import Any, Mapping, TypedDict
 
 from .xmlnames import KNOWN_PREFIXES
 
 HL7 = "urn:hl7-org:v3"
 
 
+class PathStep(TypedDict):
+    name: str
+    attribute: bool
+    expected: str | None
+    predicates: list[Expression]
+
+
+class Selection(TypedDict):
+    descendant: bool
+    steps: list[PathStep]
+
+
+class Expression(TypedDict, total=False):
+    kind: str
+    children: list[Expression]
+    selection: Selection
+    operator: str
+    limit: int
+
+
+_NAME = r"[A-Za-z_][\w.-]*(?::[A-Za-z_][\w.-]*)?"
+_LITERAL = r"(?:'[^']*'|\"[^\"]*\")"
+_UNIQUE = re.compile(
+    r"empty\(\$([A-Za-z_][\w-]*)\[count\(index-of\(\$\1/@code\|\$\1/@nullFlavor,"
+    r"\./@code\|\./@nullFlavor\)\) > 1\]\)"
+)
+
+
 def _qname(name: str, namespaces: Mapping[str, str]) -> str:
     prefix, separator, local_name = name.partition(":")
-    if separator:
-        uri = namespaces.get(prefix) or KNOWN_PREFIXES.get(prefix)
-        if uri:
-            return f"{{{uri}}}{local_name}"
-    return name
+    if not separator:
+        return name
+    uri = namespaces.get(prefix) or KNOWN_PREFIXES.get(prefix)
+    if not uri:
+        raise ValueError(f"unsupported namespace prefix {prefix!r}")
+    return f"{{{uri}}}{local_name}"
 
 
-def _strip_outer(expr: str) -> str:
-    expr = expr.strip()
-    while expr.startswith("(") and expr.endswith(")"):
-        depth = 0; quote = None; valid = True
-        for index, char in enumerate(expr):
-            if quote:
-                if char == quote: quote = None
-                continue
-            if char in "'\"": quote = char; continue
-            if char == "(": depth += 1
-            elif char == ")":
-                depth -= 1
-                if depth == 0 and index != len(expr) - 1:
-                    valid = False; break
-        if not valid or depth != 0: break
-        expr = expr[1:-1].strip()
-    return expr
-
-
-def _split_top(expr: str, word: str) -> list[str]:
-    parts: list[str] = []
-    start = 0; paren = bracket = 0; quote: str | None = None; i = 0
-    token = f" {word} "
-    while i < len(expr):
-        char = expr[i]
+def _expression_text(value: str) -> str:
+    """Normalize only whitespace outside XPath literals; check delimiters."""
+    result: list[str] = []
+    stack: list[str] = []
+    quote = ""
+    for char in value.strip():
         if quote:
-            if char == quote: quote = None
-            i += 1; continue
-        if char in "'\"": quote = char; i += 1; continue
-        if char == "(": paren += 1
-        elif char == ")": paren -= 1
-        elif char == "[": bracket += 1
-        elif char == "]": bracket -= 1
-        if paren == 0 and bracket == 0 and expr.startswith(token, i):
-            parts.append(expr[start:i].strip()); i += len(token); start = i; continue
-        i += 1
+            result.append(char)
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+            result.append(char)
+        elif char in "([":
+            stack.append(char)
+            result.append(char)
+        elif char in ")]":
+            expected = "(" if char == ")" else "["
+            if not stack or stack.pop() != expected:
+                raise ValueError("unbalanced XPath delimiters")
+            result.append(char)
+        elif char.isspace():
+            if result and result[-1] != " ":
+                result.append(" ")
+        else:
+            result.append(char)
+    if quote or stack:
+        raise ValueError("unbalanced XPath expression")
+    return "".join(result).strip()
+
+
+def _split_top(expr: str, token: str) -> list[str]:
+    parts: list[str] = []
+    start = depth = 0
+    quote = ""
+    index = 0
+    while index < len(expr):
+        char = expr[index]
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char in "([":
+            depth += 1
+        elif char in ")]":
+            depth -= 1
+        elif depth == 0 and expr.startswith(token, index):
+            parts.append(expr[start:index].strip())
+            index += len(token)
+            start = index
+            continue
+        index += 1
     if parts:
         parts.append(expr[start:].strip())
     return parts
 
 
-def _split_path(path: str) -> tuple[bool, list[str]]:
-    descendant = path.strip().startswith("//")
-    text = path.strip()[2:] if descendant else path.strip()
-    parts: list[str] = []
-    start = 0; bracket = 0; quote: str | None = None
-    for i, char in enumerate(text):
-        if quote:
-            if char == quote: quote = None
+def _strip_outer(expr: str) -> str:
+    while expr.startswith("(") and expr.endswith(")"):
+        # A temporary top-level token distinguishes (a) or (b) from (a or b).
+        depth = 0
+        quote = ""
+        end = -1
+        for index, char in enumerate(expr):
+            if quote:
+                if char == quote:
+                    quote = ""
+            elif char in "'\"":
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+        if end != len(expr) - 1:
+            break
+        expr = expr[1:-1].strip()
+    return expr
+
+
+def _parse_selection(
+    text: str, variables: Mapping[str, str], namespaces: Mapping[str, str],
+) -> Selection:
+    descendant = text.startswith("//")
+    raw = text[2:] if descendant else text
+    segments = _split_top(raw, "/") or [raw]
+    steps: list[PathStep] = []
+    for index, segment in enumerate(segments):
+        attribute = re.fullmatch(rf"@({_NAME})(?:\s*=\s*({_LITERAL}))?", segment)
+        if attribute:
+            if index != len(segments) - 1:
+                raise ValueError("attributes must end an XPath selection")
+            literal = attribute.group(2)
+            steps.append({"name": _qname(attribute.group(1), namespaces), "attribute": True,
+                          "expected": literal[1:-1] if literal else None, "predicates": []})
             continue
-        if char in "'\"": quote = char; continue
-        if char == "[": bracket += 1
-        elif char == "]": bracket -= 1
-        elif char == "/" and bracket == 0:
-            parts.append(text[start:i].strip()); start = i + 1
-    if text[start:].strip(): parts.append(text[start:].strip())
-    return descendant, parts
+        name = re.match(rf"^({_NAME})", segment)
+        if not name:
+            raise ValueError(f"unsupported XPath step {segment!r}")
+        suffix = segment[name.end():].strip()
+        predicates: list[Expression] = []
+        while suffix:
+            if not suffix.startswith("["):
+                raise ValueError(f"unsupported XPath step {segment!r}")
+            depth = 0
+            quote = ""
+            end = -1
+            for offset, char in enumerate(suffix):
+                if quote:
+                    if char == quote:
+                        quote = ""
+                elif char in "'\"":
+                    quote = char
+                elif char == "[":
+                    depth += 1
+                elif char == "]":
+                    depth -= 1
+                    if depth == 0:
+                        end = offset
+                        break
+            if end < 0:
+                raise ValueError("unclosed XPath predicate")
+            predicates.append(_parse_expression(suffix[1:end], variables, namespaces))
+            suffix = suffix[end + 1:].strip()
+        steps.append({"name": _qname(name.group(1), namespaces), "attribute": False,
+                      "expected": None, "predicates": predicates})
+    return {"descendant": descendant, "steps": steps}
 
 
-def _segment(segment: str) -> tuple[str, list[str]]:
-    segment = segment.strip()
-    if "[" not in segment:
-        return segment, []
-    name = segment.split("[", 1)[0].strip()
-    predicates: list[str] = []
-    i = len(name); start = None; depth = 0; quote: str | None = None
-    while i < len(segment):
-        char = segment[i]
-        if quote:
-            if char == quote: quote = None
-        elif char in "'\"": quote = char
-        elif char == "[":
-            if depth == 0: start = i + 1
-            depth += 1
-        elif char == "]":
-            depth -= 1
-            if depth == 0 and start is not None:
-                predicates.append(segment[start:i].strip()); start = None
-        i += 1
-    return name, predicates
+def _parse_expression(
+    text: str, variables: Mapping[str, str], namespaces: Mapping[str, str],
+) -> Expression:
+    expr = _strip_outer(_expression_text(text))
+    if not expr:
+        raise ValueError("empty XPath expression")
+    unique = _UNIQUE.fullmatch(expr)
+    if unique:
+        variable = unique.group(1)
+        if variable not in variables:
+            raise ValueError("unknown XPath sequence variable")
+        return {"kind": "unique", "selection": _parse_selection(variables[variable], {}, namespaces)}
+    for operator in ("or", "and"):
+        parts = _split_top(expr, f" {operator} ")
+        if parts:
+            return {"kind": operator, "children": [_parse_expression(part, variables, namespaces) for part in parts]}
+    if expr.startswith("not(") and expr.endswith(")"):
+        return {"kind": "not", "children": [_parse_expression(expr[4:-1], variables, namespaces)]}
+    count = re.fullmatch(r"count\((.*)\)\s*(<=|>=|=|<|>)\s*(\d+)", expr)
+    if count:
+        return {"kind": "count", "selection": _parse_selection(count.group(1), variables, namespaces),
+                "operator": count.group(2), "limit": int(count.group(3))}
+    return {"kind": "path", "selection": _parse_selection(expr, variables, namespaces)}
 
 
-def _select(
-    path: str, context: ET.Element, root: ET.Element,
-    namespaces: Mapping[str, str],
-) -> list[Any]:
-    descendant, segments = _split_path(path)
-    if not segments:
-        return []
-    current: list[Any] = [root if descendant else context]
-    for index, raw_segment in enumerate(segments):
-        name, predicates = _segment(raw_segment)
-        if name.startswith("@"):
-            attr_expr = name[1:]
-            m = re.fullmatch(r"([^=\s]+)\s*=\s*(['\"])(.*?)\2", attr_expr)
-            if m:
-                attr, expected = m.group(1), m.group(3)
-                qname = _qname(attr, namespaces)
-                return [item.get(qname) for item in current if isinstance(item, ET.Element) and item.get(qname) == expected]
-            qname = _qname(attr_expr, namespaces)
-            return [item.get(qname) for item in current if isinstance(item, ET.Element) and item.get(qname) is not None]
-        qname = _qname(name, namespaces)
-        candidates: list[ET.Element] = []
-        for item in current:
-            if not isinstance(item, ET.Element): continue
-            if descendant and index == 0:
-                candidates.extend([node for node in item.iter() if node.tag == qname])
-            else:
-                candidates.extend([node for node in list(item) if node.tag == qname])
-        for predicate in predicates:
-            candidates = [
-                node for node in candidates
-                if _eval(predicate, node, root, {}, namespaces) is True
-            ]
+def _select(selection: Selection, context: ET.Element, root: ET.Element) -> list[Any]:
+    current: list[Any] = [root if selection["descendant"] else context]
+    for index, step in enumerate(selection["steps"]):
+        if step["attribute"]:
+            return [item.get(step["name"]) for item in current
+                    if isinstance(item, ET.Element) and item.get(step["name"]) is not None
+                    and (step["expected"] is None or item.get(step["name"]) == step["expected"])]
+        candidates = [node for item in current if isinstance(item, ET.Element)
+                      for node in (item.iter() if selection["descendant"] and index == 0 else iter(item))
+                      if node.tag == step["name"]]
+        for predicate in step["predicates"]:
+            candidates = [node for node in candidates if _evaluate(predicate, node, root)]
         current = candidates
     return current
 
 
-def _eval(
-    expr: str, context: ET.Element, root: ET.Element,
-    variables: Mapping[str, str], namespaces: Mapping[str, str],
-) -> bool | None:
-    expr = _strip_outer(re.sub(r"\s+", " ", expr.strip()))
-    if not expr:
-        return True
-    # The profile's XQuery uniqueness assertion for the MDRO value sequence.
-    if expr.startswith("empty($") and "index-of(" in expr and "@code|$" in expr and "/@nullFlavor" in expr:
-        var = re.match(r"empty\(\$([A-Za-z_][A-Za-z0-9_-]*)", expr)
-        if not var or var.group(1) not in variables:
-            return None
-        nodes = _select(variables[var.group(1)], context, root, namespaces)
-        seen: set[tuple[str, str]] = set()
-        for node in nodes:
-            if not isinstance(node, ET.Element): continue
-            value = node.get("code")
-            name = "code"
-            if value is None:
-                name, value = "nullFlavor", node.get("nullFlavor")
-            if value is None: continue
-            key = (name, value)
-            if key in seen: return False
-            seen.add(key)
-        return True
-    parts = _split_top(expr, "or")
-    if parts:
-        results = [
-            _eval(part, context, root, variables, namespaces) for part in parts
-        ]
-        if any(result is True for result in results): return True
-        if all(result is False for result in results): return False
-        return None
-    parts = _split_top(expr, "and")
-    if parts:
-        results = [
-            _eval(part, context, root, variables, namespaces) for part in parts
-        ]
-        if any(result is False for result in results): return False
-        if all(result is True for result in results): return True
-        return None
-    if expr.startswith("not(") and expr.endswith(")"):
-        result = _eval(expr[4:-1], context, root, variables, namespaces)
-        return None if result is None else not result
-    match = re.fullmatch(r"count\((.*)\)\s*(<=|>=|=|<|>)\s*(\d+)", expr)
-    if match:
-        count = len(_select(match.group(1), context, root, namespaces)); expected = int(match.group(3)); op = match.group(2)
-        return {"<=": count <= expected, ">=": count >= expected, "=": count == expected, "<": count < expected, ">": count > expected}[op]
-    match = re.fullmatch(r"@([^=\s]+)\s*=\s*(['\"])(.*?)\2", expr)
-    if match:
-        return context.get(_qname(match.group(1), namespaces)) == match.group(3)
-    if "$" in expr or "index-of(" in expr:
-        return None
-    return bool(_select(expr, context, root, namespaces))
+def _evaluate(expression: Expression, context: ET.Element, root: ET.Element) -> bool:
+    kind = expression["kind"]
+    if kind == "or":
+        return any(_evaluate(child, context, root) for child in expression["children"])
+    if kind == "and":
+        return all(_evaluate(child, context, root) for child in expression["children"])
+    if kind == "not":
+        return not _evaluate(expression["children"][0], context, root)
+    values = _select(expression["selection"], context, root)
+    if kind == "count":
+        count, limit, operator = len(values), expression["limit"], expression["operator"]
+        return {"<=": count <= limit, ">=": count >= limit, "=": count == limit,
+                "<": count < limit, ">": count > limit}[operator]
+    if kind == "unique":
+        keys = [("code", node.get("code")) if node.get("code") is not None else ("nullFlavor", node.get("nullFlavor"))
+                for node in values if isinstance(node, ET.Element)
+                and (node.get("code") is not None or node.get("nullFlavor") is not None)]
+        return len(keys) == len(set(keys))
+    return bool(values)
 
 
 def evaluate(
@@ -207,7 +256,11 @@ def evaluate(
     lets: Mapping[str, str] | None = None,
     namespaces: Mapping[str, str] | None = None,
 ) -> bool | None:
-    return _eval(test, context, root, lets or {}, namespaces or {})
+    try:
+        expression = _parse_expression(test, lets or {}, namespaces or {})
+    except ValueError:
+        return None
+    return _evaluate(expression, context, root)
 
 
 def validate_contexts(

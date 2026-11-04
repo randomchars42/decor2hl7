@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..domain import accepted_values
-from ..i18n import localize_markdown
+from ..i18n import message as _msg, localized
 from ..text import normalize_match_text as _norm
 from ..workspace import write_json
 
@@ -64,6 +64,7 @@ def _best_column(
     return selected, best[0], scored[:5]
 
 
+@localized
 def csv_mapping_proposal(
     model: Mapping[str, Any],
     input_dir: Path | None,
@@ -147,14 +148,13 @@ def csv_mapping_proposal(
         "fields": fields,
     }
     lines = [
-        "# CSV-to-dataset mapping",
+        (_msg('markdown.csv_to_dataset_mapping')),
         "",
-        "Edit `csv-mapping.json`. Each row connects one dataset datapoint to one",
-        "input column; parsing is shown only when it changes the input value.",
+        _msg('markdown.edit_csv_mapping_json_each_row_connects_one'),
         "",
-        f"Mapped automatically: **{sum(value is not None for value in fields.values())}/{len(fields)}**.",
+        f"{_msg('markdown.mapped_automatically')} **{sum((value is not None for value in fields.values()))}/{len(fields)}**.",
         "",
-        "| Dataset datapoint | CSV source and column | Parsing or review note |",
+        (_msg('markdown.dataset_datapoint_csv_source_and_column_parsing_or')),
         "|---|---|---|",
     ]
     for path, field in model.get("fields", {}).items():
@@ -181,19 +181,14 @@ def csv_mapping_proposal(
                 for candidate_score, name in detail[path][1][:3]
             ) or "none"
             lines.append(
-                f"| {field.get('name') or path} (`{path}`) | — | "
-                f"Review candidates: {alternatives} |"
+                f"| {field.get('name') or path} (`{path}`) | — | {_msg('markdown.review_candidates')} {alternatives} |"
             )
     lines += [
         "",
-        "Candidate scores are suggestions only. Unmapped rows remain `null` in the JSON",
-        "until a user chooses a source column.",
+        _msg('markdown.candidate_scores_are_suggestions_only_unmapped_rows_remain'),
         "",
     ]
-    return proposal, localize_markdown(
-        "\n".join(lines) + "\n", output_language,
-        protected_values=(model, headers, proposal),
-    )
+    return proposal, ("\n".join(lines) + "\n")
 
 
 def _read_column_values(input_dir: Path | None, locator: str) -> set[str]:
@@ -286,6 +281,7 @@ def code_mapping_defaults(model: Mapping[str, Any]) -> dict[str, Any]:
     return {"version": 1, "fields": fields}
 
 
+@localized
 def codes_mapping_proposal(
     model: Mapping[str, Any],
     csv_mapping: Mapping[str, Any],
@@ -298,12 +294,9 @@ def codes_mapping_proposal(
         path: dict(values) for path, values in proposal["fields"].items()
     }
     lines = [
-        "# Input-value-to-dataset-code mapping",
+        (_msg('markdown.input_value_to_dataset_code_mapping')),
         "",
-        "Edit `codes-mapping.json`. Canonical dataset values are accepted unchanged;",
-        "the tables therefore show only aliases that require translation and unresolved",
-        "input values observed in the CSV files. An unresolved value in a finite domain",
-        "is an input error; source normalization does not choose an HL7 missing-data code.",
+        _msg('markdown.edit_codes_mapping_json_canonical_dataset_values_are'),
         "",
     ]
 
@@ -344,10 +337,7 @@ def codes_mapping_proposal(
         lines.append(f"## {field.get('name') or path}")
         lines.append("")
         lines.append(
-            f"`{path}` — "
-            f"{sum(raw == canonical for raw, canonical in translations.items())} "
-            f"canonical values accepted directly; {observed_mapped}/{len(raw_values)} "
-            "observed input values mapped."
+            f"`{path}` — {sum((raw == canonical for (raw, canonical) in translations.items()))} {_msg('markdown.canonical_values_accepted_directly')} {observed_mapped}/{len(raw_values)} {_msg('markdown.observed_input_values_mapped')}"
         )
         lines.append("")
         shown = [
@@ -357,27 +347,25 @@ def codes_mapping_proposal(
         ]
         if shown:
             lines += [
-                "| Input value | Dataset value |",
+                (_msg('markdown.input_value_dataset_value')),
                 "|---|---|",
             ]
             for raw, destination_value in shown:
                 destination = (
                     f"`{destination_value}`"
                     if destination_value
-                    else "**UNRESOLVED — outside executable dataset domain**"
+                    else (_msg('markdown.unresolved_outside_executable_dataset_domain'))
                 )
                 lines.append(f"| `{raw}` | {destination} |")
         else:
-            lines.append("No aliases require configuration.")
+            lines.append((_msg('markdown.no_aliases_require_configuration')))
         lines.append("")
 
     result = {"version": 1, "fields": fields}
-    return result, localize_markdown(
-        "\n".join(lines) + "\n", output_language,
-        protected_values=(model, csv_mapping, result),
-    )
+    return result, ("\n".join(lines) + "\n")
 
 
+@localized
 def write_code_mapping(
     model_dir: Path,
     model: Mapping[str, Any],
@@ -393,6 +381,7 @@ def write_code_mapping(
     return proposal
 
 
+@localized
 def write_input_mappings(
     output_dir: Path,
     input_dir: Path,

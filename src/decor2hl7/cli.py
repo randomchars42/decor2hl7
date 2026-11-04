@@ -3,22 +3,21 @@
 from __future__ import annotations
 
 import argparse
-from contextvars import ContextVar
-import datetime as dt
-import hashlib
 import json
-import re
 import sys
-import uuid
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from .runtime_config import _root, _require, _explicit_path, _cda_mapping_path, _site_paths, _runtime_files
+from .runtime import cmd_transform, cmd_send, cmd_run, cmd_extract_source, cmd_run_source, cmd_status
+from .ui import say as _say, out as _out
+from .i18n import OUTPUT_LANGUAGE as _OUTPUT_LANGUAGE
 from . import __version__
+from .bundle import admit_mapping, mapping_lock as _mapping_lock
 from .i18n import (
+    message as _msg, localized,
     Translator,
     configured_output_language,
-    localize_markdown,
-    localize_ui,
 )
 from .workspace import (
     copy_if_missing,
@@ -26,120 +25,38 @@ from .workspace import (
     load_json,
     load_settings,
     input_dir,
-    release_site_dir,
     release_spec_dir,
     selected_release,
     selected_transaction,
     set_release,
     set_transaction,
-    state_dir,
-    transaction_mapping_dir,
     transaction_model_dir,
-    transaction_out_dir,
-    transaction_site_dir,
     transaction_spec_dir,
     transaction_test_dir,
-    write_bytes,
     write_json,
 )
 
 
-_OUTPUT_LANGUAGE: ContextVar[str] = ContextVar(
-    "decor2hl7_output_language", default="en"
-)
+class _LocalizedHelpFormatter(argparse.HelpFormatter):
+    def add_usage(self, usage: str | None, actions: Iterable[argparse.Action], groups: Iterable[argparse._MutuallyExclusiveGroup], prefix: str | None = None) -> None:
+        super().add_usage(usage, actions, groups, prefix=prefix or self._usage_prefix)
+
+    def __init__(self, prog: str, *, language: str) -> None:
+        super().__init__(prog)
+        self._usage_prefix = Translator(language).text("ui.usage") + " "
 
 
 class _LocalizedArgumentParser(argparse.ArgumentParser):
-    """Apply the selected locale to argparse-owned help text."""
-
-    def __init__(
-        self, *args: Any, output_language: str | None = None, **kwargs: Any,
-    ) -> None:
-        self._output_language = output_language
+    """Construct argparse labels in their language before formatting."""
+    def __init__(self, *args: Any, output_language: str | None = None, **kwargs: Any) -> None:
+        language = output_language or _OUTPUT_LANGUAGE.get()
+        translator = Translator(language)
+        kwargs["formatter_class"] = lambda prog: _LocalizedHelpFormatter(prog, language=language)
+        kwargs["add_help"] = False
         super().__init__(*args, **kwargs)
-
-    def _language(self) -> str:
-        return self._output_language or _OUTPUT_LANGUAGE.get()
-
-    def format_help(self) -> str:
-        return localize_ui(super().format_help(), self._language())
-
-    def format_usage(self) -> str:
-        return localize_ui(super().format_usage(), self._language())
-
-
-def _say(message: str) -> None:
-    print(localize_ui(message, _OUTPUT_LANGUAGE.get()), file=sys.stderr)
-
-
-def _out(message: str) -> None:
-    print(localize_ui(message, _OUTPUT_LANGUAGE.get()))
-
-
-def _root(args: argparse.Namespace) -> Path:
-    return Path(args.root).resolve()
-
-
-def _require(path: Path, hint: str = "") -> Path:
-    if path.exists():
-        return path
-    message = f"missing {path}"
-    if hint:
-        message += f"\n  {hint}"
-    raise ValueError(message)
-
-
-def _explicit_path(value: str | Path) -> Path:
-    path = Path(value).expanduser()
-    return path.resolve()
-
-
-def _cda_mapping_path(
-    root: Path,
-    release: Mapping[str, Any],
-    transaction: Mapping[str, Any],
-    override: str | Path | None = None,
-) -> Path:
-    if override is None:
-        return transaction_mapping_dir(root, release, transaction) / "cda-mapping.json"
-    path = _explicit_path(override)
-    return path / "cda-mapping.json" if path.is_dir() or not path.suffix else path
-
-
-def _site_paths(
-    root: Path,
-    release: Mapping[str, Any],
-    transaction: Mapping[str, Any],
-    override: str | Path | None = None,
-) -> tuple[Path, Path, Path, Path]:
-    """Return bundle dir, CSV mapping, code mapping and site JSON paths.
-
-    The default workspace keeps release-wide site.json one level above the
-    transaction-specific CSV/code mappings.  An explicit bundle path keeps all
-    three files together, which makes a local or test configuration portable.
-    """
-    if override is None:
-        bundle = transaction_site_dir(root, release, transaction)
-        return (
-            bundle,
-            bundle / "csv-mapping.json",
-            bundle / "codes-mapping.json",
-            release_site_dir(root, release) / "site.json",
-        )
-    path = _explicit_path(override)
-    if path.suffix:
-        bundle = path.parent
-        site = path
-    else:
-        bundle = path
-        site = bundle / "site.json"
-    return bundle, bundle / "csv-mapping.json", bundle / "codes-mapping.json", site
-
-
-def _safe_key(value: str) -> str:
-    base = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "record"
-    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
-    return f"{base}--{digest}"
+        self._positionals.title = translator.text("ui.positional_arguments").removesuffix(":")
+        self._optionals.title = translator.text("ui.options").removesuffix(":")
+        self.add_argument("-h", "--help", action="help", help=translator.text("cli.help"))
 
 
 def _network(root: Path, ipv6_override: bool = False) -> tuple[str, str, bool, str]:
@@ -173,7 +90,7 @@ def _filter(rows: list[dict[str, str]], needle: str | None) -> list[dict[str, st
 def _print_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
     """Print a compact terminal table with visibly separated columns."""
     localized_headers = [
-        localize_ui(header, _OUTPUT_LANGUAGE.get()) for header in headers
+        (header) for header in headers
     ]
     widths = [len(header) for header in localized_headers]
     for row in rows:
@@ -203,9 +120,9 @@ def cmd_list_versions(args: argparse.Namespace) -> int:
          row["label"], row["date"], row["status"])
         for row in rows
     ]
-    _print_table(("KEY", "SELECTED", "LABEL", "RELEASE_DATE", "STATUS"), table)
+    _print_table(("KEY", (_msg('ui.selected')), "LABEL", "RELEASE_DATE", (_msg('ui.status'))), table)
     if rows:
-        _say("select with: decor2hl7 set-version <KEY>")
+        _say((_msg('ui.select_with') + ' decor2hl7 set-version <KEY>'))
     return 0 if rows else 1
 
 
@@ -218,8 +135,8 @@ def cmd_set_version(args: argparse.Namespace) -> int:
         releases(prefix, ipv4=ipv4, base_url=api_base), args.identifier
     )
     set_release(root, row)
-    _say(f"selected release: {row['key']} ({row['date']})")
-    _say("transaction selection cleared; run `decor2hl7 list-transactions`")
+    _say(f"{_msg('ui.selected_release')} {row['key']} ({row['date']})")
+    _say((_msg('ui.transaction_selection_cleared') + ' run `decor2hl7 list-transactions`'))
     return 0
 
 
@@ -243,9 +160,9 @@ def cmd_list_transactions(args: argparse.Namespace) -> int:
          row["version_label"], row["effective_date"], row["status"], row["name"], row["id"])
         for row in rows
     ]
-    _print_table(("KEY", "SELECTED", "VERSION", "EFFECTIVE_DATE", "STATUS", "NAME", "OID"), table)
+    _print_table(("KEY", (_msg('ui.selected')), "VERSION", "EFFECTIVE_DATE", (_msg('ui.status')), "NAME", "OID"), table)
     if rows:
-        _say("select with: decor2hl7 set-transaction <KEY>")
+        _say((_msg('ui.select_with') + ' decor2hl7 set-transaction <KEY>'))
     return 0 if rows else 1
 
 
@@ -256,8 +173,7 @@ def cmd_set_transaction(args: argparse.Namespace) -> int:
     row = select_transaction(_transaction_rows(root, args.ipv6), args.identifier)
     set_transaction(root, row)
     _say(
-        f"selected transaction: {row['key']} "
-        f"({row['id']} @ {row['effective_date'] or 'dynamic'})"
+        f"{_msg('ui.selected_transaction')} {row['key']} ({row['id']} @ {row['effective_date'] or 'dynamic'})"
     )
     return 0
 
@@ -302,26 +218,25 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         f"{summary.get('error', 0)} errors"
     )
     _say(
-        f"transaction closure: {len(closure.get('build_resources', []))} build resources, "
-        f"{len(closure.get('evidence_resources', []))} evidence resources"
+        f"{_msg('ui.transaction_closure')} {len(closure.get('build_resources', []))} {_msg('ui.build_resources')}, {len(closure.get('evidence_resources', []))} {_msg('ui.evidence_resources')}"
     )
     if closure.get("truncated"):
-        _say("warning: closure stopped at --max-requests; increase the limit and rerun fetch")
+        _say((_msg('ui.warning') + ' closure stopped at --max-requests; increase the limit and rerun fetch'))
     if closure.get("crawl_complete") and not closure.get("build_ready", True):
         for error in closure.get("readiness_errors", []):
-            _say(f"error: {error}")
+            _say(f"{_msg('ui.error')} {error}")
     for warning in closure.get("degradation_warnings", []):
-        _say(f"warning: {warning}")
+        _say(f"{_msg('ui.warning')} {warning}")
     if closure.get("errors"):
         for error in closure.get("errors", []):
-            _say(f"error: {error}")
+            _say(f"{_msg('ui.error')} {error}")
     succeeded = (
         not closure.get("errors")
         and not closure.get("truncated")
         and closure.get("build_ready", True)
     )
     if getattr(args, "fail_on_degraded", False) and closure.get("degraded_resources"):
-        _say("error: --fail-on-degraded rejected the degraded retrieval closure")
+        _say((_msg('ui.error') + ' --fail-on-degraded rejected the degraded retrieval closure'))
         succeeded = False
     return 0 if succeeded else 2
 
@@ -441,11 +356,9 @@ def cmd_build(args: argparse.Namespace) -> int:
     })
     write_json(model_dir / "model.json", model)
     _say(f"model: {len(model['fields'])} datapoints, {len(model['groups'])} groups")
-    _say(f"code mapping defaults: {sum(len(values) for values in code_mapping['fields'].values())} aliases across {len(code_mapping['fields'])} coded fields")
+    _say(f"{_msg('ui.code_mapping_defaults')} {sum((len(values) for values in code_mapping['fields'].values()))} {_msg('ui.aliases_across')} {len(code_mapping['fields'])} {_msg('ui.coded_fields')}")
     _say(
-        f"CDA: {cda['stats']['reachable_templates']} reachable templates, "
-        f"{cda['stats']['targets']} physical named targets, "
-        f"{cda['stats'].get('datapoints', 0)} logical mapped datapoints"
+        f"CDA: {cda['stats']['reachable_templates']} {_msg('ui.reachable_templates')}, {cda['stats']['targets']} {_msg('ui.physical_named_targets')}, {cda['stats'].get('datapoints', 0)} {_msg('ui.logical_mapped_datapoints')}"
     )
     constraint_diagnostics = list(cda.get("constraint_diagnostics", []))
     specialization_diagnostics = [
@@ -454,10 +367,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     ]
     if specialization_diagnostics:
         _say(
-            "warning: "
-            f"{len(specialization_diagnostics)} CDA SPEC constraint weakening(s); "
-            "explicit child constraints were used; see "
-            f"{model_dir / 'build-diagnostics.md'}"
+            f"{_msg('ui.warning')} {len(specialization_diagnostics)} CDA SPEC constraint weakening(s); explicit child constraints were used; see {model_dir / 'build-diagnostics.md'}"
         )
     other_diagnostics = [
         row for row in constraint_diagnostics
@@ -469,10 +379,7 @@ def cmd_build(args: argparse.Namespace) -> int:
             for row in other_diagnostics
         )
         _say(
-            "warning: "
-            f"{len(other_diagnostics)} owner-rule diagnostic(s), "
-            f"{error_count} error-level; see "
-            f"{model_dir / 'build-diagnostics.md'}"
+            f"{_msg('ui.warning')} {len(other_diagnostics)} owner-rule diagnostic(s), {error_count} error-level; see {model_dir / 'build-diagnostics.md'}"
         )
     audit_path = model_dir / "mapping-audit.json"
     if audit_path.is_file():
@@ -487,11 +394,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     if diagnostics["status"] == "degraded":
         summary = diagnostics["summary"]
         _say(
-            "warning: degraded build: "
-            f"{summary['build_degraded']} degraded artifacts affect this build, "
-            f"{summary['crawl_degraded']} degraded artifacts in the crawl, "
-            f"{summary['unresolved_templates']} unresolved CDA references; "
-            f"see {model_dir / 'build-diagnostics.md'}"
+            f"{_msg('ui.warning')} degraded build: {summary['build_degraded']} degraded artifacts affect this build, {summary['crawl_degraded']} degraded artifacts in the crawl, {summary['unresolved_templates']} unresolved CDA references; see {model_dir / 'build-diagnostics.md'}"
         )
     validation_summary = conformance.get("summary", {})
     _say(
@@ -502,9 +405,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     )
     if getattr(args, "fail_on_degraded", False) and diagnostics.get("build_degraded"):
         _say(
-            "error: --fail-on-degraded rejected the degraded build: "
-            f"{diagnostics['summary']['build_degraded']} degraded artifacts "
-            "affect this build"
+            f"{_msg('ui.error')} --fail-on-degraded rejected the degraded build: {diagnostics['summary']['build_degraded']} degraded artifacts affect this build"
         )
         return 2
     return 0
@@ -559,9 +460,9 @@ def cmd_propose_input(args: argparse.Namespace) -> int:
         join_column=args.join_column or "patient_id",
         output_language=args.output_language,
     )
-    _say(f"CSV mapped proposal: {sum(value is not None for value in proposals['csv']['fields'].values())}/{len(model.get('fields', {}))}")
-    _say(f"input mapping proposals written to: {proposal_dir}")
-    _say(f"input snapshot inspected: {source_root}")
+    _say(f"{_msg('ui.csv_mapped_proposal')} {sum((value is not None for value in proposals['csv']['fields'].values()))}/{len(model.get('fields', {}))}")
+    _say(f"{_msg('ui.input_mapping_proposals_written_to')} {proposal_dir}")
+    _say(f"{_msg('ui.input_snapshot_inspected')} {source_root}")
     return 0
 
 
@@ -650,25 +551,23 @@ def _merge_code_mapping_defaults(source: Path, destination: Path) -> int:
     return added
 
 
+@localized
 def _copy_generated_guide(
     source: Path,
     destination: Path,
     *,
     output_language: str = "en",
-    protected_values: Iterable[Any] = (),
 ) -> None:
     """Keep generated, read-only guidance beside the configuration it explains."""
     source = _require(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     original = source.read_text(encoding="utf-8")
-    content = localize_markdown(
-        original, output_language, protected_values=protected_values
-    )
+    content = (original)
     if source.resolve() == destination.resolve() and content == original:
-        _say("kept    " + str(destination))
+        _say((_msg('ui.kept')) + str(destination))
         return
     destination.write_text(content, encoding="utf-8")
-    _say("updated " + str(destination))
+    _say((_msg('ui.updated')) + str(destination))
 
 
 def _mapping_decisions_differ(
@@ -684,6 +583,7 @@ def _mapping_decisions_differ(
     )
 
 
+@localized
 def _write_mapping_guides(
     model_dir: Path,
     destination: Path,
@@ -705,14 +605,9 @@ def _write_mapping_guides(
         }
         for guide_name, source_name in guide_sources.items():
             source = model_dir / source_name
-            if guide_name == "cda-mapping.md" and not source.exists():
-                # Older generated workspaces used the reviewed-bundle filename
-                # for the proposal guide. Allow one refresh before the next build.
-                source = model_dir / "cda-mapping.md"
             _copy_generated_guide(
                 source, destination.parent / guide_name,
                 output_language=output_language,
-                protected_values=(model, cda, mapping, audit),
             )
         return
 
@@ -738,11 +633,11 @@ def _write_mapping_guides(
         model_dir / "cda-mapping-details.md"
     ).read_text(encoding="utf-8")
     accepted_start = max(
-        generated_details.find("# Accepted mappings\n"),
+        generated_details.find((_msg('markdown.accepted_mappings') + '\n')),
         generated_details.find("# Akzeptierte mappings\n"),
     )
     analysis_candidates = [
-        generated_details.find("# Datapoint analysis\n"),
+        generated_details.find((_msg('markdown.datapoint_analysis') + '\n')),
         generated_details.find("# Datapoint-Analyse\n"),
     ]
     analysis_start = next(
@@ -752,27 +647,18 @@ def _write_mapping_guides(
         accepted = render_accepted_cda_mappings_markdown(
             model, cda, mapping, output_language=output_language
         ).rstrip()
-        rendered["cda-mapping-details.md"] = localize_markdown(
-            (
-                generated_details[:accepted_start]
+        rendered["cda-mapping-details.md"] = (generated_details[:accepted_start]
                 + accepted
                 + "\n\n# Generated proposal evidence\n\n"
-                + "The following audit explains what the compiler could establish "
-                "without reviewer decisions. It may therefore show a reviewed "
-                "mapping above as unselected or non-executable in the generated "
-                "proposal.\n\n"
-                + generated_details[analysis_start:]
-            ),
-            output_language,
-            protected_values=(model, cda, mapping, proposal, audit),
-        )
+                + ('The following audit explains what the compiler could establish without reviewer decisions. It may therefore show a reviewed mapping above as unselected or non-executable in the ' + _msg('ui.generated') + 'proposal.\n\n')
+                + generated_details[analysis_start:])
     else:
         rendered["cda-mapping-details.md"] = generated_details
 
     for guide_name, content in rendered.items():
         target = destination.parent / guide_name
         target.write_text(content, encoding="utf-8")
-        _say("updated " + str(target))
+        _say((_msg('ui.updated')) + str(target))
 
 
 def _merge_mapping_configuration_notes(
@@ -803,25 +689,6 @@ def _merge_mapping_configuration_notes(
         current["configuration_notes"] = merged
         write_json(destination, current)
     return len(generated)
-
-
-def _mapping_lock(
-    release: Mapping[str, Any], transaction: Mapping[str, Any],
-    model: Mapping[str, Any], cda: Mapping[str, Any], mapping: Mapping[str, Any],
-) -> dict[str, Any]:
-    return {
-        "version": 1,
-        "release": {"key": release.get("key"), "date": release.get("date")},
-        "transaction": {
-            "key": transaction.get("key"), "id": transaction.get("id"),
-            "effective_date": transaction.get("effective_date"),
-        },
-        "model_sha256": _json_digest(model),
-        "cda_sha256": _json_digest(cda),
-        # Informational provenance.  Reviewers may edit the mapping after it is
-        # initialized; each test result records the actual tested hash.
-        "mapping_sha256_at_creation": _json_digest(mapping),
-    }
 
 
 def _report_coverage(
@@ -868,25 +735,13 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
     if reset:
         write_json(destination, load_json(source))
         created = False
-        _say("reset   " + str(destination))
+        _say((_msg('ui.reset')) + str(destination))
     else:
         created = copy_if_missing(source, destination)
     if created:
-        _say("created " + str(destination))
+        _say((_msg('ui.created')) + str(destination))
     elif not reset:
-        from .compile.mapping import (
-            _mapping_configuration_notes, migrate_mapping_target_identities,
-        )
-        current_mapping = load_json(destination)
-        previous_identities = current_mapping.get("target_identities")
-        target_migrations = migrate_mapping_target_identities(
-            current_mapping, load_json(source), cda
-        )
-        if (
-            target_migrations
-            or current_mapping.get("target_identities") != previous_identities
-        ):
-            write_json(destination, current_mapping)
+        from .compile.mapping import _mapping_configuration_notes
         audit = load_json(_require(model_dir / "mapping-audit.json"))
         notes = _merge_mapping_configuration_notes(
             source,
@@ -896,19 +751,17 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
             ),
         )
         changes = []
-        if target_migrations:
-            changes.append(f"migrated {target_migrations} CDA target reference(s)")
         if notes:
             changes.append(f"refreshed {notes} configuration note(s)")
         suffix = f" ({'; '.join(changes)})" if changes else ""
-        _say("kept    " + str(destination) + suffix)
+        _say((_msg('ui.kept')) + str(destination) + suffix)
         from .compile.mapping import mapping_field_delta
         delta = mapping_field_delta(load_json(destination), load_json(source))
         _report_coverage(
             model, cda, audit, load_json(source), load_json(destination)
         )
         for path in delta["lost"]:
-            _say("review  " + str(path))
+            _say((_msg('ui.review')) + str(path))
     mapping = load_json(destination)
     proposal = load_json(source)
     audit = (
@@ -923,9 +776,9 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
     lock = destination.parent / "mapping-lock.json"
     if reset or not lock.exists():
         write_json(lock, _mapping_lock(release, transaction, model, cda, mapping))
-        _say(("updated " if reset else "created ") + str(lock))
+        _say(((_msg('ui.updated')) if reset else (_msg('ui.created'))) + str(lock))
     else:
-        _say("kept    " + str(lock))
+        _say((_msg('ui.kept')) + str(lock))
     return 0
 
 
@@ -948,54 +801,26 @@ def cmd_init_site_config(args: argparse.Namespace) -> int:
             "run `decor2hl7 propose-input --input PATH` first",
         )
         if copy_if_missing(source, destination):
-            _say("created " + str(destination))
+            _say((_msg('ui.created')) + str(destination))
         elif name == "codes-mapping":
             added = _merge_code_mapping_defaults(source, destination)
             suffix = f" (+{added} generated defaults)" if added else ""
-            _say("kept    " + str(destination) + suffix)
+            _say((_msg('ui.kept')) + str(destination) + suffix)
         else:
-            _say("kept    " + str(destination))
+            _say((_msg('ui.kept')) + str(destination))
         guide_source = proposal_dir / f"{name}.md"
-        if name == "codes-mapping" and not guide_source.exists():
-            guide_source = model_dir / "codes-mapping.md"
         _copy_generated_guide(
             guide_source,
             destination.with_suffix(".md"),
             output_language=args.output_language,
-            protected_values=(model, load_json(source)),
         )
     if not site.exists():
         csv_proposal = load_json(proposal_dir / "csv-mapping.proposed.json")
         write_json(site, _site_scaffold(root, release, transaction, csv_proposal))
-        _say(f"created {site}")
+        _say(f"{_msg('ui.created')}{site}")
     else:
-        _say(f"kept    {site}")
+        _say(f"{_msg('ui.kept')}{site}")
     return 0
-
-
-def _runtime_files(
-    root: Path,
-    cda_mapping_override: str | Path | None = None,
-    site_config_override: str | Path | None = None,
-) -> tuple[
-    dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]
-]:
-    release = selected_release(root)
-    transaction = selected_transaction(root)
-    model_dir = transaction_model_dir(root, release, transaction)
-    _, csv_path, codes_path, site_path = _site_paths(
-        root, release, transaction, site_config_override
-    )
-    mapping_path = _cda_mapping_path(
-        root, release, transaction, cda_mapping_override
-    )
-    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build`"))
-    cda = load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`"))
-    csv_mapping = load_json(_require(csv_path, "run `decor2hl7 init-site-config`"))
-    codes_mapping = load_json(_require(codes_path, "run `decor2hl7 init-site-config`"))
-    cda_mapping = load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`"))
-    site = load_json(_require(site_path, "run `decor2hl7 init-site-config`"))
-    return model, cda, csv_mapping, codes_mapping, cda_mapping, site
 
 
 def _verify_compiled_sources(
@@ -1024,14 +849,10 @@ def _verify_compiled_sources(
 
 def _print_source_parity(parity: Mapping[str, Any] | None) -> None:
     if parity is None:
-        _out("CDA source endpoint parity: unavailable")
+        _out((_msg('ui.cda_source_endpoint_parity_unavailable')))
         return
     _out(
-        "CDA source endpoint parity: "
-        f"{parity.get('compiled', 0)}/{parity.get('declared', 0)} compiled; "
-        f"{len(parity.get('fixed_structural_attributes', []))} fixed structural; "
-        f"{len(parity.get('reviewed_branch_replacements', []))} reviewed replacements; "
-        f"{len(parity.get('unexpected_missing', []))} unexpected missing"
+        f"CDA source endpoint parity: {parity.get('compiled', 0)}/{parity.get('declared', 0)} compiled; {len(parity.get('fixed_structural_attributes', []))} {_msg('ui.fixed_structural')}; {len(parity.get('reviewed_branch_replacements', []))} {_msg('ui.reviewed_replacements')}; {len(parity.get('unexpected_missing', []))} {_msg('ui.unexpected_missing')}"
     )
 
 
@@ -1066,7 +887,7 @@ def cmd_check(args: argparse.Namespace) -> int:
                 ))
             except ValueError as error:
                 errors.append(str(error))
-    _out(f"model datapoints: {len(model.get('fields', {}))}")
+    _out(f"{_msg('ui.model_datapoints')} {len(model.get('fields', {}))}")
     _out(f"CSV mapped: {sum(value is not None for value in csv_mapping.get('fields', {}).values())}")
     _out(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
     _out(f"CDA narrative-only mapped: {len(narrative_blocks(cda_mapping))}")
@@ -1075,19 +896,19 @@ def cmd_check(args: argparse.Namespace) -> int:
         completion_flavor = required_unmapped_null_flavor(cda_mapping)
     except ValueError:
         completion_flavor = "invalid"
-    _out(f"required unmapped CDA leaves: nullFlavor={completion_flavor}")
-    _out(f"CDA unresolved templates: {len(cda.get('unresolved_templates', []))}")
+    _out(f"{_msg('ui.required_unmapped_cda_leaves')} nullFlavor={completion_flavor}")
+    _out(f"{_msg('ui.cda_unresolved_templates')} {len(cda.get('unresolved_templates', []))}")
     _print_source_parity(parity)
     closure = model.get("meta", {}).get("artifact_closure", {})
     unavailable = closure.get("unavailable_artifacts", []) if isinstance(closure, Mapping) else []
     if unavailable:
-        _out(f"build warning: {len(unavailable)} unavailable dependency artifacts")
+        _out(f"build {_msg('ui.warning')} {len(unavailable)} {_msg('ui.unavailable_dependency_artifacts')}")
     if errors:
-        _out("configuration errors:")
+        _out((_msg('ui.configuration_errors')))
         for message in errors:
             _out(f"  - {message}")
         return 1
-    _out("configuration: OK")
+    _out((_msg('ui.configuration_ok')))
     return 0
 
 
@@ -1120,18 +941,10 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
     ))
     source_errors, parity = _verify_compiled_sources(root, cda)
     errors.extend(source_errors)
-    lock_path = mapping_path.parent / "mapping-lock.json"
-    if lock_path.exists():
-        lock = load_json(lock_path)
-        if lock.get("model_sha256") != _json_digest(model):
-            errors.append("mapping-lock.json was created for a different compiled dataset model")
-        if lock.get("cda_sha256") != _json_digest(cda):
-            errors.append("mapping-lock.json was created for a different compiled CDA model")
-        locked_tx = lock.get("transaction", {})
-        if isinstance(locked_tx, Mapping) and locked_tx.get("id") != transaction.get("id"):
-            errors.append("mapping-lock.json names a different transaction OID")
-    else:
-        errors.append("mapping-lock.json is missing beside cda-mapping.json")
+    try:
+        admit_mapping(mapping_path, release, transaction, model, cda)
+    except ValueError as error:
+        errors.append(str(error))
     _out(f"CDA mapped: {sum(value is not None for value in cda_mapping.get('fields', {}).values())}")
     _out(f"CDA narrative-only mapped: {len(narrative_blocks(cda_mapping))}")
     _out(f"CDA target defaults: {len(cda_mapping.get('target_defaults', {}))}")
@@ -1140,25 +953,25 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
     site_requirements = (
         site_requirements if isinstance(site_requirements, Mapping) else {}
     )
-    _out(f"CDA site requirements: {len(site_requirements)}")
+    _out(f"{_msg('ui.cda_site_requirements')} {len(site_requirements)}")
     for name, rule in sorted(site_requirements.items()):
         channel = (
             str(rule.get("channel") or "?")
             if isinstance(rule, Mapping) else "?"
         )
-        _out(f"site config required: cda.{channel}[{name!r}]")
+        _out(f"{_msg('ui.site_config_required')} cda.{channel}[{name!r}]")
     try:
         completion_flavor = required_unmapped_null_flavor(cda_mapping)
     except ValueError:
         completion_flavor = "invalid"
-    _out(f"required unmapped CDA leaves: nullFlavor={completion_flavor}")
+    _out(f"{_msg('ui.required_unmapped_cda_leaves')} nullFlavor={completion_flavor}")
     _out(f"mapping: {mapping_path}")
     if errors:
-        _out("CDA mapping errors:")
+        _out((_msg('ui.cda_mapping_errors')))
         for message in errors:
             _out(f"  - {message}")
         return 1
-    _out("CDA mapping: OK")
+    _out((_msg('ui.cda_mapping_ok')))
     return 0
 
 
@@ -1182,11 +995,11 @@ def cmd_setup_test(args: argparse.Namespace) -> int:
         force=args.force,
         scenario_dir=_explicit_path(args.scenario) if args.scenario else None,
     )
-    _say(f"test fixture: {test_dir}")
+    _say(f"{_msg('ui.test_fixture')} {test_dir}")
     if args.scenario:
-        _say(f"authored scenario set: {expected['scenario']['name']}")
-    _say(f"generated {len(expected['generated_fields'])} model datapoint columns")
-    _say(f"CDA-mapped fields covered by input: {len(expected['mapped_fields'])}")
+        _say(f"{_msg('ui.authored_scenario_set')} {expected['scenario']['name']}")
+    _say(f"{_msg('ui.generated')}{len(expected['generated_fields'])} {_msg('ui.model_datapoint_columns')}")
+    _say(f"{_msg('ui.cda_mapped_fields_covered_by_input')} {len(expected['mapped_fields'])}")
     return 0
 
 
@@ -1230,696 +1043,21 @@ def cmd_check_input(args: argparse.Namespace) -> int:
     errors = validate.verify_compiled_cda(cda)
     errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
     if errors:
-        _out("configuration errors:")
+        _out((_msg('ui.configuration_errors')))
         for error in errors:
             _out(f"  - {error}")
         return 1
     records = data.ingest(source_root, model, csv_mapping, codes_mapping, site)
     summary = validate.validate_records(records, model)
-    _out(f"input: {source_root}")
-    _out(f"records: {summary['records']}")
-    _out(f"errors: {summary['errors']}")
-    _out(f"warnings: {summary['warnings']}")
+    _out(f"{_msg('ui.input')} {source_root}")
+    _out(f"{_msg('ui.records')} {summary['records']}")
+    _out(f"{_msg('ui.errors')} {summary['errors']}")
+    _out(f"{_msg('ui.warnings')} {summary['warnings']}")
     for record in records:
         for problem in record.get("problems", []):
             key = record.get("key", "?")
             _out(f"  {problem.get('severity', 'error')}: {key}: {problem.get('path', '')}: {problem.get('message', '')}")
     return 0 if summary["errors"] == 0 else 1
-
-
-def _state_key(transaction: Mapping[str, Any], record_key: str) -> str:
-    # Transaction identity, not release identity: a later release of the same
-    # transaction should still detect unchanged/corrected source records.
-    return f"{transaction['id']}::{record_key}"
-
-
-def _prune_stale_pending(out_dir: Path, state_key: str, fingerprint: str) -> int:
-    """Remove pending artifacts for an older source state of the same record."""
-    removed = 0
-    if not out_dir.exists():
-        return removed
-    for sidecar in out_dir.glob("*.json"):
-        try:
-            info = load_json(sidecar)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        if str(info.get("state_key") or "") != state_key:
-            continue
-        if str(info.get("fingerprint") or "") == fingerprint:
-            continue
-        xml = sidecar.with_suffix(".xml")
-        if xml.exists():
-            xml.unlink()
-        sidecar.unlink()
-        removed += 1
-    return removed
-
-
-def _prune_absent_pending(out_dir: Path, current_keys: set[str], state_path: Path) -> int:
-    """Remove unsent artifacts whose source record is no longer present."""
-    from . import state
-
-    removed = 0
-    if not out_dir.exists():
-        return removed
-    current = state.load_state(state_path)
-    for sidecar in out_dir.glob("*.json"):
-        try:
-            info = load_json(sidecar)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        stream_key = str(info.get("state_key") or "")
-        if not stream_key or stream_key in current_keys:
-            continue
-        disposition, _ = state.classify_loaded(
-            current, stream_key, str(info.get("fingerprint") or "")
-        )
-        if disposition == "UNCHANGED":
-            continue  # already sent; keep the generated document as an audit artifact
-        xml = sidecar.with_suffix(".xml")
-        if xml.exists():
-            xml.unlink()
-        sidecar.unlink()
-        removed += 1
-    return removed
-
-
-def _json_digest(value: Any) -> str:
-    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _transformation_context(
-    release: Mapping[str, Any], transaction: Mapping[str, Any], model: Mapping[str, Any],
-    cda: Mapping[str, Any], cda_mapping: Mapping[str, Any], site: Mapping[str, Any],
-) -> dict[str, Any]:
-    relevant_site = {
-        "identifiers": site.get("identifiers", {}),
-        "null_flavor": site.get("null_flavor", {}),
-        "cda": site.get("cda", {}),
-    }
-    return {
-        "decor2hl7": __version__,
-        "release": {"key": release.get("key"), "date": release.get("date")},
-        "transaction": {"id": transaction.get("id"), "effective_date": transaction.get("effective_date")},
-        "model": _json_digest(model), "cda": _json_digest(cda),
-        "cda_mapping": _json_digest(cda_mapping), "site": _json_digest(relevant_site),
-    }
-
-
-def _document_identity(
-    record_key: str, document_version: int, site: Mapping[str, Any],
-) -> dict[str, Any]:
-    root = str(site.get("identifiers", {}).get("document_root") or "")
-    return {
-        "document_id": {
-            "root": root, "extension": f"{record_key}-{document_version}",
-        },
-        "set_id": {"root": root, "extension": record_key},
-        "version": document_version,
-    }
-
-
-def _reuse_pending_document(path: Path, expected: Mapping[str, Any]) -> bool:
-    """Preserve the exact handover bytes until delivery has been committed."""
-    sidecar = path.with_suffix(".json")
-    if not path.is_file() or not sidecar.is_file():
-        return False
-    info = load_json(sidecar)
-    if any(info.get(key) != value for key, value in expected.items()):
-        raise ValueError(Translator(_OUTPUT_LANGUAGE.get()).text(
-            "cli.pending_metadata_inconsistent", path=path,
-        ))
-    digest = info.get("payload_sha256")
-    if digest is not None and digest != hashlib.sha256(path.read_bytes()).hexdigest():
-        raise ValueError(Translator(_OUTPUT_LANGUAGE.get()).text(
-            "cli.pending_checksum_inconsistent", path=path,
-        ))
-    return True
-
-
-def _recover_spool_publications(
-    root: Path, out_dir: Path, site: Mapping[str, Any],
-    site_config_override: str | Path | None,
-) -> int:
-    from . import state, transport
-
-    if transport.configured_name(site) != "spool":
-        return 0
-    recovered = 0
-    for path in sorted(out_dir.glob("*.xml")):
-        sidecar = path.with_suffix(".json")
-        if not sidecar.is_file():
-            continue
-        info = load_json(sidecar)
-        stream_key = str(info.get("state_key") or "")
-        disposition, version = state.classify(state_dir(root), stream_key, str(info.get("fingerprint") or ""))
-        if disposition == "UNCHANGED" or info.get("document_version") != version:
-            continue
-        if transport.is_published(path, site, workspace=root):
-            # This records a handover that already happened. Do it before
-            # pruning, even if today's source changed or the case is absent.
-            sent, failed = _send_paths(root, [path], site_config_override)
-            if failed:
-                raise ValueError(Translator(_OUTPUT_LANGUAGE.get()).text(
-                    "cli.spool_recovery_failed", path=path,
-                ))
-            recovered += sent
-    return recovered
-
-
-def _quarantine_record(
-    root: Path, run_id: str, record: Mapping[str, Any], *,
-    stage: str, problems: Sequence[Any], document_version: int | None = None,
-) -> None:
-    key = str(record.get("key") or "unknown")
-    directory = state_dir(root) / "quarantine" / run_id
-    stem = _safe_key(key)
-    write_json(directory / f"{stem}.json", {
-        "key": key,
-        "stage": stage,
-        "document_version": document_version,
-        "problems": list(problems),
-        "record": dict(record),
-    })
-
-
-def _transform(
-    root: Path,
-    input_override: str | Path | None = None,
-    cda_mapping_override: str | Path | None = None,
-    site_config_override: str | Path | None = None,
-    *,
-    run_id: str | None = None,
-    limit: int | None = None,
-    dry_run: bool = False,
-    source_snapshot: Mapping[str, Any] | None = None,
-    prune_absent: bool = True,
-) -> tuple[list[Path], dict[str, int]]:
-    from .cda.render import emit
-    from . import data, state, validate
-
-    release = selected_release(root)
-    transaction = selected_transaction(root)
-    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(
-        root, cda_mapping_override, site_config_override
-    )
-    config_errors = validate.verify_compiled_cda(cda)
-    config_errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
-    if config_errors:
-        raise ValueError("configuration is invalid:\n" + "\n".join("  " + item for item in config_errors))
-    source_root = input_dir(root, input_override, required=True)
-    records = data.ingest(source_root, model, csv_mapping, codes_mapping, site)
-    if limit is not None:
-        if limit < 0:
-            raise ValueError("limit must be non-negative")
-        records = records[:limit]
-    validation = validate.validate_records(records, model)
-    out_dir = transaction_out_dir(root, release, transaction)
-    if not dry_run:
-        out_dir.mkdir(parents=True, exist_ok=True)
-    emitted: list[Path] = []
-    skipped_unchanged = skipped_invalid = quarantined = 0
-    run_id = run_id or dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S")
-    state_path = state_dir(root)
-    recovered = (
-        _recover_spool_publications(root, out_dir, site, site_config_override)
-        if not dry_run else 0
-    )
-    current_state = state.load_state(state_path)
-    current_keys = {_state_key(transaction, str(record["key"])) for record in records}
-    if not dry_run and prune_absent and limit is None:
-        _prune_absent_pending(out_dir, current_keys, state_path)
-    transformation_context = _transformation_context(release, transaction, model, cda, cda_mapping, site)
-    for record in records:
-        raw_key = str(record["key"])
-        stream_key = _state_key(transaction, raw_key)
-        digest = state.fingerprint(record, transformation_context)
-        # Invalidate an older pending representation even when the current
-        # record is invalid and therefore cannot be emitted.
-        if not dry_run:
-            _prune_stale_pending(out_dir, stream_key, digest)
-        if any(problem.get("severity") == "error" for problem in record.get("problems", [])):
-            skipped_invalid += 1
-            if not dry_run:
-                _quarantine_record(
-                    root, run_id, record, stage="input-validation",
-                    problems=list(record.get("problems", [])),
-                )
-                quarantined += 1
-            continue
-        disposition, document_version = state.classify_loaded(
-            current_state, stream_key, digest
-        )
-        if disposition == "UNCHANGED":
-            skipped_unchanged += 1
-            continue
-        if dry_run:
-            emitted.append(Path(f"{_safe_key(raw_key)}-v{document_version}.xml"))
-            continue
-        previous = state.previous_document_loaded(current_state, stream_key)
-        if disposition == "CHANGED" and previous is None:
-            # Legacy JSON state did not persist CDA identities. The identifiers
-            # were deterministic, so reconstruct the direct predecessor once.
-            previous = _document_identity(raw_key, document_version - 1, site)
-        stem = f"{_safe_key(raw_key)}-v{document_version}"
-        xml_path = out_dir / f"{stem}.xml"
-        identity = _document_identity(raw_key, document_version, site)
-        artifact = {
-            "key": raw_key,
-            "state_key": stream_key,
-            "fingerprint": digest,
-            "document_version": document_version,
-            "release": release.get("key"),
-            "transaction": transaction,
-            "source_status": disposition,
-            "document_id": identity["document_id"],
-            "set_id": identity["set_id"],
-            "previous_document": previous if disposition == "CHANGED" else None,
-        }
-        if _reuse_pending_document(xml_path, artifact):
-            emitted.append(xml_path)
-            continue
-        try:
-            payload, render_problems = emit(
-                record, model, cda, cda_mapping, site,
-                document_version=document_version,
-                previous_document=previous if disposition == "CHANGED" else None,
-            )
-        except ValueError as error:
-            skipped_invalid += 1
-            quarantined += 1
-            _quarantine_record(
-                root, run_id, record, stage="cda-render",
-                problems=[str(error)], document_version=document_version,
-            )
-            continue
-        write_bytes(xml_path, payload)
-        write_json(out_dir / f"{stem}.json", {
-            **artifact,
-            "prepared_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "payload_sha256": hashlib.sha256(payload).hexdigest(),
-            "source_snapshot": dict(source_snapshot) if source_snapshot is not None else None,
-            "validation": record.get("problems", []),
-            "render_warnings": render_problems,
-        })
-        emitted.append(xml_path)
-    return emitted, {
-        **validation,
-        "emitted": len(emitted),
-        "unchanged": skipped_unchanged,
-        "invalid": skipped_invalid,
-        "quarantined": quarantined,
-        "recovered": recovered,
-    }
-
-
-def _new_run_id() -> str:
-    return (
-        dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S")
-        + "-" + uuid.uuid4().hex[:8]
-    )
-
-
-def _failure_threshold(
-    root: Path,
-    cda_mapping_override: str | Path | None,
-    site_config_override: str | Path | None,
-) -> int:
-    *_, site = _runtime_files(
-        root, cda_mapping_override, site_config_override
-    )
-    operation = site.get("operation", {})
-    return int(operation.get("failure_threshold") or 0) if isinstance(operation, Mapping) else 0
-
-
-def cmd_transform(args: argparse.Namespace) -> int:
-    from . import state
-
-    root = _root(args)
-    run_id = _new_run_id()
-    with state.workspace_lock(state_dir(root)):
-        state.start_run(state_dir(root), run_id, kind="transform")
-        try:
-            emitted, summary = _transform(
-                root, args.input, args.cda_mapping, args.site_config,
-                run_id=run_id,
-            )
-            threshold = _failure_threshold(root, args.cda_mapping, args.site_config)
-            ok = int(summary["invalid"]) <= threshold
-            state.finish_run(
-                state_dir(root), run_id,
-                status="completed" if ok else "failed", summary=summary,
-            )
-        except BaseException as error:
-            state.finish_run(
-                state_dir(root), run_id, status="failed", error=str(error),
-            )
-            raise
-    print(json.dumps(summary, ensure_ascii=False))
-    for path in emitted:
-        print(path)
-    return 0 if ok else 2
-
-
-def _send_paths(
-    root: Path, paths: list[Path] | None = None,
-    site_config_override: str | Path | None = None,
-) -> tuple[int, int]:
-    from . import state, transport
-
-    release = selected_release(root)
-    transaction = selected_transaction(root)
-    _, _, _, site_path = _site_paths(
-        root, release, transaction, site_config_override
-    )
-    site = load_json(_require(site_path, "run `decor2hl7 init-site-config`"))
-    out_dir = transaction_out_dir(root, release, transaction)
-    candidates = paths if paths is not None else sorted(out_dir.glob("*.xml"))
-    sent = failed = 0
-    for path in candidates:
-        sidecar_path = path.with_suffix(".json")
-        if not sidecar_path.exists():
-            _say(f"skip {path.name}: no sidecar")
-            continue
-        info = load_json(sidecar_path)
-        raw_key = str(info["key"])
-        stream_key = str(info.get("state_key") or _state_key(transaction, raw_key))
-        disposition, expected_version = state.classify(
-            state_dir(root), stream_key, str(info["fingerprint"])
-        )
-        if disposition == "UNCHANGED":
-            continue
-        document_version = int(info["document_version"])
-        expected_identity = _document_identity(raw_key, document_version, site)
-        if document_version != expected_version:
-            _say(
-                f"send failed {path.name}: artifact version {document_version} "
-                f"does not match next committed version {expected_version}"
-            )
-            failed += 1
-            continue
-        if (
-            info.get("document_id") != expected_identity["document_id"]
-            or info.get("set_id") != expected_identity["set_id"]
-        ):
-            _say(f"send failed {path.name}: artifact CDA identity is missing or inconsistent")
-            failed += 1
-            continue
-        if document_version > 1:
-            committed_previous = state.previous_document(state_dir(root), stream_key)
-            if committed_previous is None:
-                committed_previous = _document_identity(raw_key, document_version - 1, site)
-            if info.get("previous_document") != committed_previous:
-                _say(f"send failed {path.name}: replacement lineage does not match committed state")
-                failed += 1
-                continue
-        payload_digest = info.get("payload_sha256")
-        if payload_digest is not None and payload_digest != hashlib.sha256(path.read_bytes()).hexdigest():
-            _say(Translator(_OUTPUT_LANGUAGE.get()).text(
-                "cli.send_checksum_inconsistent", name=path.name,
-            ))
-            failed += 1
-            continue
-        ok, message = transport.send(path, site, workspace=root)
-        if not ok:
-            _say(f"send failed {path.name}: {message}")
-            failed += 1
-            continue
-        delivery_status = (
-            "published" if transport.configured_name(site) == "spool" else "sent"
-        )
-        state.record_delivery(
-            state_dir(root), key=stream_key, digest=str(info["fingerprint"]),
-            document_version=document_version, file=str(path),
-            spec_version=str(release["key"]), status=delivery_status,
-            document_id=(
-                info.get("document_id")
-                if isinstance(info.get("document_id"), Mapping) else None
-            ),
-            set_id=(
-                info.get("set_id")
-                if isinstance(info.get("set_id"), Mapping) else None
-            ),
-            previous=(
-                info.get("previous_document")
-                if isinstance(info.get("previous_document"), Mapping) else None
-            ),
-        )
-        _say(f"delivered {path.name}: {message}")
-        sent += 1
-    return sent, failed
-
-
-def cmd_send(args: argparse.Namespace) -> int:
-    from . import state
-
-    root = _root(args)
-    run_id = _new_run_id()
-    with state.workspace_lock(state_dir(root)):
-        state.start_run(state_dir(root), run_id, kind="send")
-        try:
-            sent, failed = _send_paths(
-                root, [Path(value) for value in args.files] if args.files else None,
-                args.site_config,
-            )
-            state.finish_run(
-                state_dir(root), run_id,
-                status="completed" if failed == 0 else "failed",
-                summary={"sent": sent, "failed": failed},
-            )
-        except BaseException as error:
-            state.finish_run(
-                state_dir(root), run_id, status="failed", error=str(error),
-            )
-            raise
-    print(json.dumps({"sent": sent, "failed": failed}))
-    return 0 if failed == 0 else 2
-
-
-def cmd_run(args: argparse.Namespace) -> int:
-    from . import state
-
-    root = _root(args)
-    run_id = _new_run_id()
-    with state.workspace_lock(state_dir(root)):
-        state.start_run(state_dir(root), run_id, kind="run")
-        try:
-            emitted, summary = _transform(
-                root, args.input, args.cda_mapping, args.site_config,
-                run_id=run_id,
-            )
-            print(json.dumps(summary, ensure_ascii=False))
-            failed = 0
-            if args.send:
-                sent, failed = _send_paths(root, emitted, args.site_config)
-                print(json.dumps({"sent": sent, "failed": failed}))
-            threshold = _failure_threshold(root, args.cda_mapping, args.site_config)
-            failure_count = int(summary["invalid"]) + failed
-            ok = failure_count <= threshold
-            state.finish_run(
-                state_dir(root), run_id,
-                status="completed" if ok else "failed",
-                summary={**summary, "delivery_failed": failed},
-            )
-        except BaseException as error:
-            state.finish_run(
-                state_dir(root), run_id, status="failed", error=str(error),
-            )
-            raise
-    if args.send:
-        return 0 if ok else 2
-    _say("documents were emitted but not sent; pass --send to transmit them")
-    return 0 if ok else 2
-
-
-def _source_site(
-    root: Path,
-    site_config_override: str | Path | None,
-) -> tuple[Path, Path, dict[str, Any]]:
-    from . import source, validate
-
-    release = selected_release(root)
-    transaction = selected_transaction(root)
-    bundle, _, _, site_path = _site_paths(
-        root, release, transaction, site_config_override
-    )
-    site = load_json(_require(site_path, "run `decor2hl7 init-site-config`"))
-    errors = validate.check_site(site)
-    errors.extend(source.query_errors(site, bundle))
-    if errors:
-        raise ValueError(
-            "source runtime configuration is invalid:\n"
-            + "\n".join("  " + item for item in errors)
-        )
-    return bundle, site_path.parent, site
-
-
-def _parse_since(value: str | None) -> dt.date | None:
-    if value is None:
-        return None
-    try:
-        return dt.date.fromisoformat(value)
-    except ValueError as error:
-        raise ValueError("--since must use YYYY-MM-DD") from error
-
-
-def cmd_extract_source(args: argparse.Namespace) -> int:
-    from . import source, state
-
-    root = _root(args)
-    bundle, config_dir, site = _source_site(root, args.site_config)
-    output = _explicit_path(args.output)
-    run_id = _new_run_id()
-    with state.workspace_lock(state_dir(root)):
-        state.start_run(
-            state_dir(root), run_id, kind="extract-source",
-            snapshot_path=str(output),
-        )
-        try:
-            manifest = source.extract(
-                site, bundle, output, since=_parse_since(args.since),
-                config_dir=config_dir, output_language=args.output_language,
-            )
-            state.finish_run(
-                state_dir(root), run_id, status="extracted",
-                summary=manifest, snapshot_path=str(output),
-                snapshot_max_ts=(
-                    str(manifest["snapshot_max_ts"])
-                    if manifest.get("snapshot_max_ts") is not None else None
-                ),
-            )
-        except BaseException as error:
-            state.finish_run(
-                state_dir(root), run_id, status="failed",
-                snapshot_path=str(output), error=str(error),
-            )
-            raise
-    print(json.dumps({"snapshot": str(output), **manifest}, ensure_ascii=False))
-    return 0
-
-
-def cmd_run_source(args: argparse.Namespace) -> int:
-    from . import source, state
-
-    root = _root(args)
-    bundle, config_dir, site = _source_site(root, args.site_config)
-    if args.dry_run and args.send:
-        raise ValueError("--dry-run and --send cannot be combined")
-    run_id = _new_run_id()
-    snapshot = (
-        _explicit_path(args.snapshot_output)
-        if args.snapshot_output else state_dir(root) / "snapshots" / run_id
-    )
-    with state.workspace_lock(state_dir(root)):
-        state.start_run(
-            state_dir(root), run_id, kind="run-source",
-            snapshot_path=str(snapshot),
-        )
-        manifest: dict[str, Any] | None = None
-        source_stream: str | None = None
-        try:
-            manifest = source.extract(
-                site, bundle, snapshot, since=_parse_since(args.since),
-                config_dir=config_dir, output_language=args.output_language,
-            )
-            source_config = site.get("source", {})
-            require_advance = (
-                bool(source_config.get("require_snapshot_advance", True))
-                if isinstance(source_config, Mapping) else True
-            )
-            maximum = manifest.get("snapshot_max_ts")
-            transaction = selected_transaction(root)
-            source_stream = _json_digest({
-                "transaction": {
-                    "id": transaction["id"],
-                    "effective_date": transaction.get("effective_date"),
-                },
-                "source_identity_sha256": manifest["source_identity_sha256"],
-            })
-            previous_maximum = state.last_snapshot_max_ts(state_dir(root), source_stream)
-            if not args.dry_run and require_advance and previous_maximum is not None:
-                if maximum is None or str(maximum) <= previous_maximum:
-                    raise ValueError(
-                        "source snapshot has not advanced: last completed "
-                        f"maximum {previous_maximum!r}, current {maximum!r}"
-                    )
-
-            snapshot_evidence = {"path": str(snapshot), **manifest}
-            emitted, summary = _transform(
-                root, snapshot, args.cda_mapping, args.site_config,
-                run_id=run_id, limit=args.limit, dry_run=args.dry_run,
-                source_snapshot=snapshot_evidence,
-                prune_absent=False,
-            )
-            print(json.dumps(summary, ensure_ascii=False))
-            sent = failed = 0
-            if args.send:
-                sent, failed = _send_paths(root, emitted, args.site_config)
-                print(json.dumps({"sent": sent, "failed": failed}))
-            threshold = int(
-                site.get("operation", {}).get("failure_threshold") or 0
-            ) if isinstance(site.get("operation", {}), Mapping) else 0
-            failure_count = int(summary["invalid"]) + failed
-            ok = failure_count <= threshold
-            status = (
-                "failed" if not ok else
-                "inspected" if args.dry_run else
-                "partial" if args.limit is not None else
-                "completed" if args.send else "transformed"
-            )
-            state.finish_run(
-                state_dir(root), run_id, status=status,
-                summary={
-                    **summary, "sent": sent, "delivery_failed": failed,
-                },
-                snapshot_path=str(snapshot),
-                snapshot_max_ts=(str(maximum) if maximum is not None else None),
-                source_stream=source_stream,
-            )
-        except BaseException as error:
-            state.finish_run(
-                state_dir(root), run_id, status="failed",
-                snapshot_path=str(snapshot),
-                snapshot_max_ts=(
-                    str(manifest["snapshot_max_ts"])
-                    if manifest and manifest.get("snapshot_max_ts") is not None
-                    else None
-                ),
-                error=str(error),
-                source_stream=source_stream,
-            )
-            raise
-    if not args.send and not args.dry_run:
-        _say("documents were emitted but not delivered; pass --send for handover")
-    return 0 if ok else 2
-
-
-def cmd_status(args: argparse.Namespace) -> int:
-    from . import state
-
-    root = _root(args)
-    release = selected_release(root)
-    transaction = selected_transaction(root)
-    current = state.load_state(state_dir(root))
-    out_dir = transaction_out_dir(root, release, transaction)
-    pending = 0
-    for sidecar_path in out_dir.glob("*.json") if out_dir.exists() else []:
-        info = load_json(sidecar_path)
-        stream_key = str(info.get("state_key") or _state_key(transaction, str(info.get("key"))))
-        disposition, _ = state.classify_loaded(
-            current, stream_key, str(info.get("fingerprint"))
-        )
-        pending += disposition != "UNCHANGED"
-    print(json.dumps({
-        "delivered_documents": len(current.get("documents", {})),
-        "sent_documents": len(current.get("documents", {})),
-        "pending_documents": pending,
-        "recent_runs": state.recent_runs(state_dir(root), 5),
-        "release": release.get("key"),
-        "transaction": transaction.get("key"),
-    }, ensure_ascii=False, indent=2))
-    return 0
 
 
 def _add_network_override(
@@ -1956,7 +1094,7 @@ def parser(output_language: str = "en") -> argparse.ArgumentParser:
     p = _LocalizedArgumentParser(
         prog="decor2hl7", output_language=output_language
     )
-    p.add_argument("--version", action="version", version=__version__)
+    p.add_argument("--version", action="version", version=__version__, help=t("ui.show_program_s_version_number_and_exit"))
     p.add_argument("--root", default=".", help=t("cli.root_help"))
     p.add_argument(
         "--output-language",
