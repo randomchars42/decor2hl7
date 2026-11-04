@@ -12,7 +12,7 @@ from ..retrieval.artifacts import (
     closure_records, form_paths, transaction_record,
 )
 from ..cda.extensions import CdaExtension, normalize_extensions
-from ..i18n import localize_markdown
+from ..i18n import message as _msg, localized
 from ..workspace import load_json, write_json
 from ..retrieval.xml import local
 
@@ -70,7 +70,7 @@ def compiler_inputs(release_dir: Path, transaction_dir: Path) -> CompilerInputs:
     build = closure_records(release_dir, transaction_dir, "build")
     evidence = closure_records(release_dir, transaction_dir, "evidence")
     problems = [
-        problem for record in build
+        problem for record in [transaction, *build, *evidence]
         for problem in artifact_integrity_problems(record)
     ]
     if problems:
@@ -468,6 +468,7 @@ def _build_degraded_artifacts(
     return result
 
 
+@localized
 def write_build_diagnostics(
     model_dir: Path,
     inputs: Mapping[str, Any],
@@ -517,19 +518,18 @@ def write_build_diagnostics(
     write_json(model_dir / "build-diagnostics.json", diagnostics)
 
     lines = [
-        "# Build diagnostics",
+        (_msg('markdown.build_diagnostics')),
         "",
         f"**Status:** {str(diagnostics['status']).upper()}",
         "",
-        "The compiler used only downloaded artifacts with their exact requested "
-        "identity. It did not replace a missing revision with another revision.",
+        (_msg('markdown.the_compiler_used_only_downloaded_artifacts_with_their')),
         "",
     ]
     if crawl_degraded:
         lines += [
-            "## Degraded artifacts (crawl)",
+            (_msg('markdown.degraded_artifacts_crawl')),
             "",
-            "| Artifact | Roles | Status | Build effect |",
+            (_msg('markdown.artifact_roles_status_build_effect')),
             "|---|---|---|---|",
         ]
         for artifact in crawl_degraded:
@@ -544,9 +544,9 @@ def write_build_diagnostics(
         lines.append("")
     if build_degraded:
         lines += [
-            "## Degraded artifacts affecting this build",
+            (_msg('markdown.degraded_artifacts_affecting_this_build')),
             "",
-            "| Artifact | Consulted by | Status | Build effect |",
+            (_msg('markdown.artifact_consulted_by_status_build_effect')),
             "|---|---|---|---|",
         ]
         for artifact in build_degraded:
@@ -561,9 +561,9 @@ def write_build_diagnostics(
         lines.append("")
     if unresolved:
         lines += [
-            "## Unresolved CDA template references",
+            (_msg('markdown.unresolved_cda_template_references')),
             "",
-            "| Relation | Template | Requested revision |",
+            (_msg('markdown.relation_template_requested_revision')),
             "|---|---|---|",
         ]
         for row in unresolved:
@@ -577,12 +577,11 @@ def write_build_diagnostics(
         lines.append("")
     if unresolved_prototypes:
         lines += [
-            "## Unavailable CDA editor prototypes",
+            (_msg('markdown.unavailable_cda_editor_prototypes')),
             "",
-            "These `SPEC` targets are optional comparison evidence. Their "
-            "absence does not omit executable child-template constraints.",
+            (_msg('markdown.these_spec_targets_are_optional_comparison_evidence_their')),
             "",
-            "| Relation | Template | Requested revision | Used by |",
+            (_msg('markdown.relation_template_requested_revision_used_by')),
             "|---|---|---|---|",
         ]
         for row in unresolved_prototypes:
@@ -599,9 +598,9 @@ def write_build_diagnostics(
         lines.append("")
     if constraint_diagnostics:
         lines += [
-            "## CDA constraint diagnostics",
+            (_msg('markdown.cda_constraint_diagnostics')),
             "",
-            "| Severity | Code | Template path | Detail |",
+            (_msg('markdown.severity_code_template_path_detail')),
             "|---|---|---|---|",
         ]
         for diagnostic in constraint_diagnostics:
@@ -615,12 +614,9 @@ def write_build_diagnostics(
             )
         lines.append("")
     if not crawl_degraded and not unresolved and not unresolved_prototypes:
-        lines += ["No dependency gaps were detected.", ""]
+        lines += [(_msg('markdown.no_dependency_gaps_were_detected')), ""]
     (model_dir / "build-diagnostics.md").write_text(
-        localize_markdown(
-            "\n".join(lines), output_language,
-            protected_values=(inputs, cda, model or {}, diagnostics),
-        ),
+        ("\n".join(lines)),
         encoding="utf-8",
     )
     return diagnostics

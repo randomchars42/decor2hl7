@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from .i18n import message as _msg
+
 import csv
 import datetime as dt
 import math
+from decimal import Decimal, InvalidOperation
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -74,10 +77,20 @@ def _parse_number(raw: str, site: Mapping[str, Any], integer: bool = False) -> i
     separator = str(site.get("input", {}).get("decimal_separator") or ".")
     if separator == ",":
         text = text.replace(",", ".")
-    number = float(text)
-    if integer or number.is_integer():
+    try:
+        number = Decimal(text)
+    except InvalidOperation as error:
+        raise ValueError(_msg('ui.numeric_invalid', raw=raw)) from error
+    if not number.is_finite():
+        raise ValueError(_msg('ui.numeric_finite', raw=raw))
+    if integer and number != number.to_integral_value():
+        raise ValueError(_msg('ui.numeric_integral', raw=raw))
+    if number == number.to_integral_value():
         return int(number)
-    return number
+    result = float(number)
+    if not math.isfinite(result) or (result == 0 and number != 0):
+        raise ValueError(_msg('ui.numeric_range', raw=raw))
+    return result
 
 
 _NUMBER_TOKEN = r"[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+-]?\d+)?"
@@ -93,17 +106,11 @@ def _quantity_number(raw: Any, site: Mapping[str, Any], label: str) -> int | flo
     if isinstance(raw, bool):
         raise ValueError(f"quantity {label} must be numeric")
     if isinstance(raw, (int, float)):
-        number = float(raw)
-        if not math.isfinite(number):
-            raise ValueError(f"quantity {label} must be finite")
-        return int(raw) if number.is_integer() else number
+        return _parse_number(str(raw), site)
     text = str(raw).strip()
     if not re.fullmatch(_NUMBER_TOKEN, text):
         raise ValueError(f"quantity {label} {raw!r} is not numeric")
-    number = _parse_number(text, site)
-    if not math.isfinite(float(number)):
-        raise ValueError(f"quantity {label} must be finite")
-    return number
+    return _parse_number(text, site)
 
 
 def _normalize_unit(raw: Any, site: Mapping[str, Any]) -> str | None:
@@ -400,21 +407,29 @@ def normalize_value(
 def mapping_locator(value: Any) -> dict[str, Any] | None:
     """Normalize a CSV mapping entry.
 
-    Version-1 ``SOURCE:COLUMN`` strings remain valid.  Object locators add a
+    ``SOURCE:COLUMN`` is the concise current syntax. Object locators add a
     source datatype and a declarative transform without leaking CSV-specific
     representation into the compiled transaction model.
     """
+    if value is None:
+        return None
     if isinstance(value, str) and ":" in value:
         source, column = value.split(":", 1)
-        return {"source": source, "column": column}
-    if isinstance(value, Mapping) and value.get("source") and value.get("column"):
-        return {
-            "source": str(value["source"]),
-            "column": str(value["column"]),
-            **({"parse_as": str(value["parse_as"])} if value.get("parse_as") else {}),
-            **({"transform": dict(value["transform"])} if isinstance(value.get("transform"), Mapping) else {}),
-        }
-    return None
+        if source.strip() and column.strip():
+            return {"source": source, "column": column}
+    if isinstance(value, Mapping):
+        unknown = set(value) - {"source", "column", "parse_as", "transform"}
+        if unknown:
+            raise ValueError(_msg('ui.locator_unknown_keys') + ", ".join(sorted(map(str, unknown))))
+        for key in ("source", "column"):
+            if not isinstance(value.get(key), str) or not str(value[key]).strip():
+                raise ValueError(_msg('ui.locator_key_required', key=key))
+        if "parse_as" in value and not isinstance(value["parse_as"], str):
+            raise ValueError(_msg('ui.locator_parse_type'))
+        if "transform" in value and not isinstance(value["transform"], Mapping):
+            raise ValueError(_msg('ui.locator_transform_type'))
+        return dict(value)
+    raise ValueError(_msg('ui.locator_format'))
 
 
 def _normalize_transformed(
@@ -433,13 +448,42 @@ def _normalize_transformed(
             raise ValueError(
                 "input transforms cannot create a target-specific nullFlavor"
             )
+        if kind != "code":
+            raise ValueError(_msg('ui.input_transform_object', kind=kind))
+        allowed = {"raw", "canonical", "code", "codeSystem", "displayName"}
+        if set(value) - allowed:
+            raise ValueError(_msg('ui.input_transform_unknown_keys'))
+        if not all(isinstance(item, str) for item in value.values()):
+            raise ValueError(_msg('ui.input_transform_string_values'))
+        code = value.get("code")
+        system = value.get("codeSystem")
+        domain = accepted_values(field)
+        formal = field.get("formal_terminology", {})
+        status = str(formal.get("status") or "") if isinstance(formal, Mapping) else ""
+        if not status:
+            status = str(field.get("coded_domain", {}).get("status") or "")
+        closed = bool(domain) or status in {"bound", "logical", "enumerated", "unresolved", "referenced"}
+        if closed:
+            matches = [
+                (key, item) for key, item in domain.items()
+                if item.get("code") == code and item.get("code_system") == system
+                and code and system
+            ]
+            if len(matches) != 1:
+                raise ValueError(_msg('ui.input_transform_domain'))
+            normalized = _canonical_code(str(matches[0][0]), field, {}, site)
+            if isinstance(normalized, dict) and value.get("raw") is not None:
+                normalized["raw"] = value["raw"]
+            return normalized
+        if not isinstance(code, str) or not code or not isinstance(system, str) or not system:
+            raise ValueError(_msg('ui.input_transform_code_identity'))
         return dict(value)
     if kind == "boolean" and isinstance(value, bool):
         return value
     if kind == "integer" and isinstance(value, int) and not isinstance(value, bool):
         return value
     if kind in {"decimal", "duration"} and isinstance(value, (int, float)) and not isinstance(value, bool):
-        return value
+        return _parse_number(str(value), site)
     return normalize_value(value, field, translations, site)
 
 
@@ -518,15 +562,31 @@ def _read_csv(path: Path, site: Mapping[str, Any]) -> tuple[list[dict[str, str]]
     with path.open(encoding=str(site.get("input", {}).get("encoding") or "utf-8-sig"), newline="") as handle:
         delimiter = site.get("input", {}).get("delimiter")
         if delimiter:
-            reader = csv.DictReader(handle, delimiter=str(delimiter))
-            return list(reader), list(reader.fieldnames or [])
-        sample = handle.read(8192); handle.seek(0)
+            reader = csv.reader(handle, delimiter=str(delimiter), strict=True)
+        else:
+            sample = handle.read(8192)
+            handle.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+            except csv.Error:
+                dialect = csv.excel
+            reader = csv.reader(handle, dialect=dialect, strict=True)
         try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-        except csv.Error:
-            dialect = csv.excel
-        reader = csv.DictReader(handle, dialect=dialect)
-        return list(reader), list(reader.fieldnames or [])
+            headers = next(reader, [])
+            if not headers or any(not name.strip() for name in headers):
+                raise ValueError(_msg('ui.csv_header_empty', path=path))
+            if len(headers) != len(set(headers)):
+                raise ValueError(_msg('ui.csv_header_duplicate', path=path))
+            rows: list[dict[str, str]] = []
+            for row in reader:
+                if not row:
+                    continue
+                if len(row) != len(headers):
+                    raise ValueError(_msg('ui.csv_row_width', path=path, reader_line_num=reader.line_num, row_length=len(row), headers_length=len(headers)))
+                rows.append(dict(zip(headers, row)))
+            return rows, headers
+        except csv.Error as error:
+            raise ValueError(_msg('ui.csv_invalid', path=path, error=error)) from error
 
 
 def field_value(record: Mapping[str, Any], path: str, field: Mapping[str, Any]) -> Any:
@@ -864,6 +924,18 @@ def ingest(
                     occurrence["values"][field_path] = normalized
                 continue
 
+            if len(mapped_rows) > 1:
+                _, _, _, primary, _ = _source_spec(str(mapped_source), input_dir, site)
+                selected, selection_problems = _order_rows(mapped_rows, primary)
+                column = str(primary.get("column") or "") if primary else ""
+                true_values = {
+                    str(item).casefold() for item in (primary or {}).get("true_values", ["1", "true", "yes", "ja", "j"])
+                }
+                marked = sum(str(row.get(column) or "").strip().casefold() in true_values for row in mapped_rows) if column else 0
+                if selection_problems or marked != 1:
+                    problems.append({"severity": "error", "path": field_path, "message": _msg('ui.singleton_primary_required')})
+                    continue
+                mapped_rows = selected
             raw = (
                 mapped_rows[0].get(mapped_column)
                 if mapped_rows and mapped_column is not None

@@ -7,6 +7,8 @@ structured CDA target.
 """
 from __future__ import annotations
 
+from ..occurrences import present as _present, pack as _pack_occurrences
+
 from collections import defaultdict
 from typing import Any, Mapping
 
@@ -17,7 +19,7 @@ from ..bindings import (
     structure_rules,
 )
 from ..data import field_value
-from ..transforms import OMIT, apply_transform, mapping_rules
+from ..transforms import apply_transform, mapping_rules
 from ..value_format import (
     preferred_mapping_value,
     range_quantities,
@@ -169,14 +171,6 @@ def validate_narratives(
                         f"{block_prefix}.source must have repeat_chain [{source_repeat!r}]"
                     )
     return errors
-
-
-def _present(value: Any) -> bool:
-    if value is None or value is OMIT:
-        return False
-    if isinstance(value, list):
-        return any(_present(item) for item in value)
-    return True
 
 
 def _leaves(value: Any, prefix: tuple[int, ...] = ()) -> list[tuple[tuple[int, ...], Any]]:
@@ -336,24 +330,6 @@ def _coalesce_winners(
             winner = candidates[0][0]
         result[str(specs[winner]["source"])].add(occurrence)
     return result
-
-
-def _pack_occurrences(values: Mapping[tuple[int, ...], Any], depth: int) -> Any:
-    if depth == 0:
-        return values.get(())
-
-    def build(prefix: tuple[int, ...]) -> Any:
-        if len(prefix) == depth:
-            return values.get(prefix)
-        indices = {
-            occurrence[len(prefix)] for occurrence in values
-            if occurrence[:len(prefix)] == prefix
-        }
-        if not indices:
-            return None
-        return [build(prefix + (index,)) for index in range(max(indices) + 1)]
-
-    return build(())
 
 
 def build_section_narratives(

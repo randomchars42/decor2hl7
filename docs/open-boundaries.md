@@ -127,10 +127,11 @@ context, that validator applies closed-content rules to payer code, payer
 associated entity, and the Addendum section. These reject CDA/RIM content allowed
 by the cached open source templates and the reviewed local EDIS attachments.
 
-Redundant automatic coded wording and the duplicate insurance identifier in the
-Hauptkostenträger participant are omitted under the reviewed compatibility
-policy. The code/display name and the insurance number in the explicitly
-declared generic payer slot remain. Structured EDIS assignments are suspended
+Automatic optional text for coded values and the duplicate insurance identifier
+in the Hauptkostenträger participant are omitted under the reviewed construction
+policy. Local aliases retain their canonical coded meaning; the original input
+remains in the source snapshot. The code/display name and the insurance number
+in the explicitly declared generic payer slot remain. Structured EDIS assignments are suspended
 under DEC-048; the source facts remain in narrative while their intended
 placement is clarified. Rejection of the runtime replacement link
 (`relatedDocument typeCode="RPLC"`) remains unresolved.

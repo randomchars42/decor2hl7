@@ -35,7 +35,14 @@ not a second copy of those semantic rules.
 
 ```text
 src/decor2hl7/
-├── cli.py                  command orchestration
+├── cli.py                  command parsing and specification/setup commands
+├── runtime.py              execution, pending delivery and run orchestration
+├── runtime_config.py       selected runtime files and configuration paths
+├── bundle.py               shared exact mapping-lock admission
+├── pending.py              typed, validated pending document metadata
+├── ui.py                   terminal output
+├── hashing.py              stable JSON and file digests
+├── occurrences.py          shared sparse occurrence lookup and packing
 ├── workspace.py            selection and workspace paths
 ├── i18n.py                 locale loading, validation, and protected terminology
 ├── locales/                packaged stable-ID English and German catalogs
@@ -58,7 +65,7 @@ src/decor2hl7/
 │   ├── transaction.py      target-neutral dataset model
 │   ├── structural.py       generated occurrence rules
 │   ├── schematron.py       bounded supporting evidence
-│   ├── mapping.py          candidates, gates, audit, proposal
+│   ├── mapping.py          separate candidate, admission and report/audit stages
 │   ├── site.py             site CSV and input-code proposals
 │   └── reports.py          readable generated products
 ├── cda/                    CDA target implementation

@@ -10,27 +10,12 @@ from decor2hl7 import state
 
 
 class StateTests(unittest.TestCase):
-    def test_legacy_json_state_is_imported_once(self) -> None:
+    def test_legacy_json_state_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
-            (directory / "index.json").write_text(json.dumps({
-                "version": 1,
-                "documents": {"tx::case": {
-                    "fingerprint": "old", "document_version": 3,
-                    "sent_at": "2026-01-01T00:00:00+00:00",
-                    "file": "case-v3.xml", "spec_version": "2026.1",
-                }},
-            }), encoding="utf-8")
-            self.assertEqual(
-                state.classify(directory, "tx::case", "new"), ("CHANGED", 4)
-            )
-            # A later edit of the retained evidence must not overwrite SQLite.
-            (directory / "index.json").write_text(
-                '{"version":1,"documents":{}}', encoding="utf-8"
-            )
-            self.assertEqual(
-                state.classify(directory, "tx::case", "old"), ("UNCHANGED", 3)
-            )
+            (directory / "index.json").write_text('{"documents":{}}')
+            with self.assertRaisesRegex(ValueError, "unsupported legacy state"):
+                state.load_state(directory)
 
     def test_state_lifecycle_increments_versions_and_appends_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -40,7 +25,7 @@ class StateTests(unittest.TestCase):
             self.assertEqual(state.load_state(directory), {"version": 2, "documents": {}})
             self.assertEqual(state.classify(directory, "document", first), ("NEW", 1))
 
-            state.record_sent(
+            state.record_delivery(
                 directory, key="document", digest=first, document_version=1,
                 file="first.xml", spec_version="release-v1",
             )
@@ -50,7 +35,7 @@ class StateTests(unittest.TestCase):
             self.assertEqual(
                 state.classify(directory, "document", second), ("CHANGED", 2)
             )
-            state.record_sent(
+            state.record_delivery(
                 directory, key="document", digest=second, document_version=2,
                 file="second.xml", spec_version="release-v2",
                 document_id={"root": "1.2.3", "extension": "document-2"},
@@ -79,28 +64,15 @@ class StateTests(unittest.TestCase):
                 },
             )
 
-    def test_history_rotation_is_a_sqlite_checkpoint_and_never_deletes_history(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self.assertIsNone(state.rotate(directory, 1))
-            state.record_sent(
-                directory, key="x", digest="d", document_version=1,
-                file="x.xml", spec_version="v",
-            )
-            self.assertIsNone(state.rotate(directory, 1))
-            with sqlite3.connect(directory / "state.sqlite") as connection:
-                count = connection.execute("SELECT COUNT(*) FROM history").fetchone()
-            self.assertEqual(count, (1,))
-
     def test_state_change_detection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)
             digest = state.fingerprint({"values": {"a": 1}})
             self.assertEqual(state.classify(path, "tx::x", digest), ("NEW", 1))
-            state.record_sent(path, key="tx::x", digest=digest, document_version=1, file="x.xml", spec_version="v")
+            state.record_delivery(path, key="tx::x", digest=digest, document_version=1, file="x.xml", spec_version="v")
             self.assertEqual(state.classify(path, "tx::x", digest)[0], "UNCHANGED")
             with self.assertRaisesRegex(ValueError, "cannot follow"):
-                state.record_sent(
+                state.record_delivery(
                     path, key="tx::x", digest="future", document_version=3,
                     file="x-v3.xml", spec_version="v",
                 )
@@ -150,7 +122,7 @@ class StateTests(unittest.TestCase):
             self.assertEqual(state.last_snapshot_max_ts(directory, "source-b"), "2026-05-01")
             self.assertIsNone(state.last_snapshot_max_ts(directory, "new-source"))
 
-    def test_existing_run_ledger_is_migrated_without_assigning_legacy_watermarks(self) -> None:
+    def test_old_run_ledger_is_rejected_without_migration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             with sqlite3.connect(directory / "state.sqlite") as connection:
@@ -160,9 +132,10 @@ class StateTests(unittest.TestCase):
                     snapshot_max_ts TEXT, summary TEXT, error TEXT
                 )""")
                 connection.execute("INSERT INTO runs (run_id, kind, status, snapshot_max_ts) VALUES ('old', 'run-source', 'completed', '2099-01-01')")
-            self.assertIsNone(state.last_snapshot_max_ts(directory, "new-source"))
-            self.assertIsNone(state.recent_runs(directory)[0]["source_stream"])
-            self.assertEqual(state.recent_runs(directory)[0]["snapshot_max_ts"], "2099-01-01")
+            with self.assertRaisesRegex(ValueError, "unsupported state schema"):
+                state.last_snapshot_max_ts(directory, "new-source")
+            with sqlite3.connect(directory / "state.sqlite") as connection:
+                self.assertNotIn("source_stream", [row[1] for row in connection.execute("PRAGMA table_info(runs)")])
 
     def test_state_fingerprint_changes_with_transformation_context(self) -> None:
         record = {"values": {"a": 1}, "instances": {}}

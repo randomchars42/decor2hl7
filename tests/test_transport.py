@@ -30,7 +30,7 @@ class TransportTests(unittest.TestCase):
             document.parent.mkdir()
             document.write_bytes(b"<ClinicalDocument/>")
             document.with_suffix(".json").write_text(
-                '{"key":"case"}\n', encoding="utf-8"
+                '{"key":"case","prepared_at":"2026-01-01T00:00:00+00:00"}\n', encoding="utf-8"
             )
             site = {"transport": {"adapter": "spool", "directory": "spool"}}
 

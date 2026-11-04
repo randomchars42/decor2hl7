@@ -71,11 +71,12 @@ For a plain text section target, the same labelled content uses a compact text
 fallback. This presentation is derived from the reviewed mapping and normalized
 record; it does not add clinical assignments.
 
-Automatic `originalText` completion omits optional wording that exactly repeats
-the emitted `code` or `displayName` of an already coded value. Distinct source
-wording, uncoded/null-flavoured content, required companions, and explicit text
-assignments are preserved. This removes redundant datatype children without
-discarding a source fact or changing its coded meaning.
+Automatic optional `originalText` is omitted for fully coded values, including
+local aliases whose wording differs from the emitted code and display name.
+The canonical code/display remain; source snapshots retain the original input.
+Existing narrative rules continue to render their mapped facts. Uncoded values and the allowed
+`OTH`/`UNC` cases retain their text companions, required companions remain
+required, and an explicit reviewed mapping can supply a permitted text slot.
 
 Replacement lineage uses the owner-admitted root `relatedDocument` slot.
 Insertion follows the compiled physical particle order through transparent
@@ -103,7 +104,11 @@ left to the complete Schematron gate.
 
 ART-DECOR assertions retain their in-scope namespace bindings. The in-process
 evaluator runs after the complete CDA tree exists; unsupported error-level
-expressions fail closed, while warning-level results are reported. The original
+expressions fail closed, while warning-level results are reported. Parsing
+validates the complete supported expression before evaluating any nodes or
+Boolean branches. Unsupported predicates and unknown namespace prefixes cannot
+be mistaken for absent data, including on empty trees. Whitespace inside XPath
+string literals retains its original meaning. The original
 expressions are also emitted as Schematron.
 
 `check` and `check-cda-mapping` run setup-time source verification from

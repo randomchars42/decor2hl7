@@ -6,12 +6,14 @@ ids are provenance only; an element does not need an id to be writable.
 
 from __future__ import annotations
 
+from ..occurrences import value_at as _nested_at, pack as _occurrence_assignment
+
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import re
 import xml.etree.ElementTree as ET
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from ..assertions import validate_contexts
 from ..bindings import (
@@ -125,19 +127,6 @@ def _format_site(value: Any, variables: Mapping[str, Any]) -> Any:
     if isinstance(value, list):
         return [_format_site(item, variables) for item in value]
     return value
-
-
-def _nested_at(value: Any, occurrence: tuple[int, ...]) -> Any:
-    current = value
-    for depth, index in enumerate(occurrence):
-        if isinstance(current, list):
-            if index >= len(current):
-                return None
-            current = current[index]
-        else:
-            # A scalar inside a repeating CDA branch means one occurrence only.
-            return current if all(item == 0 for item in occurrence[depth:]) else None
-    return current
 
 
 def _assigned_at(value: Any, occurrence: tuple[int, ...]) -> bool:
@@ -712,31 +701,6 @@ def _target_below_location(
     )
 
 
-def _occurrence_assignment(
-    values: Mapping[tuple[int, ...], Any], depth: int,
-) -> Any:
-    """Build the sparse nested-list shape consumed by ``_nested_at``."""
-    if depth == 0:
-        return values.get(())
-
-    def build(prefix: tuple[int, ...]) -> Any:
-        if len(prefix) == depth:
-            return values.get(prefix)
-        indices = {
-            occurrence[len(prefix)]
-            for occurrence in values
-            if occurrence[:len(prefix)] == prefix
-        }
-        if not indices:
-            return None
-        return [
-            build(prefix + (index,))
-            for index in range(max(indices) + 1)
-        ]
-
-    return build(())
-
-
 def _merge_section_fragments(
     current: Any,
     fragments: Mapping[tuple[int, ...], list[dict[str, Any]]],
@@ -881,14 +845,13 @@ def _complete_linked_narratives(
 
 
 def _coded_original_text(
-    value: Any, *, rendered_attributes: Sequence[str], preserve_redundant: bool,
+    value: Any, *, required: bool,
 ) -> Any:
     """Preserve occurrence shape while extracting a coded value's wording."""
     if isinstance(value, list):
         return [
             _coded_original_text(
-                item, rendered_attributes=rendered_attributes,
-                preserve_redundant=preserve_redundant,
+                item, required=required,
             )
             for item in value
         ]
@@ -906,18 +869,9 @@ def _coded_original_text(
     for key in ("raw", "canonical", "displayName", "display"):
         if value.get(key) not in (None, ""):
             wording = value[key]
-            if (
-                not preserve_redundant
-                and not flavor
-                and "code" in rendered_attributes
-                and value.get("code") not in (None, "")
-                and any(
-                    str(wording) == str(value[attribute])
-                    for attribute in ("code", "displayName")
-                    if attribute in rendered_attributes
-                    and value.get(attribute) not in (None, "")
-                )
-            ):
+            if not required and not flavor and value.get("code") not in (None, ""):
+                # The coded value retains its formal meaning. Optional text
+                # requires an explicit mapping; source input stays replayable.
                 return None
             return wording
     return None
@@ -944,18 +898,12 @@ def _complete_value_companions(
                 None,
             )
             if parent_value is not None:
-                parent_target = next((
-                    targets[str(name)] for name in node.get("targets", [])
-                    if str(name) in assignments and str(name) in targets
-                ), {})
-                representation = parent_target.get("value_representation") or {}
                 for child in node.get("children", []):
                     if child.get("content_role") != "coded_original_text":
                         continue
                     value = _coded_original_text(
                         parent_value,
-                        rendered_attributes=representation.get("attributes", []),
-                        preserve_redundant=bool(
+                        required=bool(
                             child.get("mandatory") or int(child.get("min") or 0) >= 1
                         ),
                     )

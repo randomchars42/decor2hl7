@@ -11,7 +11,7 @@ from typing import Any, Iterable, Mapping
 
 from ..retrieval.xml import child_text, local, parse_file
 from ..text import normalize_match_text as _norm
-from ..i18n import localize_markdown
+from ..i18n import message as _msg, localized
 from ..workspace import write_json
 from ..domain import accepted_values, logical_values
 from ..cda.semantics import (
@@ -2958,10 +2958,9 @@ def _bound_enum_mapping(
     }
 
 
-def _cda_mapping_analysis(
-    model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: Iterable[Path]
-) -> tuple[dict[str, Any], dict[str, Any], str, str]:
-    xml_paths = list(xml_paths)
+def _mapping_candidates(
+    model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: list[Path],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str | tuple[str, str], list[dict[str, Any]]]]:
     graph, associations, concept_names = _graph_and_associations(xml_paths)
     semantic_labels, formal_origin_neighbours = _formal_origin_label_index(xml_paths)
     implementations = _implementation_paths(xml_paths)
@@ -3042,6 +3041,15 @@ def _cda_mapping_analysis(
             "context": inherited_context if primary is None else None,
         }
 
+    return fields, details, group_results, value_set_members
+
+
+def _mapping_admissibility(
+    model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: list[Path],
+    fields: dict[str, Any], details: dict[str, dict[str, Any]],
+    group_results: dict[str, dict[str, Any]], value_set_members: dict[str | tuple[str, str], list[dict[str, Any]]],
+) -> dict[str, Any]:
+    groups, model_fields = model.get("groups", {}), model.get("fields", {})
     target_defaults: dict[str, dict[str, str]] = {}
     for path, field in model_fields.items():
         old_primary = details[path].get("primary")
@@ -3095,7 +3103,7 @@ def _cda_mapping_analysis(
                 if path in model_fields:
                     field_claims[target_name].append(path)
 
-    structures: dict[str, dict[str, Any]] = dict(preliminary_structures)
+    structures: dict[str, dict[str, Any]] = _for_each_rules(model, cda, {}, group_results)
 
     # Shared targets become executable only when their occurrence semantics are
     # explicit.  ``repeat_by_discriminator`` requires a terminology-backed
@@ -3322,13 +3330,136 @@ def _cda_mapping_analysis(
         "target_defaults": target_defaults,
     }
 
-    def coverage(detail: Mapping[str, Any]) -> str:
-        if detail.get("primary"):
-            return "YES"
-        if detail.get("context"):
-            return "PARTIAL"
-        return "NO"
+    return proposal
 
+
+def _mapping_coverage(detail: Mapping[str, Any]) -> str:
+    if detail.get("primary"):
+        return "YES"
+    if detail.get("context"):
+        return "PARTIAL"
+    return "NO"
+
+
+def _audit_candidate(
+    candidate: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if candidate is None:
+        return None
+    # ``node`` is an internal XML element used while matching. It is not
+    # serializable and the persisted evidence already contains its stable
+    # identity and path.
+    return {str(key): value for key, value in candidate.items() if key != "node"}
+
+
+def _audit_detail(detail: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "selected": detail.get("selected"),
+        "primary": _audit_candidate(detail.get("primary")),
+        "alternatives": [
+            _audit_candidate(candidate)
+            for candidate in detail.get("alternatives", [])
+        ],
+        "context": detail.get("context"),
+        **(
+            {"runtime_blocked": detail["runtime_blocked"]}
+            if detail.get("runtime_blocked") else {}
+        ),
+        **(
+            {"required_companions": list(detail["required_companions"])}
+            if detail.get("required_companions") else {}
+        ),
+        **(
+            {"unresolved_reason": detail["unresolved_reason"]}
+            if detail.get("unresolved_reason") else {}
+        ),
+        **(
+            {"gap": dict(detail["gap"])}
+            if detail.get("gap") else {}
+        ),
+        **(
+            {"possible_targets": dict(detail["possible_targets"])}
+            if detail.get("possible_targets") else {}
+        ),
+        **(
+            {"structural_rule": detail["structural_rule"]}
+            if detail.get("structural_rule") else {}
+        ),
+        **(
+            {"shared_target_winner": True}
+            if detail.get("shared_target_winner") else {}
+        ),
+    }
+
+
+def _mapping_audit(
+    model: Mapping[str, Any], cda: Mapping[str, Any], proposal: Mapping[str, Any],
+    details: Mapping[str, dict[str, Any]], group_results: Mapping[str, dict[str, Any]],
+) -> dict[str, Any]:
+    all_details = {**group_results, **details}
+    all_coverage = Counter(_mapping_coverage(detail) for detail in all_details.values())
+    item_coverage = Counter(_mapping_coverage(detail) for detail in details.values())
+    group_coverage = Counter(_mapping_coverage(detail) for detail in group_results.values())
+    confidence = Counter(detail["primary"]["confidence"] if detail.get("primary") else "NO" for detail in all_details.values())
+    bridge = Counter(detail["primary"]["kind"] if detail.get("primary") else "NONE" for detail in all_details.values())
+    fields, structures = proposal["fields"], proposal["structures"]
+    audit: dict[str, Any] = {
+        "version": 2,
+        "model": dict(proposal["model"]),
+        "target": dict(proposal["target"]),
+        "fields": {
+            path: _audit_detail(detail) for path, detail in details.items()
+        },
+        "groups": {
+            path: _audit_detail(detail) for path, detail in group_results.items()
+        },
+        "structures": structures,
+        "unresolved_templates": list(cda.get("unresolved_templates", [])),
+        "summary": {
+            "datapoints": len(all_details),
+            "coverage": dict(all_coverage),
+            "field_coverage": dict(item_coverage),
+            "group_coverage": dict(group_coverage),
+            "confidence": dict(confidence),
+            "primary_evidence": dict(bridge),
+            "executable_fields": sum(value is not None for value in fields.values()),
+            "shared_target_blocks": sum(
+                str(detail.get("runtime_blocked") or "").startswith((
+                    "SHARED(", "WEAKER_SHARED_TARGET(",
+                ))
+                for detail in details.values()
+            ),
+            "required_companion_blocks": sum(
+                str(detail.get("runtime_blocked") or "").startswith(
+                    "REQUIRED_COMPANION("
+                )
+                for detail in details.values()
+            ),
+            "gaps": dict(Counter(
+                f"{gap['gate']}:{gap['kind']}"
+                for detail in all_details.values()
+                for gap in [detail.get("gap")]
+                if isinstance(gap, Mapping)
+            )),
+            "structural_rules": Counter(
+                str(rule.get("type") or "unknown") for rule in structures.values()
+            ),
+        },
+    }
+    from .reports import coverage_headline_counts
+    audit["summary"]["coverage_headline"] = coverage_headline_counts(
+        model, cda, proposal, audit
+    )
+    return audit
+
+
+def _mapping_reports(
+    model: Mapping[str, Any], cda: Mapping[str, Any], proposal: dict[str, Any],
+    details: dict[str, dict[str, Any]], group_results: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    groups, model_fields = model.get("groups", {}), model.get("fields", {})
+    fields, structures = proposal["fields"], proposal["structures"]
+    all_details = {**group_results, **details}
     def mapping_qualification(
         detail: Mapping[str, Any], primary: Mapping[str, Any]
     ) -> str:
@@ -3432,7 +3563,7 @@ def _cda_mapping_analysis(
             )
         if detail.get("alternatives"):
             return "Candidate evidence exists, but none is safe enough to become an executable mapping automatically."
-        return "No usable CDA target evidence was found for this datapoint."
+        return (_msg('markdown.no_usable_cda_target_evidence_for_datapoint'))
 
     def status_for(path: str, detail: Mapping[str, Any]) -> str:
         primary = detail.get("primary")
@@ -3611,11 +3742,11 @@ def _cda_mapping_analysis(
             out += ["**Suggested action:**", "", " ".join(suggestions), ""]
         return out
 
-    all_coverage = Counter(coverage(detail) for detail in all_details.values())
-    item_coverage = Counter(coverage(detail) for detail in details.values())
-    group_coverage = Counter(coverage(detail) for detail in group_results.values())
+    all_coverage = Counter(_mapping_coverage(detail) for detail in all_details.values())
+    item_coverage = Counter(_mapping_coverage(detail) for detail in details.values())
+    group_coverage = Counter(_mapping_coverage(detail) for detail in group_results.values())
     required_paths = [path for path, field in model_fields.items() if field.get("required")]
-    required_coverage = Counter(coverage(details[path]) for path in required_paths)
+    required_coverage = Counter(_mapping_coverage(details[path]) for path in required_paths)
     qualifications: Counter[str] = Counter()
     location_ambiguities = 0
     for detail in all_details.values():
@@ -3640,14 +3771,11 @@ def _cda_mapping_analysis(
     )
 
     report_lines = [
-        "# CDA Mapping",
+        (_msg('markdown.cda_mapping')),
         "",
-        "This is the working report for completing `cda-mapping.json`. It shows the selected target,",
-        "why it was selected, and the strongest alternatives. Full provenance is in",
-        "`cda-mapping-details.md`.",
+        _msg('markdown.this_is_the_working_report_for_completing_cda'),
         "",
-        "**Legend:** `YES` = concrete CDA evidence; `PARTIAL` = structural context only;",
-        "`STRONG`/`MEDIUM`/`WEAK` describe evidence confidence independently from executability.",
+        _msg('markdown.legend_yes_concrete_cda_evidence_partial_structural_context'),
         "",
     ]
     field_order = [path for path in model.get("order", []) if path in model_fields]
@@ -3657,39 +3785,34 @@ def _cda_mapping_analysis(
         report_lines.extend(field_section(path, detailed=False))
 
     detail_lines = [
-        "# CDA Mapping Details",
+        (_msg('markdown.cda_mapping_details')),
         "",
-        "This is the evidence appendix for `cda-mapping.json`. Edit the JSON mapping,",
-        "not this generated report. Review the generated proposal in "
-        "`cda-mapping.proposed.md` or the initialized reviewed bundle in "
-        "`cda-mapping.md`.",
+        _msg('markdown.this_is_the_evidence_appendix_for_cda_mapping'),
         "",
-        f"Target CDA template: `{cda.get('document_template', {}).get('id')}` @ "
-        f"`{cda.get('document_template', {}).get('effective_date')}`",
-        f"Transaction: `{model.get('meta', {}).get('transaction_id')}` "
-        f"({model.get('meta', {}).get('name') or ''})",
+        f"{_msg('markdown.target_cda_template')} `{cda.get('document_template', {}).get('id')}` @ `{cda.get('document_template', {}).get('effective_date')}`",
+        f"{_msg('markdown.transaction')} `{model.get('meta', {}).get('transaction_id')}` ({model.get('meta', {}).get('name') or ''})",
         "",
         "```text",
-        f"Dataset datapoints:  {len(all_details):>4}",
-        f"CDA covered:         {all_coverage['YES']:>4}",
-        f"Partial:             {all_coverage['PARTIAL']:>4}",
-        f"Not covered:         {all_coverage['NO']:>4}",
+        f"{_msg('markdown.dataset_datapoints')}  {len(all_details):>4}",
+        f"{_msg('markdown.cda_covered')}         {all_coverage['YES']:>4}",
+        f"{_msg('markdown.partial')}             {all_coverage['PARTIAL']:>4}",
+        f"{_msg('markdown.not_covered')}         {all_coverage['NO']:>4}",
         "",
         f"Items:      YES {item_coverage['YES']}, PARTIAL {item_coverage['PARTIAL']}, NO {item_coverage['NO']}",
         f"Groups:     YES {group_coverage['YES']}, PARTIAL {group_coverage['PARTIAL']}, NO {group_coverage['NO']}",
-        f"Required items: YES {required_coverage['YES']}, PARTIAL {required_coverage['PARTIAL']}, NO {required_coverage['NO']}",
+        f"{_msg('markdown.required_items')} YES {required_coverage['YES']}, PARTIAL {required_coverage['PARTIAL']}, NO {required_coverage['NO']}",
         "",
         f"Reachable templates:  {cda.get('stats', {}).get('reachable_templates', 0):>4}",
-        f"Named CDA targets:    {cda.get('stats', {}).get('targets', 0):>4}",
-        f"Renderable targets:   {cda.get('stats', {}).get('renderable_targets', 0):>4}",
-        f"Evidence-linked items:{sum(bool(details[path].get('primary') or details[path].get('alternatives')) for path in model_fields):>5}",
-        f"Executable proposal:  {sum(value is not None for value in fields.values()):>4}",
-        f"Unresolved templates: {len(cda.get('unresolved_templates', [])):>4}",
+        f"{_msg('markdown.named_cda_targets')}    {cda.get('stats', {}).get('targets', 0):>4}",
+        f"{_msg('markdown.renderable_targets')}   {cda.get('stats', {}).get('renderable_targets', 0):>4}",
+        f"{_msg('markdown.evidence_linked_items')}{sum((bool(details[path].get('primary') or details[path].get('alternatives')) for path in model_fields)):>5}",
+        f"{_msg('markdown.executable_proposal')}  {sum((value is not None for value in fields.values())):>4}",
+        f"{_msg('markdown.unresolved_templates')} {len(cda.get('unresolved_templates', [])):>4}",
         "```",
         "",
-        "## Summary by evidence",
+        (_msg('markdown.summary_by_evidence')),
         "",
-        "### Qualification",
+        (_msg('markdown.qualification')),
         "",
     ]
     for key in ("EXACT", "INDIRECT", "PARTIAL", "NO_CDA"):
@@ -3699,17 +3822,17 @@ def _cda_mapping_analysis(
         detail_lines.append(f"- {key}: {qualifications[key]}")
     if location_ambiguities:
         detail_lines.append(f"- LOCATION_AMBIGUITY: {location_ambiguities}")
-    detail_lines += ["", "### Primary evidence", ""]
+    detail_lines += ["", (_msg('markdown.primary_evidence')), ""]
     for key, count in bridge.most_common():
         detail_lines.append(f"- {key}: {count}")
-    detail_lines += ["", "### Confidence", ""]
+    detail_lines += ["", (_msg('markdown.confidence')), ""]
     for key in ("STRONG", "MEDIUM", "WEAK", "NO"):
         if confidence[key]:
             detail_lines.append(f"- {key}: {confidence[key]}")
     detail_lines.append("")
 
     if structures:
-        detail_lines += ["## Executable structural rules", ""]
+        detail_lines += [(_msg('markdown.executable_structural_rules')), ""]
         for name, rule in structures.items():
             detail_lines.append(f"- `{name}` — `{rule.get('type')}`")
             for item in rule.get("evidence", []):
@@ -3733,12 +3856,12 @@ def _cda_mapping_analysis(
     )
     detail_lines.append("")
 
-    detail_lines += ["# Datapoint analysis", ""]
+    detail_lines += [(_msg('markdown.datapoint_analysis')), ""]
     for path in field_order:
         detail_lines.extend(field_section(path, detailed=True))
 
     if group_results:
-        detail_lines += ["# Structural group context", ""]
+        detail_lines += [(_msg('markdown.structural_group_context')), ""]
         group_order = [path for path in model.get("order", []) if path in group_results]
         if not group_order:
             group_order = sorted(group_results)
@@ -3767,110 +3890,25 @@ def _cda_mapping_analysis(
             else:
                 detail_lines += ["**NO**", ""]
 
-    def audit_candidate(
-        candidate: Mapping[str, Any] | None,
-    ) -> dict[str, Any] | None:
-        if candidate is None:
-            return None
-        # ``node`` is an internal XML element used while matching. It is not
-        # serializable and the persisted evidence already contains its stable
-        # identity and path.
-        return {str(key): value for key, value in candidate.items() if key != "node"}
-
-    def audit_detail(detail: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            "selected": detail.get("selected"),
-            "primary": audit_candidate(detail.get("primary")),
-            "alternatives": [
-                audit_candidate(candidate)
-                for candidate in detail.get("alternatives", [])
-            ],
-            "context": detail.get("context"),
-            **(
-                {"runtime_blocked": detail["runtime_blocked"]}
-                if detail.get("runtime_blocked") else {}
-            ),
-            **(
-                {"required_companions": list(detail["required_companions"])}
-                if detail.get("required_companions") else {}
-            ),
-            **(
-                {"unresolved_reason": detail["unresolved_reason"]}
-                if detail.get("unresolved_reason") else {}
-            ),
-            **(
-                {"gap": dict(detail["gap"])}
-                if detail.get("gap") else {}
-            ),
-            **(
-                {"possible_targets": dict(detail["possible_targets"])}
-                if detail.get("possible_targets") else {}
-            ),
-            **(
-                {"structural_rule": detail["structural_rule"]}
-                if detail.get("structural_rule") else {}
-            ),
-            **(
-                {"shared_target_winner": True}
-                if detail.get("shared_target_winner") else {}
-            ),
-        }
-
-    audit: dict[str, Any] = {
-        "version": 2,
-        "model": dict(proposal["model"]),
-        "target": dict(proposal["target"]),
-        "fields": {
-            path: audit_detail(detail) for path, detail in details.items()
-        },
-        "groups": {
-            path: audit_detail(detail) for path, detail in group_results.items()
-        },
-        "structures": structures,
-        "unresolved_templates": list(cda.get("unresolved_templates", [])),
-        "summary": {
-            "datapoints": len(all_details),
-            "coverage": dict(all_coverage),
-            "field_coverage": dict(item_coverage),
-            "group_coverage": dict(group_coverage),
-            "confidence": dict(confidence),
-            "primary_evidence": dict(bridge),
-            "executable_fields": sum(value is not None for value in fields.values()),
-            "shared_target_blocks": sum(
-                str(detail.get("runtime_blocked") or "").startswith((
-                    "SHARED(", "WEAKER_SHARED_TARGET(",
-                ))
-                for detail in details.values()
-            ),
-            "required_companion_blocks": sum(
-                str(detail.get("runtime_blocked") or "").startswith(
-                    "REQUIRED_COMPANION("
-                )
-                for detail in details.values()
-            ),
-            "gaps": dict(Counter(
-                f"{gap['gate']}:{gap['kind']}"
-                for detail in all_details.values()
-                for gap in [detail.get("gap")]
-                if isinstance(gap, Mapping)
-            )),
-            "structural_rules": Counter(
-                str(rule.get("type") or "unknown") for rule in structures.values()
-            ),
-        },
-    }
-    from .reports import coverage_headline_counts
-    audit["summary"]["coverage_headline"] = coverage_headline_counts(
-        model, cda, proposal, audit
-    )
     return (
         proposal,
-        audit,
+        _mapping_audit(model, cda, proposal, details, group_results),
         "\n".join(report_lines) + "\n",
         "\n".join(detail_lines) + "\n",
     )
 
 
+
+def _cda_mapping_analysis(
+    model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: Iterable[Path],
+) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    paths = list(xml_paths)
+    fields, details, groups, members = _mapping_candidates(model, cda, paths)
+    proposal = _mapping_admissibility(model, cda, paths, fields, details, groups, members)
+    return _mapping_reports(model, cda, proposal, details, groups)
+
+
+@localized
 def cda_mapping_audit(
     model: Mapping[str, Any],
     cda: Mapping[str, Any],
@@ -3885,14 +3923,8 @@ def cda_mapping_audit(
     return (
         proposal,
         audit,
-        localize_markdown(
-            report, output_language,
-            protected_values=(model, cda, proposal, audit),
-        ),
-        localize_markdown(
-            details, output_language,
-            protected_values=(model, cda, proposal, audit),
-        ),
+        (report),
+        (details),
     )
 
 
@@ -4116,7 +4148,7 @@ def mapping_target_identities(
 
     Human-readable CDA target names are useful review labels but can change
     when a template revision is recompiled.  The exact and revisionless owner
-    keys make later migration explicit and uniquely checkable.
+    keys expose exact owner provenance for review.
     """
     targets = cda.get("targets", {})
     datapoints = cda.get("datapoints", {})
@@ -4193,150 +4225,7 @@ def mapping_target_identities(
     return dict(sorted(result.items()))
 
 
-def migrate_mapping_target_identities(
-    current: dict[str, Any], proposed: Mapping[str, Any], cda: Mapping[str, Any],
-) -> int:
-    """Migrate stale target labels only through unique stored owner identity."""
-    old = current.get("target_identities", {})
-    new = proposed.get("target_identities", {})
-    if not isinstance(old, Mapping) or not isinstance(new, Mapping):
-        return 0
-    new_by_owner: dict[str, list[tuple[str, Mapping[str, Any]]]] = defaultdict(list)
-    proposal_owners: set[str] = set()
-    for name, identity in new.items():
-        if isinstance(identity, Mapping) and identity.get("revisionless_source_key"):
-            owner = str(identity["revisionless_source_key"])
-            proposal_owners.add(owner)
-            new_by_owner[owner].append(
-                (str(name), identity)
-            )
-    for name, target in cda.get("targets", {}).items():
-        if not isinstance(target, Mapping):
-            continue
-        owner = _revisionless_target_key(target)
-        if owner and owner not in proposal_owners:
-            new_by_owner[owner].append((str(name), {
-                "cda_target": str(name),
-            }))
-
-    migrations: dict[str, tuple[str, str]] = {}
-    for name, identity in old.items():
-        if not isinstance(identity, Mapping):
-            continue
-        owner = str(identity.get("revisionless_source_key") or "")
-        candidates = new_by_owner.get(owner, [])
-        if owner and len(candidates) == 1:
-            new_name, new_identity = candidates[0]
-            migrations[str(name)] = (
-                new_name, str(new_identity.get("cda_target") or new_name),
-            )
-
-    changed = 0
-
-    def migrate_reference(name: Any) -> tuple[str, str | None]:
-        configured = str(name or "")
-        return migrations.get(configured, (configured, None))
-
-    def migrate_selection(selection: Any) -> Any:
-        nonlocal changed
-        if isinstance(selection, str):
-            target, _physical = migrate_reference(selection)
-            if target != selection:
-                changed += 1
-            return target
-        if isinstance(selection, list):
-            return [migrate_selection(item) for item in selection]
-        if not isinstance(selection, Mapping):
-            return selection
-        rule = dict(selection)
-        if rule.get("target"):
-            target, physical = migrate_reference(rule["target"])
-            current_physical = str(rule.get("cda_target") or rule["target"])
-            migrated_physical = physical or current_physical
-            if (
-                target != str(rule["target"])
-                or migrated_physical != current_physical
-            ):
-                changed += 1
-            rule["target"] = target
-            if "cda_target" in rule or migrated_physical != target:
-                rule["cda_target"] = migrated_physical
-        return rule
-
-    fields = current.get("fields", {})
-    if isinstance(fields, dict):
-        for path, selection in list(fields.items()):
-            fields[path] = migrate_selection(selection)
-
-    narratives = current.get("narratives", {})
-    if isinstance(narratives, dict):
-        for old_name in list(narratives):
-            new_name, _physical = migrate_reference(old_name)
-            if new_name != old_name:
-                narratives[new_name] = narratives.pop(old_name)
-                changed += 1
-
-    structures = current.get("structures", {})
-    structure_items = (
-        structures.values() if isinstance(structures, Mapping) else structures
-        if isinstance(structures, list) else []
-    )
-    for rule in structure_items:
-        if not isinstance(rule, dict):
-            continue
-        for rule_owner in [rule] + [
-            branch for branch in rule.get("branches", [])
-            if isinstance(branch, dict)
-        ]:
-            if rule_owner.get("target"):
-                target, physical = migrate_reference(rule_owner["target"])
-                old_target = str(rule_owner["target"])
-                old_physical = str(
-                    rule_owner.get("cda_target") or old_target
-                )
-                migrated_physical = physical or old_physical
-                if target != old_target or migrated_physical != old_physical:
-                    changed += 1
-                rule_owner["target"] = target
-                if "cda_target" in rule_owner or migrated_physical != target:
-                    rule_owner["cda_target"] = migrated_physical
-            constants = rule_owner.get("constants", {})
-            if isinstance(constants, dict):
-                for old_name in list(constants):
-                    new_name, _physical = migrate_reference(old_name)
-                    if new_name != old_name:
-                        constants[new_name] = constants.pop(old_name)
-                        changed += 1
-
-    defaults = current.get("target_defaults", {})
-    if isinstance(defaults, dict):
-        for old_name in list(defaults):
-            new_name, _physical = migrate_reference(old_name)
-            if new_name != old_name:
-                defaults[new_name] = defaults.pop(old_name)
-                changed += 1
-    requirements = current.get("site_requirements", {})
-    if isinstance(requirements, dict):
-        for old_name in list(requirements):
-            new_name, _physical = migrate_reference(old_name)
-            if new_name != old_name:
-                requirements[new_name] = requirements.pop(old_name)
-                changed += 1
-    refreshed = mapping_target_identities(cda, current)
-    for name, identity in old.items():
-        if (
-            str(name) not in refreshed and str(name) not in migrations
-            and isinstance(identity, Mapping)
-        ):
-            # Keep an unresolved/ambiguous old identity available for review;
-            # losing the evidence would make a later unique migration harder.
-            refreshed[str(name)] = dict(identity)
-    current["target_identities"] = dict(sorted(refreshed.items()))
-    current.setdefault("narratives", {})
-    current["version"] = max(int(current.get("version") or 0), 10)
-    return changed
-
-
+@localized
 def write_cda_mapping(
     xml_paths: Iterable[Path],
     model_dir: Path,
@@ -4381,9 +4270,6 @@ def write_cda_mapping(
     (model_dir / "cda-mapping.proposed.md").write_text(
         cda_report, encoding="utf-8"
     )
-    legacy_guide = model_dir / "cda-mapping.md"
-    if legacy_guide.is_file():
-        legacy_guide.unlink()
     tree_report = render_cda_mapping_trees_markdown(
         model, enriched_cda, cda_proposal, audit,
         output_language=output_language,
@@ -4404,6 +4290,7 @@ def write_cda_mapping(
     return cda_proposal
 
 
+@localized
 def write_mapping_model(
     evidence: Iterable[Path],
     model_dir: Path,

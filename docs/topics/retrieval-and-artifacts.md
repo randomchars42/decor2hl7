@@ -105,3 +105,12 @@ hashes match.
 
 Current unavailable publications and closure limitations are listed in
 [`../open-boundaries.md`](../open-boundaries.md).
+
+## Compiler admission
+
+The compiler verifies the recorded SHA-256 of every successful source, analysis
+and expansion form in the selected transaction, build and evidence closure
+before consuming it. A missing checksum, missing file or changed bytes is an
+integrity error, even if retrieval previously succeeded. Unavailable optional
+evidence still follows the documented degradation policy; successful evidence
+with inconsistent bytes cannot be admitted as trustworthy input.

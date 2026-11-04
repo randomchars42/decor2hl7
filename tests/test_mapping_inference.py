@@ -122,9 +122,6 @@ class MappingInferenceTests(unittest.TestCase):
             self.assertIn("Dataset concept: `c`", details)
             output = Path(tmp) / "model"
             output.mkdir()
-            (output / "cda-mapping.md").write_text(
-                "# stale legacy proposal guide", encoding="utf-8"
-            )
             mapping_compiler.write_cda_mapping([project], output, model, target)
             audit = load_json(output / "mapping-audit.json")
             self.assertEqual(audit["fields"]["foo"]["selected"], "ExampleDocument.value")

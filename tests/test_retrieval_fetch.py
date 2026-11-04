@@ -659,6 +659,10 @@ class RetrievalFetchTests(unittest.TestCase):
                     "requested_effective_date": "2020",
                 },
             }
+            from decor2hl7.hashing import sha256_file
+            for entry in resources.values():
+                if entry.get("file"):
+                    entry["sha256"] = sha256_file(release / str(entry["file"]))
             (release / "manifest.json").write_text(
                 json.dumps({"resources": resources}), encoding="utf-8"
             )

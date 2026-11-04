@@ -8,9 +8,10 @@ the resulting XSD/Schematron gates.
 
 from __future__ import annotations
 
+from .hashing import sha256_file as sha256_file
+
 import base64
 import copy
-import hashlib
 import json
 import os
 import re
@@ -26,7 +27,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Collection, Iterable, Mapping, Sequence
 
 from .cda.core import CORE_REVISION
-from .i18n import localize_markdown
+from .i18n import message as _msg, localized
 from .workspace import write_json
 
 
@@ -104,14 +105,6 @@ _DECOR_ROOT_SUFFIXES = {".xsd", ".xsl", ".sch", ".xml"}
 _DECOR_ROOT_FILES = {"expath-pkg.xml", "repo.xml"}
 _DECOR_DIRECTORIES = {"coreschematrons", "iso-schematron"}
 _CDA_DIRECTORIES = {"schema/normative", "schema/extensions/SDTC"}
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def package_archive_path(release_dir: Path, package: PackageArchive) -> Path:
@@ -1243,6 +1236,7 @@ def _summary(diagnostics: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     }
 
 
+@localized
 def write_conformance_report(
     destination: Path,
     *,
@@ -1283,7 +1277,7 @@ def write_conformance_report(
     }
     write_json(destination.with_suffix(".json"), result)
     lines = [
-        "# Conformance validation",
+        (_msg('markdown.conformance_validation')),
         "",
         f"**Scope:** {scope}",
         "",
@@ -1292,10 +1286,9 @@ def write_conformance_report(
         f"Errors: {summary['error']} · Warnings: {summary['warning']} · "
         f"Information: {summary['info']}",
         "",
-        "Package validation is independent of dataset-to-CDA mapping coverage. "
-        "A legal structural slot is not semantic mapping evidence.",
+        (_msg('markdown.package_validation_is_independent_of_dataset_to_cda')),
         "",
-        "## Stages",
+        (_msg('markdown.stages')),
         "",
         "| Stage | Status | Detail |",
         "|---|---|---|",
@@ -1306,9 +1299,9 @@ def write_conformance_report(
     lines.append("")
     if diagnostics:
         lines += [
-            "## Diagnostics",
+            (_msg('markdown.diagnostics')),
             "",
-            "| Severity | Phase | Location | Message |",
+            (_msg('markdown.severity_phase_location_message')),
             "|---|---|---|---|",
         ]
         displayed = diagnostics[:200]
@@ -1321,21 +1314,18 @@ def write_conformance_report(
         if len(diagnostics) > len(displayed):
             lines += [
                 "",
-                f"Showing the first {len(displayed)} of {len(diagnostics)} diagnostics. "
-                f"The complete list is in `{destination.with_suffix('.json').name}`.",
+                f"{_msg('markdown.showing_the_first')}{len(displayed)} of {len(diagnostics)}{_msg('markdown.diagnostics_the_complete_list_is_in')}`{destination.with_suffix('.json').name}`.",
             ]
     else:
-        lines += ["No conformance diagnostics were emitted.", ""]
+        lines += [(_msg('markdown.no_conformance_diagnostics_were_emitted')), ""]
     destination.with_suffix(".md").write_text(
-        localize_markdown(
-            "\n".join(lines), output_language,
-            protected_values=(scope, diagnostics, stages, policy),
-        ),
+        ("\n".join(lines)),
         encoding="utf-8",
     )
     return result
 
 
+@localized
 def build_conformance_artifacts(
     release_dir: Path,
     model_dir: Path,
@@ -1423,7 +1413,7 @@ def build_conformance_artifacts(
         "status": "passed" if generation["complete"] else "degraded",
         "detail": (
             f"validator {Path(str(generation['validator'])).name}; "
-            f"{len(generation.get('generation_messages', []))} upstream generation message(s), "
+            f"{len(generation.get('generation_messages', []))} upstream generation _msg(s), "
             f"{outside} outside the selected document closure; "
             f"executable probe {'passed' if generation['executable'] else 'failed'}; "
             "see generation-messages.txt and validator-manifest.json"
@@ -1443,6 +1433,7 @@ def build_conformance_artifacts(
     )
 
 
+@localized
 def validate_cda_documents(
     release_dir: Path,
     model_dir: Path,

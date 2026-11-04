@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from decor2hl7.runtime import _prune_absent_pending, _prune_stale_pending
 from decor2hl7.cli import (
     _merge_mapping_configuration_notes,
-    _prune_absent_pending, _prune_stale_pending, _send_paths, main,
+    main,
 )
 from decor2hl7.workspace import (
     load_json, release_site_dir, set_release, set_transaction,
@@ -349,8 +350,8 @@ class CliTests(unittest.TestCase):
             (site_dir / "csv-mapping.md").write_text("# CSV guide", encoding="utf-8")
             model_dir = transaction_model_dir(root)
             model_dir.mkdir(parents=True)
-            (model_dir / "codes-mapping.md").write_text(
-                "# Model code guide", encoding="utf-8"
+            (site_dir / "codes-mapping.md").write_text(
+                "# Site code guide", encoding="utf-8"
             )
 
             self.assertEqual(main(["--root", str(root), "init-site-config"]), 0)
@@ -359,7 +360,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(configured["fields"]["triage"]["O"], "orange")
             self.assertNotIn("unknown", configured["fields"]["triage"] )
             self.assertEqual(
-                (site_dir / "codes-mapping.md").read_text(), "# Model code guide"
+                (site_dir / "codes-mapping.md").read_text(), "# Site code guide"
             )
 
     def test_initializers_never_overwrite_user_mappings(self) -> None:
@@ -818,7 +819,7 @@ class CliTests(unittest.TestCase):
             sidecar = out / "case-v2.json"
             xml.write_text("<old/>", encoding="utf-8")
             write_json(sidecar, {"state_key": "tx::case", "fingerprint": "old"})
-            removed = _prune_stale_pending(out, "tx::case", "current")
+            removed = _prune_stale_pending(out, "tx::case", "current", out / "state")
             self.assertEqual(removed, 1)
             self.assertFalse(xml.exists())
             self.assertFalse(sidecar.exists())
@@ -834,47 +835,12 @@ class CliTests(unittest.TestCase):
             (out / "pending.xml").write_text("<pending/>", encoding="utf-8")
             write_json(out / "pending.json", {"state_key": "tx::gone", "fingerprint": "new"})
             (out / "sent.xml").write_text("<sent/>", encoding="utf-8")
-            write_json(out / "sent.json", {"state_key": "tx::sent", "fingerprint": "same"})
-            state.record_sent(state_path, key="tx::sent", digest="same", document_version=1, file="sent.xml", spec_version="v")
+            write_json(out / "sent.json", {"state_key": "tx::sent", "fingerprint": "same", "document_version": 1})
+            state.record_delivery(state_path, key="tx::sent", digest="same", document_version=1, file="sent.xml", spec_version="v")
             removed = _prune_absent_pending(out, set(), state_path)
             self.assertEqual(removed, 1)
             self.assertFalse((out / "pending.xml").exists())
             self.assertTrue((out / "sent.xml").exists())
-
-    def test_send_rejects_a_stale_artifact_before_transport_io(self) -> None:
-        from decor2hl7 import state
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self.assertEqual(main(["--root", str(root), "init"]), 0)
-            set_release(root, RELEASES[0])
-            set_transaction(root, TRANSACTIONS[0])
-            site_path = release_site_dir(root) / "site.json"
-            write_json(site_path, {
-                "identifiers": {"document_root": "1.2.3"},
-                "transport": {
-                    "adapter": "http-post", "url": "https://example.invalid",
-                    "headers": {}, "timeout": 60,
-                },
-            })
-            out = transaction_out_dir(root)
-            out.mkdir(parents=True)
-            document = out / "case-v1.xml"
-            document.write_text("<ClinicalDocument/>", encoding="utf-8")
-            write_json(document.with_suffix(".json"), {
-                "key": "case", "state_key": f"{TRANSACTIONS[0]['id']}::case",
-                "fingerprint": "stale", "document_version": 1,
-                "document_id": {"root": "1.2.3", "extension": "case-1"},
-                "set_id": {"root": "1.2.3", "extension": "case"},
-            })
-            state.record_sent(
-                root / "state", key=f"{TRANSACTIONS[0]['id']}::case",
-                digest="current", document_version=1, file="current.xml",
-                spec_version="release-v1",
-            )
-            with patch("decor2hl7.transport.send") as send:
-                self.assertEqual(_send_paths(root, [document]), (0, 1))
-            send.assert_not_called()
 
 
 

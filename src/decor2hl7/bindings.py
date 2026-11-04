@@ -6,6 +6,8 @@ outside the XML renderer makes the mapping contract executable and reviewable.
 """
 from __future__ import annotations
 
+from .occurrences import present as _present, value_at as _value_at_occurrence
+
 from typing import Any, Mapping
 
 from .data import field_value
@@ -1022,14 +1024,6 @@ def _prepare_identifier(
     return [one(item) for item in value] if isinstance(value, list) else one(value)
 
 
-def _present(value: Any) -> bool:
-    if value is None or value is OMIT:
-        return False
-    if isinstance(value, list):
-        return any(_present(item) for item in value)
-    return True
-
-
 def _quantity_range_projections(value: Any) -> tuple[Any, Any, Any, bool]:
     """Project mixed scalar/range occurrence trees onto compiled CDA slots."""
     if isinstance(value, list):
@@ -1124,20 +1118,6 @@ def _present_occurrences(
     ):
         return []
     return [prefix] if _present(value) else []
-
-
-def _value_at_occurrence(value: Any, occurrence: tuple[int, ...]) -> Any:
-    current = value
-    for depth, index in enumerate(occurrence):
-        if isinstance(current, list):
-            if index >= len(current):
-                return None
-            current = current[index]
-        else:
-            # This mirrors CDA rendering: a scalar inside a repeating branch
-            # supplies only the first occurrence.
-            return current if all(item == 0 for item in occurrence[depth:]) else None
-    return current
 
 
 def non_null_requirement_problems(
