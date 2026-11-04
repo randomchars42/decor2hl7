@@ -19,8 +19,9 @@ import re
 import urllib.error
 import xml.etree.ElementTree as ET
 from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, cast
+from typing import Any, Callable, Iterable, Mapping, Protocol, TypedDict, cast
 
 from .api import (
     artifact_representations,
@@ -54,7 +55,7 @@ from .resolution import (
 )
 from ..workspace import load_json, write_json
 from ..cda.core import CORE_FILES, CORE_RAW_BASE, CORE_REVISION
-from ..cda.extensions import normalize_extensions
+from ..cda.extensions import CdaExtension, normalize_extensions
 from ..conformance import (
     VALIDATION_ARCHIVES, extract_validation_packages, package_archive_path,
     validation_package_problems,
@@ -68,15 +69,17 @@ class RequestBudgetExceeded(RuntimeError):
 Progress = Callable[[str], None]
 
 
+class RequestBudget(TypedDict):
+    made: int
+    max: int
+
 def _emit(progress: Progress | None, message: str) -> None:
     if progress is not None:
         progress(message)
 
-
 def _resource_label(want: Mapping[str, str]) -> str:
     effective = want.get("effective_date") or "dynamic"
     return f"{want.get('kind', 'resource')} {want.get('id', '?')} @ {effective}"
-
 
 def _size_text(size: int) -> str:
     if size < 1024:
@@ -85,14 +88,11 @@ def _size_text(size: int) -> str:
         return f"{size / 1024:.1f} KiB"
     return f"{size / (1024 * 1024):.1f} MiB"
 
-
 def _safe(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("_") or "resource"
 
-
 def _digest(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
-
 
 def _identity(
     want: Mapping[str, object],
@@ -117,7 +117,6 @@ def _identity(
         ),
     }
 
-
 def _key(want: Mapping[str, object]) -> str:
     effective = str(want.get("effective_date") or "")
     suffix = f"@{effective}" if effective else ""
@@ -127,7 +126,6 @@ def _key(want: Mapping[str, object]) -> str:
         dataset_date = str(want.get("dataset_effective_date") or "")
         key += f"|context={dataset}{('@' + dataset_date) if dataset_date else ''}"
     return key
-
 
 def _filename(want: Mapping[str, object], form: str = "analysis") -> str:
     stamp = _safe(str(want.get("effective_date") or ""))
@@ -144,7 +142,6 @@ def _filename(want: Mapping[str, object], form: str = "analysis") -> str:
     suffix = "" if form == "analysis" else f".{form}"
     return f"{directory}/{name}{suffix}.xml"
 
-
 def classify_payload(payload: bytes) -> tuple[str, str]:
     """Return ``ok``, ``empty`` or ``unparseable`` for a service response."""
     if not payload.strip():
@@ -157,13 +154,11 @@ def classify_payload(payload: bytes) -> tuple[str, str]:
         return "empty", f"<{local(root.tag)}/> with no content"
     return "ok", ""
 
-
 def _parse(path: Path) -> ET.Element | None:
     try:
         return parse_text(path.read_text(encoding="utf-8", errors="replace"))[0]
     except (ET.ParseError, OSError):
         return None
-
 
 def _valueset_complete(
     node: ET.Element, document: ET.Element | None = None,
@@ -197,7 +192,6 @@ def _valueset_complete(
             return False
     return True
 
-
 def _valueset_needs_expansion(payload: bytes) -> bool:
     try:
         root, _ = parse_text(payload.decode("utf-8", "replace"))
@@ -213,7 +207,6 @@ def _valueset_needs_expansion(payload: bytes) -> bool:
         or not value_sets
         or any(not _valueset_complete(node, root) for node in value_sets)
     )
-
 
 def _inventory(root: ET.Element | None) -> set[tuple[str, str, str]]:
     """Resources already embedded in an XML document (kind, id, effectiveDate)."""
@@ -238,7 +231,6 @@ def _inventory(root: ET.Element | None) -> set[tuple[str, str, str]]:
             continue
         result.add((kind, ident, node.get("effectiveDate") or ""))
     return result
-
 
 def _satisfied(
     want: Mapping[str, object], have: set[tuple[str, str, str]],
@@ -299,7 +291,6 @@ def _matching_embedded(
     rows.sort(key=lambda node: node.get("effectiveDate") or "")
     return rows[-1:]
 
-
 def _evidence_references(root: ET.Element, relevant_ids: set[str]) -> list[Want]:
     """External evidence references relevant to the selected transaction only.
 
@@ -340,7 +331,6 @@ ARTIFACT_TAG_FOR_KIND = {
     "codesystem": "codeSystem",
 }
 
-
 def _artifact_identity_nodes(
     root: ET.Element, want: Mapping[str, object]
 ) -> list[ET.Element]:
@@ -364,7 +354,6 @@ def _artifact_identity_nodes(
         and wanted_id in {node.get("id"), node.get("ref")}
     ]
 
-
 def _resolved_effective_date(payload: bytes, want: Mapping[str, object]) -> str:
     try:
         root, _ = parse_text(payload.decode("utf-8", "replace"))
@@ -378,7 +367,6 @@ def _resolved_effective_date(payload: bytes, want: Mapping[str, object]) -> str:
     if not rows and root.get("effectiveDate"):
         rows.append(root.get("effectiveDate") or "")
     return max(rows) if rows else ""
-
 
 def _payload_matches_request(payload: bytes, want: Mapping[str, str]) -> bool:
     """Return whether cached XML contains the exact requested artifact.
@@ -399,7 +387,6 @@ def _payload_matches_request(payload: bytes, want: Mapping[str, str]) -> bool:
         for node in _artifact_identity_nodes(root, want)
     )
 
-
 def _repositories(*roots: ET.Element | None, own: str) -> list[str]:
     result = [own]
     for root in roots:
@@ -412,7 +399,6 @@ def _repositories(*roots: ET.Element | None, own: str) -> list[str]:
                     result.append(ident)
     return result
 
-
 def _project_directory(root: ET.Element | None) -> dict[str, str]:
     result: dict[str, str] = {}
     if root is None:
@@ -423,7 +409,6 @@ def _project_directory(root: ET.Element | None) -> dict[str, str]:
         if ident and prefix and ident not in result:
             result[ident] = prefix
     return result
-
 
 def _seed_artifact_owners(
     artifact_owners: dict[str, str],
@@ -443,7 +428,6 @@ def _seed_artifact_owners(
                     artifact_owners, want, project
                 ) or changed
     return changed
-
 
 def _seed_manifest_artifact_owners(
     artifact_owners: dict[str, str],
@@ -473,7 +457,6 @@ def _seed_manifest_artifact_owners(
                 replace=True,
             ) or changed
     return changed
-
 
 def _requests(
     want: Mapping[str, object],
@@ -511,7 +494,6 @@ def _requests(
         rows = [row for row in rows if row["form"] == "analysis"]
     return rows
 
-
 def _existing_cache_payload(
     target: Path,
     old: Mapping[str, Any],
@@ -540,7 +522,6 @@ def _existing_cache_payload(
         return None
     return payload
 
-
 def _external_manifest_fields(want: Mapping[str, str]) -> dict[str, str]:
     source_url = want.get("source_url") or want.get("publication_url") or ""
     return {
@@ -558,7 +539,6 @@ def _external_manifest_fields(want: Mapping[str, str]) -> dict[str, str]:
         ),
     }
 
-
 def _source_hint_fields(want: Mapping[str, object]) -> dict[str, str]:
     return {
         **(
@@ -570,7 +550,6 @@ def _source_hint_fields(want: Mapping[str, object]) -> dict[str, str]:
             if want.get("source_hint_origin") else {}
         ),
     }
-
 
 def _materialize_external(
     release_dir: Path,
@@ -754,7 +733,6 @@ def _materialize_external(
     _emit(progress, f"fetch: {display}: builtin {action} ({completeness})")
     return True, target if status == "ok" else None
 
-
 def _fetch_direct(
     release_dir: Path,
     manifest: dict[str, Any],
@@ -873,7 +851,6 @@ def _fetch_direct(
     _emit(progress, f"fetch: {display}: {stored_status} ({_size_text(len(payload))})")
     return target
 
-
 def _fetch_validation_packages(
     release_dir: Path,
     manifest: dict[str, Any],
@@ -934,7 +911,6 @@ def _fetch_validation_packages(
     }
     _emit(progress, "fetch: validation packages: verified and extracted")
     return True
-
 
 def _fetch_openapi(
     release_dir: Path,
@@ -1000,33 +976,9 @@ def _fetch_openapi(
     }
     return target
 
-
-def _fetch_want(
-    release_dir: Path,
-    manifest: dict[str, Any],
-    want: Mapping[str, object],
-    *,
-    owners: Mapping[str, str],
-    repositories: Iterable[str],
-    language: str,
-    ipv4: bool,
-    retry_missing: bool,
-    offline: bool = False,
-    request_budget: dict[str, int] | None = None,
-    progress: Progress | None = None,
-    save_manifest: Callable[[], None] | None = None,
-    main_project: str = "aktin-",
-    release: str = "",
-    api_base: str = DEFAULT_API_BASE,
-    source_hints: Mapping[str, Mapping[str, str]] | None = None,
-    configured_oid_owners: Mapping[str, str] | None = None,
-    artifact_owners: dict[str, str] | None = None,
-    save_artifact_owners: Callable[[], None] | None = None,
-) -> Path | None:
-    requested_want = cast(Want, dict(want))
-    resolved_want = resolve_alias(want, source_hints or {})
-    requested_key = _key(requested_want)
-    key = _key(resolved_want)
+def _previous_resource(
+    manifest: dict[str, Any], key: str, resolved_want: Mapping[str, object],
+) -> Mapping[str, Any]:
     old = manifest.setdefault("resources", {}).get(key, {})
     # An earlier dynamic request may already have frozen the exact revision
     # now named by a reviewed profile rule. Reuse that checksum-verified
@@ -1052,51 +1004,18 @@ def _fetch_want(
                 ):
                     old = candidate
                     break
-    relative = str(old.get("file") or _filename(resolved_want))
-    target = release_dir / relative
-    display = _resource_label(resolved_want)
-    external_mode = resolved_want.get("mode") or ""
+    return old if isinstance(old, Mapping) else {}
 
-    def finish(path: Path | None) -> Path | None:
-        """Record a reviewed malformed identity without fabricating success."""
-        if requested_key != key and resolved_want.get("alias_requested_key"):
-            manifest.setdefault("resources", {})[requested_key] = {
-                "status": "alias",
-                "alias_of": key,
-                "identity_corrected": True,
-                "requested_effective_date": (
-                    requested_want.get("effective_date") or "dynamic"
-                ),
-                "identity": _identity(requested_want),
-                "reason": resolved_want.get("alias_reason") or "",
-                "source_hint": resolved_want.get("alias_requested_key") or "",
-                "source_hint_origin": (
-                    resolved_want.get("alias_source_hint_origin") or "bundled"
-                ),
-            }
-            if save_manifest is not None:
-                save_manifest()
-        return path
 
-    def external_resolution() -> tuple[bool, Path | None]:
-        return _materialize_external(
-            release_dir, manifest, resolved_want, key=key, relative=relative,
-            progress=progress, save_manifest=save_manifest,
-        )
+@dataclass(frozen=True)
+class CachedRepresentations:
+    entries: dict[str, dict[str, Any]]
+    payloads: dict[str, bytes]
+    expansion_warning: str
 
-    # A waiver is an explicit settled decision, not a network fallback. A
-    # previously materialized builtin is likewise reconstructed from its
-    # package checksum before generic cache adoption, preserving provenance
-    # even after manifest.json has been deleted.
-    if external_mode == "waiver" or (
-        external_mode == "builtin" and target.is_file()
-    ):
-        handled, external_path = external_resolution()
-        if handled:
-            return finish(external_path)
-    existing = _existing_cache_payload(target, old)
-    if existing is not None and not _payload_matches_request(existing, resolved_want):
-        existing = None
+def _cached_representations(
+    release_dir: Path, old: Mapping[str, Any],
+) -> CachedRepresentations:
     old_representations = (
         old.get("representations", {})
         if isinstance(old.get("representations"), Mapping) else {}
@@ -1127,7 +1046,113 @@ def _fetch_want(
                 _, cached_expansion_warning = expansion_status(payload)
             cached_representations[str(form)] = entry
             cached_payloads[str(form)] = payload
-    cached_source = cached_payloads.get("source")
+    return CachedRepresentations(cached_representations, cached_payloads, cached_expansion_warning)
+
+def _request_representation(
+    project: str, form: str, url: str, *, display: str, ipv4: bool,
+    request_budget: RequestBudget | None, attempts: list[dict[str, Any]],
+    progress: Progress | None,
+) -> bytes | None:
+    if request_budget is not None:
+        if request_budget.get("made", 0) >= request_budget.get("max", 0):
+            raise RequestBudgetExceeded
+        request_budget["made"] = request_budget.get("made", 0) + 1
+    count = request_budget.get("made", 0) if request_budget is not None else 0
+    maximum = request_budget.get("max", 0) if request_budget is not None else 0
+    budget = f" [{count}/{maximum}]" if maximum else ""
+    _emit(
+        progress,
+        f"fetch: {display}: requesting {form} via {project or 'global'}{budget}",
+    )
+    try:
+        payload = get(url, ipv4=ipv4)
+    except urllib.error.HTTPError as error:
+        attempts.append({
+            "project": project,
+            "form": form,
+            "url": url,
+            "http_status": error.code,
+        })
+        _emit(
+            progress,
+            f"fetch: {display}: {form} HTTP {error.code} via {project or 'global'}",
+        )
+        return None
+    except OSError as error:
+        attempts.append({
+            "project": project,
+            "form": form,
+            "url": url,
+            "error": str(error),
+        })
+        _emit(
+            progress,
+            f"fetch: {display}: {form} {error} via {project or 'global'}",
+        )
+        return None
+    status, detail = classify_payload(payload)
+    if status != "ok":
+        attempts.append({
+            "project": project,
+            "form": form,
+            "url": url,
+            "error": detail,
+        })
+        _emit(
+            progress,
+            f"fetch: {display}: {form} {status} via {project or 'global'}",
+        )
+        return None
+    return payload
+
+
+def _store_representation(
+    form: str, payload: bytes, url: str, *, release_dir: Path, relative: str,
+    request_want: Mapping[str, object], manifest: dict[str, Any],
+    saved_representations: dict[str, dict[str, Any]],
+) -> Path:
+    form_relative = relative if form == "analysis" else _filename(request_want, form)
+    path = release_dir / form_relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    representation = {
+        "status": "ok",
+        "file": form_relative,
+        "url": url,
+        "bytes": len(payload),
+        "sha256": _digest(payload),
+    }
+    saved_representations[form] = representation
+    # Dynamic and exact requests can converge on one frozen representation
+    # path. Expansion envelopes carry request-time UUID/timestamp metadata,
+    # so a later equivalent response changes the physical checksum. Keep
+    # every manifest reference to that shared file synchronized.
+    resources = manifest.get("resources", {})
+    for resource in resources.values() if isinstance(resources, Mapping) else ():
+        if not isinstance(resource, dict):
+            continue
+        forms = resource.get("representations", {})
+        if not isinstance(forms, dict):
+            continue
+        for old_form, old_representation in list(forms.items()):
+            if (
+                isinstance(old_representation, Mapping)
+                and old_representation.get("file") == form_relative
+            ):
+                forms[old_form] = dict(representation)
+    return path
+
+
+def _adopt_cached_analysis(
+    existing: bytes | None, cached: CachedRepresentations, *,
+    requested_want: Mapping[str, object], resolved_want: Mapping[str, object],
+    old: Mapping[str, Any], manifest: dict[str, Any], key: str, relative: str,
+    api_base: str, retry_missing: bool, offline: bool, display: str,
+    progress: Progress | None, save_manifest: Callable[[], None] | None,
+) -> bool:
+    cached_representations = cached.entries
+    cached_source = cached.payloads.get("source")
+    cached_expansion_warning = cached.expansion_warning
     if existing is not None:
         resolved_date = _resolved_effective_date(existing, resolved_want)
         # The analysis form of a reference declaration is a project envelope
@@ -1209,7 +1234,91 @@ def _fetch_want(
             if repaired and save_manifest is not None:
                 save_manifest()
             if not needs_expansion or offline:
-                return finish(target)
+                return True
+    return False
+
+def _fetch_want(
+    release_dir: Path,
+    manifest: dict[str, Any],
+    want: Mapping[str, object],
+    *,
+    owners: Mapping[str, str],
+    repositories: Iterable[str],
+    language: str,
+    ipv4: bool,
+    retry_missing: bool,
+    offline: bool = False,
+    request_budget: RequestBudget | None = None,
+    progress: Progress | None = None,
+    save_manifest: Callable[[], None] | None = None,
+    main_project: str = "aktin-",
+    release: str = "",
+    api_base: str = DEFAULT_API_BASE,
+    source_hints: Mapping[str, Mapping[str, str]] | None = None,
+    configured_oid_owners: Mapping[str, str] | None = None,
+    artifact_owners: dict[str, str] | None = None,
+    save_artifact_owners: Callable[[], None] | None = None,
+) -> Path | None:
+    requested_want = cast(Want, dict(want))
+    resolved_want = resolve_alias(want, source_hints or {})
+    requested_key = _key(requested_want)
+    key = _key(resolved_want)
+    old = _previous_resource(manifest, key, resolved_want)
+    relative = str(old.get("file") or _filename(resolved_want))
+    target = release_dir / relative
+    display = _resource_label(resolved_want)
+    external_mode = resolved_want.get("mode") or ""
+
+    def finish(path: Path | None) -> Path | None:
+        """Record a reviewed malformed identity without fabricating success."""
+        if requested_key != key and resolved_want.get("alias_requested_key"):
+            manifest.setdefault("resources", {})[requested_key] = {
+                "status": "alias",
+                "alias_of": key,
+                "identity_corrected": True,
+                "requested_effective_date": (
+                    requested_want.get("effective_date") or "dynamic"
+                ),
+                "identity": _identity(requested_want),
+                "reason": resolved_want.get("alias_reason") or "",
+                "source_hint": resolved_want.get("alias_requested_key") or "",
+                "source_hint_origin": (
+                    resolved_want.get("alias_source_hint_origin") or "bundled"
+                ),
+            }
+            if save_manifest is not None:
+                save_manifest()
+        return path
+
+    def external_resolution() -> tuple[bool, Path | None]:
+        return _materialize_external(
+            release_dir, manifest, resolved_want, key=key, relative=relative,
+            progress=progress, save_manifest=save_manifest,
+        )
+
+    # A waiver is an explicit settled decision, not a network fallback. A
+    # previously materialized builtin is likewise reconstructed from its
+    # package checksum before generic cache adoption, preserving provenance
+    # even after manifest.json has been deleted.
+    if external_mode == "waiver" or (
+        external_mode == "builtin" and target.is_file()
+    ):
+        handled, external_path = external_resolution()
+        if handled:
+            return finish(external_path)
+    existing = _existing_cache_payload(target, old)
+    if existing is not None and not _payload_matches_request(existing, resolved_want):
+        existing = None
+    cached = _cached_representations(release_dir, old)
+    cached_representations = cached.entries
+    cached_source = cached.payloads.get("source")
+    if _adopt_cached_analysis(
+        existing, cached, requested_want=requested_want, resolved_want=resolved_want,
+        old=old, manifest=manifest, key=key, relative=relative, api_base=api_base,
+        retry_missing=retry_missing, offline=offline, display=display,
+        progress=progress, save_manifest=save_manifest,
+    ):
+        return finish(target)
     if old.get("status") == "missing" and not retry_missing:
         handled, external_path = external_resolution()
         if handled:
@@ -1274,89 +1383,17 @@ def _fetch_want(
         return finish(None)
 
     def request(project: str, form: str, url: str) -> bytes | None:
-        if request_budget is not None:
-            if request_budget.get("made", 0) >= request_budget.get("max", 0):
-                raise RequestBudgetExceeded
-            request_budget["made"] = request_budget.get("made", 0) + 1
-        count = request_budget.get("made", 0) if request_budget is not None else 0
-        maximum = request_budget.get("max", 0) if request_budget is not None else 0
-        budget = f" [{count}/{maximum}]" if maximum else ""
-        _emit(
-            progress,
-            f"fetch: {display}: requesting {form} via {project or 'global'}{budget}",
+        return _request_representation(
+            project, form, url, display=display, ipv4=ipv4,
+            request_budget=request_budget, attempts=attempts, progress=progress,
         )
-        try:
-            payload = get(url, ipv4=ipv4)
-        except urllib.error.HTTPError as error:
-            attempts.append({
-                "project": project,
-                "form": form,
-                "url": url,
-                "http_status": error.code,
-            })
-            _emit(
-                progress,
-                f"fetch: {display}: {form} HTTP {error.code} via {project or 'global'}",
-            )
-            return None
-        except OSError as error:
-            attempts.append({
-                "project": project,
-                "form": form,
-                "url": url,
-                "error": str(error),
-            })
-            _emit(
-                progress,
-                f"fetch: {display}: {form} {error} via {project or 'global'}",
-            )
-            return None
-        status, detail = classify_payload(payload)
-        if status != "ok":
-            attempts.append({
-                "project": project,
-                "form": form,
-                "url": url,
-                "error": detail,
-            })
-            _emit(
-                progress,
-                f"fetch: {display}: {form} {status} via {project or 'global'}",
-            )
-            return None
-        return payload
 
     def store(form: str, payload: bytes, url: str) -> Path:
-        form_relative = relative if form == "analysis" else _filename(request_want, form)
-        path = release_dir / form_relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
-        representation = {
-            "status": "ok",
-            "file": form_relative,
-            "url": url,
-            "bytes": len(payload),
-            "sha256": _digest(payload),
-        }
-        saved_representations[form] = representation
-        # Dynamic and exact requests can converge on one frozen representation
-        # path. Expansion envelopes carry request-time UUID/timestamp metadata,
-        # so a later equivalent response changes the physical checksum. Keep
-        # every manifest reference to that shared file synchronized.
-        resources = manifest.get("resources", {})
-        for resource in resources.values() if isinstance(resources, Mapping) else ():
-            if not isinstance(resource, dict):
-                continue
-            forms = resource.get("representations", {})
-            if not isinstance(forms, dict):
-                continue
-            for old_form, old_representation in list(forms.items()):
-                if (
-                    isinstance(old_representation, Mapping)
-                    and old_representation.get("file") == form_relative
-                ):
-                    forms[old_form] = dict(representation)
-        return path
+        return _store_representation(
+            form, payload, url, release_dir=release_dir, relative=relative,
+            request_want=request_want, manifest=manifest,
+            saved_representations=saved_representations,
+        )
 
     candidates = deque(_candidate_projects(
         request_want, owners, repositories, artifact_owners,
@@ -1382,6 +1419,7 @@ def _fetch_want(
         analysis_payload: bytes | None = existing
         analysis_url = str(old.get("url") or "") if existing is not None else ""
         redirected = False
+        payload: bytes | None
         for item in forms:
             form, url = item["form"], item["url"]
             if form == "source" and cached_source is not None:
@@ -1589,7 +1627,6 @@ def _fetch_want(
     _emit(progress, f"fetch: {display}: {final_status} after {len(attempts)} attempt(s)")
     return finish(None)
 
-
 def verify_manifest(release_dir: Path) -> list[str]:
     manifest_path = release_dir / "manifest.json"
     if not manifest_path.exists():
@@ -1634,6 +1671,501 @@ def verify_manifest(release_dir: Path) -> list[str]:
         )
     return errors
 
+
+class Checkpoint(Protocol):
+    def __call__(
+        self, *, complete: bool, interrupted: bool = False,
+    ) -> dict[str, Any]: ...
+
+
+@dataclass
+class CrawlState:
+    request_budget: RequestBudget
+    root_status: dict[str, str]
+    roles: dict[str, set[str]] = field(default_factory=lambda: {"build": set(), "evidence": set()})
+    resource_roles: dict[str, set[str]] = field(default_factory=dict)
+    visited: dict[str, set[str]] = field(default_factory=lambda: {"build": set(), "evidence": set()})
+    build_queue: deque[Want] = field(default_factory=deque)
+    evidence_queue: deque[Want] = field(default_factory=deque)
+    optional_references: dict[str, Want] = field(default_factory=dict)
+    pending_batch: dict[str, list[Want]] = field(default_factory=lambda: {"build": [], "evidence": []})
+    have_by_role: dict[str, set[tuple[str, str, str]]] = field(default_factory=dict)
+    resources_considered: int = 0
+    budget_exhausted: bool = False
+    phase: str = "roots"
+    root_errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ClosureContext:
+    manifest_path: Path
+    closure_path: Path
+    release: Mapping[str, str]
+    transaction: Mapping[str, str]
+    extensions: list[CdaExtension]
+    cda_core: bool
+    validation_packages: bool
+
+
+@dataclass(frozen=True)
+class FetchContext:
+    release_dir: Path
+    manifest: dict[str, Any]
+    owners: Mapping[str, str]
+    repositories: Iterable[str]
+    language: str
+    ipv4: bool
+    retry_missing: bool
+    offline: bool
+    progress: Progress | None
+    save_manifest: Callable[[], None]
+    main_project: str
+    release: str
+    api_base: str
+    source_hints: Mapping[str, Mapping[str, str]] | None
+    configured_oid_owners: Mapping[str, str]
+    artifact_owners: dict[str, str]
+    save_artifact_owners: Callable[[], None]
+
+def _observe_optional(state: CrawlState, *roots: ET.Element | None) -> None:
+    for root in roots:
+        if root is not None:
+            for want in display_references(root):
+                state.optional_references.setdefault(_key(want), want)
+
+def _pending_keys(state: CrawlState, role: str) -> list[str]:
+    queue = state.build_queue if role == "build" else state.evidence_queue
+    return sorted({
+        _key(want) for want in [*state.pending_batch[role], *queue]
+        if _key(want) not in state.visited[role]
+    })
+
+def _checkpoint(
+    state: CrawlState, context: ClosureContext, manifest: dict[str, Any], *,
+    complete: bool, interrupted: bool = False,
+) -> dict[str, Any]:
+    current_keys = state.roles["build"] | state.roles["evidence"]
+    raw_resources = manifest.get("resources", {})
+    manifest_resources = (
+        raw_resources if isinstance(raw_resources, Mapping) else {}
+    )
+    manifest_rows = [
+        row for row in manifest_resources.values()
+        if isinstance(row, Mapping)
+    ]
+
+    def resolved_entry(key: str) -> Mapping[str, Any]:
+        resources = manifest.get("resources", {})
+        entry = resources.get(key, {}) if isinstance(resources, Mapping) else {}
+        seen = {key}
+        while isinstance(entry, Mapping) and entry.get("status") == "alias":
+            target = str(entry.get("alias_of") or "")
+            if not target or target in seen:
+                break
+            seen.add(target)
+            entry = (
+                resources.get(target, {})
+                if isinstance(resources, Mapping) else {}
+            )
+        return entry if isinstance(entry, Mapping) else {}
+
+    def resolved_status(key: str) -> str:
+        return str(resolved_entry(key).get("status") or "unknown")
+
+    current_errors = sorted(
+        key for key in current_keys
+        if resolved_status(key) == "error"
+    )
+    current_missing = sorted(
+        key for key in current_keys
+        if resolved_status(key) == "missing"
+    )
+    current_unavailable = sorted(
+        key for key in current_keys
+        if resolved_status(key) == "unavailable"
+    )
+    current_waived = sorted(
+        key for key in current_keys
+        if resolved_status(key) == "waived"
+    )
+    current_partial = sorted(
+        key for key in current_keys
+        if resolved_status(key) == "partial"
+    )
+    current_aliases = sorted(
+        key for key in current_keys
+        if isinstance(manifest_resources.get(key), Mapping)
+        and manifest_resources[key].get("status") == "alias"
+    )
+    build_pending = _pending_keys(state, "build")
+    evidence_pending = _pending_keys(state, "evidence")
+    crawl_complete = complete
+    required_failures = sorted(
+        key for key in state.roles["build"]
+        if any(
+            role in REQUIRED_ROLES
+            for role in state.resource_roles.get(key, set())
+        )
+        and (
+            resolved_status(key) != "ok"
+            or bool(resolved_entry(key).get("expansion_warning"))
+        )
+    )
+    resolution = {
+        key: {
+            "projects_considered": list(
+                resolved_entry(key).get("projects_considered") or []
+            ),
+            "resolution_attempts": list(
+                resolved_entry(key).get("resolution_attempts") or []
+            ),
+        }
+        for key in sorted(
+            set(required_failures) | set(current_missing)
+            | set(current_unavailable) | set(current_errors)
+        )
+    }
+    readiness_errors: list[str] = []
+    if state.root_status["transaction"] != "ok":
+        readiness_errors.append("selected transaction analysis form is unavailable")
+    if state.root_status["transaction_source"] != "ok":
+        readiness_errors.append("selected transaction source form is unavailable")
+    if context.cda_core and state.root_status["cda_core"] != "ok":
+        readiness_errors.append("pinned CDA core definition set is unavailable")
+    if context.validation_packages and state.root_status["validation_packages"] != "ok":
+        readiness_errors.append("pinned validation package set is unavailable")
+    degradation_warnings = [
+        (
+            f"dependency expansion incomplete: {key}: "
+            f"{resolved_entry(key).get('expansion_warning')}"
+            if resolved_entry(key).get("expansion_warning")
+            else f"dependency unavailable: {key}"
+        )
+        for key in required_failures
+    ]
+    build_ready = crawl_complete and not readiness_errors
+    closure = {
+        "format": 2,
+        "release": dict(context.release),
+        "transaction": dict(context.transaction),
+        "cda_extensions": context.extensions,
+        "crawl_complete": crawl_complete,
+        "build_ready": build_ready,
+        "readiness_errors": readiness_errors,
+        "degraded": bool(degradation_warnings),
+        "degraded_resources": required_failures,
+        "crawl_degraded": required_failures,
+        "degradation_warnings": degradation_warnings,
+        "resolution": resolution,
+        "interrupted": interrupted,
+        "phase": state.phase,
+        "build_resources": sorted(state.roles["build"]),
+        "evidence_resources": sorted(state.roles["evidence"] | state.roles["build"]),
+        "resource_roles": {
+            key: sorted(values)
+            for key, values in sorted(state.resource_roles.items())
+            if values
+        },
+        "optional_references": [
+            dict(state.optional_references[key]) for key in sorted(state.optional_references)
+        ],
+        "pending": {
+            "build": build_pending,
+            "evidence": evidence_pending,
+        },
+        "missing": current_missing,
+        "unavailable": current_unavailable,
+        "waived": current_waived,
+        "partial": current_partial,
+        "aliases": current_aliases,
+        "errors": current_errors + state.root_errors,
+        "root_status": dict(state.root_status),
+        "summary": {
+            "ok": sum(
+                resolved_status(key) == "ok"
+                for key in current_keys
+            ) + int(state.root_status["project_config"] == "ok") + int(state.root_status["transaction"] == "ok"),
+            "missing": len(current_missing),
+            "unavailable": len(current_unavailable),
+            "waived": len(current_waived),
+            "partial": len(current_partial),
+            "alias": len(current_aliases),
+            "error": len(current_errors) + len(state.root_errors),
+        },
+        "resources_considered": state.resources_considered,
+        "recursive_http_requests": state.request_budget["made"],
+        # The request budget stopped the crawler. A user interruption is
+        # recorded separately.
+        "truncated": state.budget_exhausted,
+    }
+    manifest["summary"] = {
+        "resources": len(manifest_resources),
+        "ok": sum(row.get("status") == "ok" for row in manifest_rows),
+        "missing": sum(
+            row.get("status") == "missing" for row in manifest_rows
+        ),
+        "unavailable": sum(
+            row.get("status") == "unavailable" for row in manifest_rows
+        ),
+        "waived": sum(
+            row.get("status") == "waived" for row in manifest_rows
+        ),
+        "partial": sum(
+            row.get("status") == "partial" for row in manifest_rows
+        ),
+        "alias": sum(
+            row.get("status") == "alias" for row in manifest_rows
+        ),
+        "error": sum(
+            row.get("status") == "error" for row in manifest_rows
+        ),
+    }
+    write_json(context.manifest_path, manifest)
+    write_json(context.closure_path, closure)
+    return closure
+
+def _crawl_build(
+    state: CrawlState, context: FetchContext, checkpoint: Checkpoint,
+    queue: deque[Want], embedded_roots: list[ET.Element | None],
+) -> None:
+    state.phase = "build"
+    _emit(context.progress, f"fetch: resolving build dependency closure ({len(queue)} initial reference(s))")
+    while queue and not state.budget_exhausted:
+        rows = [
+            cast(Want, apply_source_hint(item, context.source_hints or {}))
+            for item in queue
+        ]
+        queue.clear()
+        rows.sort(key=lambda item: (
+            KIND_ORDER.get(item["kind"], 9),
+            item.get("project", ""),
+            item["id"],
+        ))
+        state.pending_batch["build"] = list(rows)
+        for row_index, want in enumerate(rows):
+            state.pending_batch["build"] = rows[row_index:]
+            key = _key(want)
+            state.resource_roles.setdefault(key, set()).add(
+                want.get("role") or "structure"
+            )
+            if key in state.visited["build"]:
+                continue
+            embedded = _matching_embedded(embedded_roots, want)
+            if _satisfied(want, state.have_by_role["build"]):
+                state.visited["build"].add(key)
+                for node in embedded:
+                    queue.extend(hard_references(node))
+                    state.evidence_queue.extend(soft_references(node))
+                continue
+
+            state.resources_considered += 1
+            try:
+                path = _fetch_want(
+                    context.release_dir, context.manifest, want, owners=context.owners,
+                    repositories=context.repositories, language=context.language,
+                    ipv4=context.ipv4, retry_missing=context.retry_missing, offline=context.offline,
+                    request_budget=state.request_budget, progress=context.progress,
+                    save_manifest=context.save_manifest,
+                    main_project=context.main_project, release=context.release,
+                    api_base=context.api_base, source_hints=context.source_hints,
+                    configured_oid_owners=context.configured_oid_owners,
+                    artifact_owners=context.artifact_owners,
+                    save_artifact_owners=context.save_artifact_owners,
+                )
+            except RequestBudgetExceeded:
+                for pending in reversed(rows[row_index:]):
+                    queue.appendleft(pending)
+                state.pending_batch["build"] = []
+                state.budget_exhausted = True
+                checkpoint(complete=False)
+                return
+            state.visited["build"].add(key)
+            state.roles["build"].add(key)
+            if path is None:
+                continue
+            root = _parse(path)
+            if root is not None:
+                if _seed_artifact_owners(context.artifact_owners, root):
+                    context.save_artifact_owners()
+                _observe_optional(state, root)
+                inventory = _inventory(root)
+                state.have_by_role["build"].update(inventory)
+                state.have_by_role["evidence"].update(inventory)
+                queue.extend(hard_references(root))
+                state.evidence_queue.extend(soft_references(root))
+        state.pending_batch["build"] = []
+        checkpoint(complete=False)
+
+def _next_evidence(root: ET.Element, want: Want) -> list[Want]:
+    if want.get("kind") == "concept":
+        return original_references(root, {want["id"]})
+    if (
+        want.get("role")
+        not in {"template-prototype", "prototype-support"}
+    ):
+        return []
+    artifact_tag = {
+        "template": "template",
+        "valueset": "valueSet",
+        "codesystem": "codeSystem",
+        "dataset": "dataset",
+        "concept": "concept",
+    }.get(str(want.get("kind") or ""))
+    if artifact_tag is None:
+        return []
+    candidates = [
+        node for node in root.iter()
+        if local(node.tag) == artifact_tag
+        and node.get("id") == want.get("id")
+        and (
+            not want.get("effective_date")
+            or node.get("effectiveDate")
+            == want.get("effective_date")
+        )
+    ]
+    if len(candidates) != 1:
+        return []
+    dependencies: list[Want] = []
+    for dependency in hard_references(candidates[0]):
+        dependencies.append(Want(**{
+            **dependency,
+            "role": "prototype-support",
+            "analysis_only": "true",
+        }))
+    if artifact_tag == "template":
+        # The ART-DECOR editor uses only the first SPEC
+        # relationship as its prototype. Follow the same chain;
+        # all structural dependencies of each prototype stay
+        # evidence-only but make the official validator input
+        # self-contained.
+        relation = next((
+            child for child in list(candidates[0])
+            if local(child.tag) == "relationship"
+            and child.get("template")
+            and child.get("type")
+            == TEMPLATE_PROTOTYPE_RELATIONSHIP
+        ), None)
+        if relation is not None:
+            dependencies.append(Want(
+                kind="template",
+                id=relation.get("template") or "",
+                effective_date=(
+                    ""
+                    if relation.get("flexibility")
+                    in (None, "dynamic")
+                    else relation.get("flexibility") or ""
+                ),
+                project=(
+                    relation.get("prefix")
+                    or want.get("project") or ""
+                ),
+                role="template-prototype",
+                analysis_only="true",
+            ))
+    return dependencies
+
+def _resolve_evidence(
+    state: CrawlState, context: FetchContext, checkpoint: Checkpoint,
+    queue: deque[Want], embedded_roots: list[ET.Element | None],
+) -> None:
+    """Resolve direct evidence and transitively close formal origins."""
+    state.phase = "evidence"
+
+    _emit(
+        context.progress,
+        "fetch: resolving direct evidence and formal origins "
+        f"({len(queue)} initial reference(s))",
+    )
+    while queue and not state.budget_exhausted:
+        merged: dict[str, Want] = {}
+        for item in queue:
+            want = cast(
+                Want, apply_source_hint(item, context.source_hints or {})
+            )
+            key = _key(want)
+            state.resource_roles.setdefault(key, set()).add(
+                want.get("role") or "mapping-evidence"
+            )
+            current = merged.get(key)
+            if (
+                current is None
+                or (
+                    current.get("analysis_only")
+                    and not want.get("analysis_only")
+                )
+            ):
+                # A broader request satisfies both consumers; retain
+                # every role above even though the HTTP work is shared.
+                merged[key] = want
+        rows = list(merged.values())
+        queue.clear()
+        rows.sort(key=lambda item: (
+            KIND_ORDER.get(item["kind"], 9),
+            item.get("project", ""),
+            item["id"],
+        ))
+        state.pending_batch["evidence"] = list(rows)
+        for row_index, want in enumerate(rows):
+            state.pending_batch["evidence"] = rows[row_index:]
+            key = _key(want)
+            if key in state.visited["evidence"] or key in state.visited["build"]:
+                continue
+            embedded = _matching_embedded(embedded_roots, want)
+            if _satisfied(want, state.have_by_role["evidence"]):
+                state.visited["evidence"].add(key)
+                for node in embedded:
+                    queue.extend(_next_evidence(node, want))
+                continue
+            # A frozen embedded revision can satisfy only an explicit
+            # effective date. A dynamic request must reach the direct
+            # endpoint so ART-DECOR, rather than document order,
+            # chooses and freezes the current revision.
+            if embedded and want.get("effective_date"):
+                state.visited["evidence"].add(key)
+                for node in embedded:
+                    queue.extend(_next_evidence(node, want))
+                continue
+
+            state.resources_considered += 1
+            try:
+                path = _fetch_want(
+                    context.release_dir, context.manifest, want, owners=context.owners,
+                    repositories=context.repositories, language=context.language,
+                    ipv4=context.ipv4, retry_missing=context.retry_missing, offline=context.offline,
+                    request_budget=state.request_budget, progress=context.progress,
+                    save_manifest=context.save_manifest,
+                    main_project=context.main_project, release=context.release,
+                    api_base=context.api_base, source_hints=context.source_hints,
+                    configured_oid_owners=context.configured_oid_owners,
+                    artifact_owners=context.artifact_owners,
+                    save_artifact_owners=context.save_artifact_owners,
+                )
+            except RequestBudgetExceeded:
+                for pending in reversed(rows[row_index:]):
+                    queue.appendleft(pending)
+                state.pending_batch["evidence"] = []
+                state.budget_exhausted = True
+                checkpoint(complete=False)
+                return
+            state.visited["evidence"].add(key)
+            state.roles["evidence"].add(key)
+            if path is not None:
+                root = _parse(path)
+                if root is not None:
+                    # A concept response may contain a parent/sibling
+                    # subtree. Keep it available so a later exact
+                    # endpoint satisfied by that inventory still gets
+                    # its own targeted formal origin inspected.
+                    embedded_roots.append(root)
+                    if _seed_artifact_owners(context.artifact_owners, root):
+                        context.save_artifact_owners()
+                    _observe_optional(state, root)
+                    state.have_by_role["evidence"].update(_inventory(root))
+                    # Formal inherit/contains origin is transitive.
+                    # Generic relationships remain evidence only.
+                    queue.extend(_next_evidence(root, want))
+        state.pending_batch["evidence"] = []
+        checkpoint(complete=False)
 
 def fetch_spec(
     release_dir: Path,
@@ -1693,28 +2225,19 @@ def fetch_spec(
             "CDA extension transaction identity does not match the selected transaction"
         )
 
-    roles: dict[str, set[str]] = {"build": set(), "evidence": set()}
-    resource_roles: dict[str, set[str]] = {}
-    visited: dict[str, set[str]] = {"build": set(), "evidence": set()}
-    build_queue: deque[Want] = deque()
-    evidence_queue: deque[Want] = deque()
-    optional_references: dict[str, Want] = {}
-    pending_batch: dict[str, list[Want]] = {"build": [], "evidence": []}
-    request_budget = {"made": 0, "max": max(0, int(max_requests))}
-    resources_considered = 0
-    budget_exhausted = False
-    phase = "roots"
-    root_errors: list[str] = []
-    root_status = {
-        "cda_core": "pending" if cda_core else "not-requested",
-        "validation_packages": "pending" if validation_packages else "not-requested",
-        "api_contract": "pending",
-        "project_config": "pending",
-        "transaction": "pending",
-        "transaction_source": "pending",
-        "project_evidence": "pending",
-        "project_directory": "pending",
-    }
+    state = CrawlState(
+        request_budget={"made": 0, "max": max(0, int(max_requests))},
+        root_status={
+            "cda_core": "pending" if cda_core else "not-requested",
+            "validation_packages": "pending" if validation_packages else "not-requested",
+            "api_contract": "pending",
+            "project_config": "pending",
+            "transaction": "pending",
+            "transaction_source": "pending",
+            "project_evidence": "pending",
+            "project_directory": "pending",
+        },
+    )
 
     project_config: Path | None = None
     evidence: Path | None = None
@@ -1722,206 +2245,15 @@ def fetch_spec(
     tx_source: Path | None = None
     tx_path: Path | None = None
 
-    def observe_optional(*roots: ET.Element | None) -> None:
-        for root in roots:
-            if root is None:
-                continue
-            for want in display_references(root):
-                optional_references.setdefault(_key(want), want)
-
-    def pending_keys(role: str) -> list[str]:
-        wants = list(pending_batch[role]) + list(
-            build_queue if role == "build" else evidence_queue
-        )
-        seen: set[str] = set()
-        keys: list[str] = []
-        for want in wants:
-            key = _key(want)
-            if key not in seen and key not in visited[role]:
-                seen.add(key)
-                keys.append(key)
-        return sorted(keys)
+    closure_context = ClosureContext(
+        manifest_path, closure_path, release, transaction, extensions,
+        cda_core, validation_packages,
+    )
 
     def checkpoint(*, complete: bool, interrupted: bool = False) -> dict[str, Any]:
-        current_keys = roles["build"] | roles["evidence"]
-        raw_resources = manifest.get("resources", {})
-        manifest_resources = (
-            raw_resources if isinstance(raw_resources, Mapping) else {}
+        return _checkpoint(
+            state, closure_context, manifest, complete=complete, interrupted=interrupted,
         )
-        manifest_rows = [
-            row for row in manifest_resources.values()
-            if isinstance(row, Mapping)
-        ]
-
-        def resolved_entry(key: str) -> Mapping[str, Any]:
-            resources = manifest.get("resources", {})
-            entry = resources.get(key, {}) if isinstance(resources, Mapping) else {}
-            seen = {key}
-            while isinstance(entry, Mapping) and entry.get("status") == "alias":
-                target = str(entry.get("alias_of") or "")
-                if not target or target in seen:
-                    break
-                seen.add(target)
-                entry = (
-                    resources.get(target, {})
-                    if isinstance(resources, Mapping) else {}
-                )
-            return entry if isinstance(entry, Mapping) else {}
-
-        def resolved_status(key: str) -> str:
-            return str(resolved_entry(key).get("status") or "unknown")
-
-        current_errors = sorted(
-            key for key in current_keys
-            if resolved_status(key) == "error"
-        )
-        current_missing = sorted(
-            key for key in current_keys
-            if resolved_status(key) == "missing"
-        )
-        current_unavailable = sorted(
-            key for key in current_keys
-            if resolved_status(key) == "unavailable"
-        )
-        current_waived = sorted(
-            key for key in current_keys
-            if resolved_status(key) == "waived"
-        )
-        current_partial = sorted(
-            key for key in current_keys
-            if resolved_status(key) == "partial"
-        )
-        current_aliases = sorted(
-            key for key in current_keys
-            if isinstance(manifest_resources.get(key), Mapping)
-            and manifest_resources[key].get("status") == "alias"
-        )
-        build_pending = pending_keys("build")
-        evidence_pending = pending_keys("evidence")
-        crawl_complete = complete
-        required_failures = sorted(
-            key for key in roles["build"]
-            if any(
-                role in REQUIRED_ROLES
-                for role in resource_roles.get(key, set())
-            )
-            and (
-                resolved_status(key) != "ok"
-                or bool(resolved_entry(key).get("expansion_warning"))
-            )
-        )
-        resolution = {
-            key: {
-                "projects_considered": list(
-                    resolved_entry(key).get("projects_considered") or []
-                ),
-                "resolution_attempts": list(
-                    resolved_entry(key).get("resolution_attempts") or []
-                ),
-            }
-            for key in sorted(
-                set(required_failures) | set(current_missing)
-                | set(current_unavailable) | set(current_errors)
-            )
-        }
-        readiness_errors: list[str] = []
-        if root_status["transaction"] != "ok":
-            readiness_errors.append("selected transaction analysis form is unavailable")
-        if root_status["transaction_source"] != "ok":
-            readiness_errors.append("selected transaction source form is unavailable")
-        if cda_core and root_status["cda_core"] != "ok":
-            readiness_errors.append("pinned CDA core definition set is unavailable")
-        if validation_packages and root_status["validation_packages"] != "ok":
-            readiness_errors.append("pinned validation package set is unavailable")
-        degradation_warnings = [
-            (
-                f"dependency expansion incomplete: {key}: "
-                f"{resolved_entry(key).get('expansion_warning')}"
-                if resolved_entry(key).get("expansion_warning")
-                else f"dependency unavailable: {key}"
-            )
-            for key in required_failures
-        ]
-        build_ready = crawl_complete and not readiness_errors
-        closure = {
-            "format": 2,
-            "release": dict(release),
-            "transaction": dict(transaction),
-            "cda_extensions": extensions,
-            "crawl_complete": crawl_complete,
-            "build_ready": build_ready,
-            "readiness_errors": readiness_errors,
-            "degraded": bool(degradation_warnings),
-            "degraded_resources": required_failures,
-            "crawl_degraded": required_failures,
-            "degradation_warnings": degradation_warnings,
-            "resolution": resolution,
-            "interrupted": interrupted,
-            "phase": phase,
-            "build_resources": sorted(roles["build"]),
-            "evidence_resources": sorted(roles["evidence"] | roles["build"]),
-            "resource_roles": {
-                key: sorted(values)
-                for key, values in sorted(resource_roles.items())
-                if values
-            },
-            "optional_references": [
-                dict(optional_references[key]) for key in sorted(optional_references)
-            ],
-            "pending": {
-                "build": build_pending,
-                "evidence": evidence_pending,
-            },
-            "missing": current_missing,
-            "unavailable": current_unavailable,
-            "waived": current_waived,
-            "partial": current_partial,
-            "aliases": current_aliases,
-            "errors": current_errors + root_errors,
-            "root_status": dict(root_status),
-            "summary": {
-                "ok": sum(
-                    resolved_status(key) == "ok"
-                    for key in current_keys
-                ) + int(root_status["project_config"] == "ok") + int(root_status["transaction"] == "ok"),
-                "missing": len(current_missing),
-                "unavailable": len(current_unavailable),
-                "waived": len(current_waived),
-                "partial": len(current_partial),
-                "alias": len(current_aliases),
-                "error": len(current_errors) + len(root_errors),
-            },
-            "resources_considered": resources_considered,
-            "recursive_http_requests": request_budget["made"],
-            # The request budget stopped the crawler. A user interruption is
-            # recorded separately.
-            "truncated": budget_exhausted,
-        }
-        manifest["summary"] = {
-            "resources": len(manifest_resources),
-            "ok": sum(row.get("status") == "ok" for row in manifest_rows),
-            "missing": sum(
-                row.get("status") == "missing" for row in manifest_rows
-            ),
-            "unavailable": sum(
-                row.get("status") == "unavailable" for row in manifest_rows
-            ),
-            "waived": sum(
-                row.get("status") == "waived" for row in manifest_rows
-            ),
-            "partial": sum(
-                row.get("status") == "partial" for row in manifest_rows
-            ),
-            "alias": sum(
-                row.get("status") == "alias" for row in manifest_rows
-            ),
-            "error": sum(
-                row.get("status") == "error" for row in manifest_rows
-            ),
-        }
-        write_json(manifest_path, manifest)
-        write_json(closure_path, closure)
-        return closure
 
     try:
         if validation_packages:
@@ -1929,7 +2261,7 @@ def fetch_spec(
                 release_dir, manifest, ipv4=ipv4,
                 retry_missing=retry_missing, offline=offline, progress=progress,
             )
-            root_status["validation_packages"] = "ok" if validation_ok else "missing"
+            state.root_status["validation_packages"] = "ok" if validation_ok else "missing"
 
         if cda_core:
             core_ok = True
@@ -1948,13 +2280,13 @@ def fetch_spec(
                     },
                 )
                 core_ok = core_ok and path is not None
-            root_status["cda_core"] = "ok" if core_ok else "missing"
+            state.root_status["cda_core"] = "ok" if core_ok else "missing"
 
         contract = _fetch_openapi(
             release_dir, manifest, api_base=api_base, ipv4=ipv4,
             retry_missing=retry_missing, offline=offline, progress=progress,
         )
-        root_status["api_contract"] = "ok" if contract is not None else "error"
+        state.root_status["api_contract"] = "ok" if contract is not None else "error"
 
         project_config = _fetch_direct(
             release_dir, manifest, key=f"project-config:{prefix}",
@@ -1967,7 +2299,7 @@ def fetch_spec(
                 "project": prefix, "api_base": api_base,
             },
         )
-        root_status["project_config"] = "ok" if project_config is not None else "missing"
+        state.root_status["project_config"] = "ok" if project_config is not None else "missing"
 
         evidence = _fetch_direct(
             release_dir, manifest, key=f"project-evidence:{prefix}",
@@ -1984,7 +2316,7 @@ def fetch_spec(
                 "api_base": api_base,
             },
         )
-        root_status["project_evidence"] = "ok" if evidence is not None else "missing"
+        state.root_status["project_evidence"] = "ok" if evidence is not None else "missing"
 
         project_directory = _fetch_direct(
             release_dir, manifest, key="project-directory",
@@ -1997,7 +2329,7 @@ def fetch_spec(
                 "effective_date": "live", "project": "", "api_base": api_base,
             },
         )
-        root_status["project_directory"] = "ok" if project_directory is not None else "missing"
+        state.root_status["project_directory"] = "ok" if project_directory is not None else "missing"
 
         tx_forms = transaction_representations(
             tx_id, tx_effective, project=prefix, release=release_date,
@@ -2020,7 +2352,7 @@ def fetch_spec(
                 "api_base": api_base, "form": "source",
             },
         )
-        root_status["transaction_source"] = "ok" if tx_source is not None else "missing"
+        state.root_status["transaction_source"] = "ok" if tx_source is not None else "missing"
 
         tx_path = _fetch_direct(
             release_dir, manifest,
@@ -2035,12 +2367,12 @@ def fetch_spec(
                 "api_base": api_base, "form": "analysis",
             },
         )
-        root_status["transaction"] = "ok" if tx_path is not None else "missing"
+        state.root_status["transaction"] = "ok" if tx_path is not None else "missing"
 
         if contract is None:
-            root_errors.append("current API contract could not be validated")
+            state.root_errors.append("current API contract could not be validated")
         if tx_path is None:
-            root_errors.append("selected transaction could not be fetched")
+            state.root_errors.append("selected transaction could not be fetched")
 
         build_roots = [_parse(tx_path)] if tx_path else []
         evidence_roots = [_parse(evidence)] if evidence else []
@@ -2059,17 +2391,18 @@ def fetch_spec(
             *(build_roots + evidence_roots),
         ) or artifact_owners:
             _write_artifact_owners(artifact_owners_path, artifact_owners)
-        observe_optional(
+        _observe_optional(
+            state,
             _parse(project_config) if project_config else None,
             *(build_roots + evidence_roots),
         )
 
         tx_root = _parse(tx_path) if tx_path else None
         if tx_root is not None:
-            build_queue.extend(hard_references(tx_root))
-            evidence_queue.extend(soft_references(tx_root))
+            state.build_queue.extend(hard_references(tx_root))
+            state.evidence_queue.extend(soft_references(tx_root))
         for extension in extensions:
-            build_queue.append(Want(
+            state.build_queue.append(Want(
                 kind="template",
                 id=extension["template_id"],
                 effective_date=extension["template_effective_date"],
@@ -2085,9 +2418,9 @@ def fetch_spec(
         evidence_have = set(build_have)
         for root in evidence_roots:
             evidence_have.update(_inventory(root))
-        have_by_role = {"build": build_have, "evidence": evidence_have}
+        state.have_by_role = {"build": build_have, "evidence": evidence_have}
 
-        phase = "build"
+        state.phase = "build"
         checkpoint(complete=False)
 
         def save_manifest() -> None:
@@ -2096,262 +2429,32 @@ def fetch_spec(
         def save_artifact_owners() -> None:
             _write_artifact_owners(artifact_owners_path, artifact_owners)
 
-        def crawl_build(queue: deque[Want], embedded_roots: list[ET.Element | None]) -> None:
-            nonlocal resources_considered, budget_exhausted, phase
-            phase = "build"
-            _emit(progress, f"fetch: resolving build dependency closure ({len(queue)} initial reference(s))")
-            while queue and not budget_exhausted:
-                rows = [
-                    cast(Want, apply_source_hint(item, source_hints or {}))
-                    for item in queue
-                ]
-                queue.clear()
-                rows.sort(key=lambda item: (
-                    KIND_ORDER.get(item["kind"], 9),
-                    item.get("project", ""),
-                    item["id"],
-                ))
-                pending_batch["build"] = list(rows)
-                for row_index, want in enumerate(rows):
-                    pending_batch["build"] = rows[row_index:]
-                    key = _key(want)
-                    resource_roles.setdefault(key, set()).add(
-                        want.get("role") or "structure"
-                    )
-                    if key in visited["build"]:
-                        continue
-                    embedded = _matching_embedded(embedded_roots, want)
-                    if _satisfied(want, have_by_role["build"]):
-                        visited["build"].add(key)
-                        for node in embedded:
-                            queue.extend(hard_references(node))
-                            evidence_queue.extend(soft_references(node))
-                        continue
-
-                    resources_considered += 1
-                    try:
-                        path = _fetch_want(
-                            release_dir, manifest, want, owners=owners,
-                            repositories=repositories, language=language,
-                            ipv4=ipv4, retry_missing=retry_missing, offline=offline,
-                            request_budget=request_budget, progress=progress,
-                            save_manifest=save_manifest,
-                            main_project=prefix, release=release_date,
-                            api_base=api_base, source_hints=source_hints,
-                            configured_oid_owners=configured_owners,
-                            artifact_owners=artifact_owners,
-                            save_artifact_owners=save_artifact_owners,
-                        )
-                    except RequestBudgetExceeded:
-                        for pending in reversed(rows[row_index:]):
-                            queue.appendleft(pending)
-                        pending_batch["build"] = []
-                        budget_exhausted = True
-                        checkpoint(complete=False)
-                        return
-                    visited["build"].add(key)
-                    roles["build"].add(key)
-                    if path is None:
-                        continue
-                    root = _parse(path)
-                    if root is not None:
-                        if _seed_artifact_owners(artifact_owners, root):
-                            save_artifact_owners()
-                        observe_optional(root)
-                        inventory = _inventory(root)
-                        have_by_role["build"].update(inventory)
-                        have_by_role["evidence"].update(inventory)
-                        queue.extend(hard_references(root))
-                        evidence_queue.extend(soft_references(root))
-                pending_batch["build"] = []
-                checkpoint(complete=False)
-
-        def resolve_evidence(queue: deque[Want], embedded_roots: list[ET.Element | None]) -> None:
-            """Resolve direct evidence and transitively close formal origins."""
-            nonlocal resources_considered, budget_exhausted, phase
-            phase = "evidence"
-
-            def next_evidence(root: ET.Element, want: Want) -> list[Want]:
-                if want.get("kind") == "concept":
-                    return original_references(root, {want["id"]})
-                if (
-                    want.get("role")
-                    not in {"template-prototype", "prototype-support"}
-                ):
-                    return []
-                artifact_tag = {
-                    "template": "template",
-                    "valueset": "valueSet",
-                    "codesystem": "codeSystem",
-                    "dataset": "dataset",
-                    "concept": "concept",
-                }.get(str(want.get("kind") or ""))
-                if artifact_tag is None:
-                    return []
-                candidates = [
-                    node for node in root.iter()
-                    if local(node.tag) == artifact_tag
-                    and node.get("id") == want.get("id")
-                    and (
-                        not want.get("effective_date")
-                        or node.get("effectiveDate")
-                        == want.get("effective_date")
-                    )
-                ]
-                if len(candidates) != 1:
-                    return []
-                dependencies: list[Want] = []
-                for dependency in hard_references(candidates[0]):
-                    dependencies.append(Want(**{
-                        **dependency,
-                        "role": "prototype-support",
-                        "analysis_only": "true",
-                    }))
-                if artifact_tag == "template":
-                    # The ART-DECOR editor uses only the first SPEC
-                    # relationship as its prototype. Follow the same chain;
-                    # all structural dependencies of each prototype stay
-                    # evidence-only but make the official validator input
-                    # self-contained.
-                    relation = next((
-                        child for child in list(candidates[0])
-                        if local(child.tag) == "relationship"
-                        and child.get("template")
-                        and child.get("type")
-                        == TEMPLATE_PROTOTYPE_RELATIONSHIP
-                    ), None)
-                    if relation is not None:
-                        dependencies.append(Want(
-                            kind="template",
-                            id=relation.get("template") or "",
-                            effective_date=(
-                                ""
-                                if relation.get("flexibility")
-                                in (None, "dynamic")
-                                else relation.get("flexibility") or ""
-                            ),
-                            project=(
-                                relation.get("prefix")
-                                or want.get("project") or ""
-                            ),
-                            role="template-prototype",
-                            analysis_only="true",
-                        ))
-                return dependencies
-
-            _emit(
-                progress,
-                "fetch: resolving direct evidence and formal origins "
-                f"({len(queue)} initial reference(s))",
-            )
-            while queue and not budget_exhausted:
-                merged: dict[str, Want] = {}
-                for item in queue:
-                    want = cast(
-                        Want, apply_source_hint(item, source_hints or {})
-                    )
-                    key = _key(want)
-                    resource_roles.setdefault(key, set()).add(
-                        want.get("role") or "mapping-evidence"
-                    )
-                    current = merged.get(key)
-                    if (
-                        current is None
-                        or (
-                            current.get("analysis_only")
-                            and not want.get("analysis_only")
-                        )
-                    ):
-                        # A broader request satisfies both consumers; retain
-                        # every role above even though the HTTP work is shared.
-                        merged[key] = want
-                rows = list(merged.values())
-                queue.clear()
-                rows.sort(key=lambda item: (
-                    KIND_ORDER.get(item["kind"], 9),
-                    item.get("project", ""),
-                    item["id"],
-                ))
-                pending_batch["evidence"] = list(rows)
-                for row_index, want in enumerate(rows):
-                    pending_batch["evidence"] = rows[row_index:]
-                    key = _key(want)
-                    if key in visited["evidence"] or key in visited["build"]:
-                        continue
-                    embedded = _matching_embedded(embedded_roots, want)
-                    if _satisfied(want, have_by_role["evidence"]):
-                        visited["evidence"].add(key)
-                        for node in embedded:
-                            queue.extend(next_evidence(node, want))
-                        continue
-                    # A frozen embedded revision can satisfy only an explicit
-                    # effective date. A dynamic request must reach the direct
-                    # endpoint so ART-DECOR, rather than document order,
-                    # chooses and freezes the current revision.
-                    if embedded and want.get("effective_date"):
-                        visited["evidence"].add(key)
-                        for node in embedded:
-                            queue.extend(next_evidence(node, want))
-                        continue
-
-                    resources_considered += 1
-                    try:
-                        path = _fetch_want(
-                            release_dir, manifest, want, owners=owners,
-                            repositories=repositories, language=language,
-                            ipv4=ipv4, retry_missing=retry_missing, offline=offline,
-                            request_budget=request_budget, progress=progress,
-                            save_manifest=save_manifest,
-                            main_project=prefix, release=release_date,
-                            api_base=api_base, source_hints=source_hints,
-                            configured_oid_owners=configured_owners,
-                            artifact_owners=artifact_owners,
-                            save_artifact_owners=save_artifact_owners,
-                        )
-                    except RequestBudgetExceeded:
-                        for pending in reversed(rows[row_index:]):
-                            queue.appendleft(pending)
-                        pending_batch["evidence"] = []
-                        budget_exhausted = True
-                        checkpoint(complete=False)
-                        return
-                    visited["evidence"].add(key)
-                    roles["evidence"].add(key)
-                    if path is not None:
-                        root = _parse(path)
-                        if root is not None:
-                            # A concept response may contain a parent/sibling
-                            # subtree. Keep it available so a later exact
-                            # endpoint satisfied by that inventory still gets
-                            # its own targeted formal origin inspected.
-                            embedded_roots.append(root)
-                            if _seed_artifact_owners(artifact_owners, root):
-                                save_artifact_owners()
-                            observe_optional(root)
-                            have_by_role["evidence"].update(_inventory(root))
-                            # Formal inherit/contains origin is transitive.
-                            # Generic relationships remain evidence only.
-                            queue.extend(next_evidence(root, want))
-                pending_batch["evidence"] = []
-                checkpoint(complete=False)
-
-        crawl_build(build_queue, build_roots)
+        fetch_context = FetchContext(
+            release_dir, manifest, owners, repositories, language, ipv4,
+            retry_missing, offline, progress, save_manifest,
+            prefix, release_date, api_base, source_hints, configured_owners,
+            artifact_owners, save_artifact_owners,
+        )
+        _crawl_build(state, fetch_context, checkpoint, state.build_queue, build_roots)
 
         relevant_ids: set[str] = set()
         if tx_root is not None:
             relevant_ids.update(ident for _, ident, _ in _inventory(tx_root))
-        for key in visited["build"] | roles["build"]:
+        for key in state.visited["build"] | state.roles["build"]:
             try:
                 relevant_ids.add(key.split(":", 1)[1].split("@", 1)[0])
             except IndexError:
                 pass
         for root in evidence_roots:
             if root is not None:
-                evidence_queue.extend(_evidence_references(root, relevant_ids))
-        resolve_evidence(evidence_queue, build_roots + evidence_roots)
+                state.evidence_queue.extend(_evidence_references(root, relevant_ids))
+        _resolve_evidence(
+            state, fetch_context, checkpoint, state.evidence_queue,
+            build_roots + evidence_roots,
+        )
 
-        phase = "complete"
-        complete = not budget_exhausted and not build_queue and not evidence_queue
+        state.phase = "complete"
+        complete = not state.budget_exhausted and not state.build_queue and not state.evidence_queue
         closure = checkpoint(complete=complete)
         _emit(
             progress,
@@ -2366,7 +2469,7 @@ def fetch_spec(
         )
         return {"manifest": manifest, "closure": closure}
     except KeyboardInterrupt:
-        phase = f"{phase}-interrupted"
+        state.phase = f"{state.phase}-interrupted"
         checkpoint(complete=False, interrupted=True)
         _emit(progress, "fetch: interrupted by user; checkpoint saved")
         raise
