@@ -742,9 +742,7 @@ class CdaDatatypeTests(unittest.TestCase):
             original = ET.fromstring(payload).find(
                 f".//{{{HL7}}}value/{{{HL7}}}originalText"
             )
-            self.assertIsNotNone(original)
-            assert original is not None
-            self.assertEqual(original.text, "Original wording")
+            self.assertIsNone(original)
 
             record["values"]["wording"] = "Reviewed wording"
             payload, _ = cda.emit(

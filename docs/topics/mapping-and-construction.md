@@ -171,9 +171,12 @@ The canonical generated products are:
 
 `init-cda-mapping` creates or refreshes the portable mapping bundle without
 overwriting reviewer choices. `--reset` explicitly replaces reviewed state with
-the current proposal. Target names may migrate only through one unique stored
-owner identity; structure type names are neither aliased nor translated.
-`mapping-lock.json` pins transaction, model, CDA, and mapping identity.
+the current proposal. Reviewed target names are never migrated automatically;
+a renamed or removed target requires an explicit reviewed mapping change.
+Structure type names are neither aliased nor translated. `mapping-lock.json`
+pins the exact release, transaction, model and CDA identity and records the
+mapping digest at creation as informational provenance. Runtime enforces the
+same lock admission as mapping checks.
 The bundle's `cda-mapping.md` is a strictly unresolved work queue; resolved
 structured mappings, narrative-only decisions, and intentional nulls are
 retained in the other reports instead of appearing as open decision cards.

@@ -8,7 +8,7 @@ from decor2hl7.i18n import (
     catalog_problems,
     configured_output_language,
     load_catalog,
-    localize_markdown,
+    message, OUTPUT_LANGUAGE,
     message_ids,
     normalize_output_language,
 )
@@ -54,13 +54,13 @@ class I18nTests(unittest.TestCase):
             "workspace initialisiert: /tmp/ws",
         )
 
-    def test_markdown_localization_preserves_supplied_owner_text(self) -> None:
+    def test_message_construction_does_not_rewrite_owner_text(self) -> None:
         phrase = "No target-specific defaults are configured."
-        localized = localize_markdown(
-            f"# Build diagnostics\n\n{phrase}\n",
-            "de",
-            protected_values=({"owner_name": phrase},),
-        )
+        token = OUTPUT_LANGUAGE.set("de")
+        try:
+            localized = message("markdown.build_diagnostics") + "\n\n" + phrase
+        finally:
+            OUTPUT_LANGUAGE.reset(token)
         self.assertIn("# Build-Diagnostik", localized)
         self.assertIn(phrase, localized)
 

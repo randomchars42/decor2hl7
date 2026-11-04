@@ -16,7 +16,7 @@ from ..bindings import (physical_target_name, required_construction_gap_targets,
                         site_requirement_targets)
 from ..cda.narrative import narrative_blocks, narrative_source_rules
 from ..cda.tree import document_index, parse_location
-from ..i18n import localize_markdown
+from ..i18n import message as _msg, localized
 from ..transforms import mapping_rules
 from .mapping import gap_reopening_evidence_label
 
@@ -297,14 +297,14 @@ def _dataset_coverage_tree(
                     if isinstance(review, Mapping) and review.get("decision")
                     else ""
                 )
-                consequence = " → — intentionally unmapped" + decision
+                consequence = (' → — ' + _msg('markdown.intentionally_unmapped')) + decision
             elif path in suggested:
                 status = "!"
                 targets = suggested[path]
                 consequence = " → " + ", ".join(f"{{{target}}}" for target in targets)
             else:
                 status = "×"
-                consequence = " → — no suitable writable CDA leaf"
+                consequence = (' → — ' + _msg('markdown.no_suitable_writable_cda_leaf'))
             lines.append(f"{status:<3}{stem}{branch} {name}{consequence}")
 
     render(None)
@@ -669,7 +669,7 @@ def _extended_dataset_coverage_tree(
             elif path in reviewed:
                 status = "="
                 decision = str(reviewed[path].get("decision") or "")
-                consequence = " → — intentionally unmapped"
+                consequence = (' → — ' + _msg('markdown.intentionally_unmapped'))
                 if decision:
                     consequence += f" [{decision}]"
             elif path in coverage.get("suggested", {}):
@@ -800,7 +800,7 @@ def _cda_coverage_tree(
                     consequence = " ← " + ", ".join(names)
                 else:
                     status = "○"
-                    consequence = " ← no dataset counterpart"
+                    consequence = (' ← ' + _msg('markdown.no_dataset_counterpart'))
                     default = mapping.get("target_defaults", {}).get(row["name"], {})
                     if isinstance(default, Mapping) and default.get("nullFlavor"):
                         consequence += f"; default nullFlavor=\"{default['nullFlavor']}\""
@@ -824,8 +824,7 @@ def _cda_coverage_tree(
                     )
                     if not selected_paths and not suggested_paths and channel:
                         consequence = (
-                            f" ← site configuration via cda.{channel}; "
-                            "no dataset counterpart"
+                            f" ← site configuration via cda.{channel}; {_msg('markdown.no_dataset_counterpart')}"
                         )
                 leaf = _leaf(row["target"].get("path") or row["target"].get("element_name"))
                 lines.append(
@@ -986,7 +985,7 @@ def _extended_cda_coverage_tree(
                     consequence = " ← " + ", ".join(names)
                 else:
                     status = "○D" if defaults.get(row["name"]) else "○"
-                    consequence = " ← no dataset counterpart"
+                    consequence = (' ← ' + _msg('markdown.no_dataset_counterpart'))
                 if row["name"] in required_gap_targets:
                     status += "▲"
                 elif row["name"] in site_owned_targets:
@@ -995,7 +994,7 @@ def _extended_cda_coverage_tree(
                     if requirement_rows:
                         channel = str(requirement_rows[0][1].get("channel") or "")
                         if not selected_rows and not suggested_paths and channel:
-                            consequence = f" ← site configuration via cda.{channel}; no dataset counterpart"
+                            consequence = f" ← site configuration via cda.{channel}; {_msg('markdown.no_dataset_counterpart')}"
                 leaf = _leaf(row["target"].get("path") or row["target"].get("element_name"))
                 lines.append(
                     f"{status:<3}{area_stem}{entity_stem[len(area_stem):]}{branch} "
@@ -1288,7 +1287,7 @@ def _review_required(
                 + " for the same occurrence, or retain `null`."
             )
         elif blocked:
-            action = "Define the required repetition or merge rule."
+            action = (_msg('markdown.define_the_required_repetition_or_merge_rule'))
         elif candidates:
             selectable = any(
                 row.get("result") in {
@@ -1298,12 +1297,12 @@ def _review_required(
                 for row in candidates
             )
             action = (
-                "Choose one selectable target in `cda-mapping.json`, or retain `null`."
+                (_msg('markdown.choose_one_selectable_target_in_cda_mapping_json'))
                 if selectable else
-                "Use the evidence to find a value-bearing target, or retain `null`."
+                (_msg('markdown.use_the_evidence_to_find_a_value_bearing'))
             )
         else:
-            action = "Find a representation manually, or retain `null`."
+            action = (_msg('markdown.find_a_representation_manually_or_retain_null'))
         rows.append({
             "path": str(path),
             "name": str(model_fields.get(path, {}).get("name") or path),
@@ -1386,7 +1385,7 @@ def _review_reason(
             "More than one interpretation remains possible, or the best evidence still "
             "requires human confirmation."
         )
-    return "No usable CDA target evidence was found for this dataset datapoint."
+    return (_msg('markdown.no_usable_cda_target_evidence_for_dataset_datapoint'))
 
 
 def _concise(value: Any, limit: int = 180) -> str:
@@ -1673,7 +1672,7 @@ def _review_dataset_tree(
         parent = str(fields.get(path, {}).get("parent") or "") or None
         children[parent].append(("field", path))
 
-    lines = ["```text", "   Dataset decisions"]
+    lines = ["```text", ('   ' + _msg('markdown.dataset_decisions'))]
 
     def render(parent: str | None, stem: str = "") -> None:
         items = children.get(parent, [])
@@ -1704,7 +1703,7 @@ def _review_dataset_tree(
             notes = [value for value in (
                 gate,
                 f"{possible_count} possible target{'s' if possible_count != 1 else ''}"
-                if possible_count else "no generated target inventory",
+                if possible_count else (_msg('markdown.no_generated_target_inventory')),
             ) if value]
             name = str(fields.get(path, {}).get("name") or path.rsplit(".", 1)[-1])
             lines.append(
@@ -2156,10 +2155,9 @@ def _possible_target_lines(
     if not groups:
         return []
     out = [
-        "#### Possible targets (unproven)",
+        (_msg('markdown.possible_targets_unproven')),
         "",
-        "These type-compatible writable descendants are an admissibility inventory, "
-        "not semantic mapping evidence. Nothing in this list is selected automatically.",
+        (_msg('markdown.these_type_compatible_writable_descendants_are_an_admissibility')),
         "",
     ]
     for key, rows in groups:
@@ -2231,7 +2229,7 @@ def _possible_target_lines(
                     _md("; ".join(constraints) or "available; semantics unproven"),
                 ]) + " |"
             )
-        out += ["", "Annotated template skeleton:", ""]
+        out += ["", (_msg('markdown.annotated_template_skeleton')), ""]
         out.extend(_annotated_template_excerpt(key, rows, cda))
     return out
 
@@ -2243,9 +2241,9 @@ def _structural_and_completion_lines(
     structures = mapping.get("structures", {})
     if isinstance(structures, Mapping) and structures:
         lines += [
-            "## Accepted structural rules",
+            (_msg('markdown.accepted_structural_rules')),
             "",
-            "These rules create or coordinate CDA occurrences; they are configuration, not XML edits.",
+            (_msg('markdown.these_rules_create_or_coordinate_cda_occurrences_they')),
             "",
         ]
         for name, rule in structures.items():
@@ -2307,10 +2305,9 @@ def _structural_and_completion_lines(
     narratives = mapping.get("narratives", {})
     if isinstance(narratives, Mapping) and narratives:
         lines += [
-            "## Accepted narrative-only rules",
+            (_msg('markdown.accepted_narrative_only_rules')),
             "",
-            "These reviewed rules preserve source wording in a section narrative "
-            "without claiming a structured CDA value mapping.",
+            (_msg('markdown.these_reviewed_rules_preserve_source_wording_in_a')),
             "",
         ]
         for block in narrative_blocks(mapping):
@@ -2325,10 +2322,9 @@ def _structural_and_completion_lines(
     field_reviews = mapping.get("field_reviews", {})
     if isinstance(field_reviews, Mapping) and field_reviews:
         lines += [
-            "## Reviewed intentional non-mappings",
+            (_msg('markdown.reviewed_intentional_non_mappings')),
             "",
-            "These dataset fields remain explicit `null` selections by review, "
-            "not because the proposal engine forgot them.",
+            (_msg('markdown.these_dataset_fields_remain_explicit_null_selections_by')),
             "",
         ]
         for path, review in field_reviews.items():
@@ -2344,16 +2340,14 @@ def _structural_and_completion_lines(
 
     target_defaults = mapping.get("target_defaults", {})
     lines += [
-        "## Accepted required-CDA completion",
+        (_msg('markdown.accepted_required_cda_completion')),
         "",
-        f"General rule: an active required nullable leaf without a mapped value receives "
-        f"`nullFlavor=\"{required_unmapped_null_flavor(mapping)}\"`. A real mapped "
-        "value always takes precedence. Mandatory (`M`) values cannot use this rule.",
+        _msg("markdown.general_rule_an_active_required_nullable_leaf_without", null_flavor=required_unmapped_null_flavor(mapping)),
         "",
     ]
     if isinstance(target_defaults, Mapping) and target_defaults:
         lines += [
-            "The following reviewed targets use a more specific default:",
+            (_msg('markdown.the_following_reviewed_targets_use_a_more_specific')),
             "",
             "| CDA template value | Default | Reason |",
             "|---|---|---|",
@@ -2378,17 +2372,17 @@ def _structural_and_completion_lines(
             )
         lines.append("")
     else:
-        lines += ["No target-specific defaults are configured.", ""]
+        lines += [(_msg('markdown.no_target_specific_defaults_are_configured')), ""]
     site_requirements = mapping.get("site_requirements", {})
     if isinstance(site_requirements, Mapping) and site_requirements:
         lines += [
-            "## Required site configuration",
+            (_msg('markdown.required_site_configuration')),
             "",
             "These portable declarations assign ownership but contain no site "
             "value. `check-cda-mapping` validates the association; site/input "
             "validation requires the configured value:",
             "",
-            "| CDA target | Site configuration | Reason |",
+            (_msg('markdown.cda_target_site_configuration_reason')),
             "|---|---|---|",
         ]
         for name, rule in sorted(site_requirements.items()):
@@ -2406,11 +2400,11 @@ def _structural_and_completion_lines(
             )
         lines.append("")
     else:
-        lines += ["No CDA values are explicitly delegated to site configuration.", ""]
+        lines += [(_msg('markdown.no_cda_values_are_explicitly_delegated_to_site')), ""]
     gaps = required_construction_gaps(cda, mapping)
     if gaps:
         lines += [
-            "### Configuration still required",
+            (_msg('markdown.configuration_still_required')),
             "",
             "The generated proposal cannot yet construct every active mandatory "
             "CDA slot. Supply each value through a reviewed mapping, site value, "
@@ -2422,11 +2416,12 @@ def _structural_and_completion_lines(
         lines.append("")
     else:
         lines += [
-            "All active mandatory CDA slots have a configured value source.", "",
+            (_msg('markdown.all_active_mandatory_cda_slots_have_a_configured')), "",
         ]
     return lines
 
 
+@localized
 def render_accepted_cda_mappings_markdown(
     model: Mapping[str, Any], cda: Mapping[str, Any], mapping: Mapping[str, Any],
     *, output_language: str = "en",
@@ -2446,13 +2441,11 @@ def render_accepted_cda_mappings_markdown(
     }
     mapped_leaves = sum(len(rows) for rows in rows_by_section.values())
     lines = [
-        "# Accepted mappings",
+        (_msg('markdown.accepted_mappings')),
         "",
-        f"This section records **{len(mapped_datapoints)}** executable dataset datapoints "
-        f"writing **{mapped_leaves}** logical CDA leaves. Edit `cda-mapping.json`; "
-        "the XML excerpts below are read-only consequences of that configuration.",
+        f"{_msg('markdown.this_section_records')}{len(mapped_datapoints)}**{_msg('markdown.executable_dataset_datapoints_writing')}{mapped_leaves}**{_msg('markdown.logical_cda_leaves_edit_cda_mapping_json_the')}",
         "",
-        "## Sections and entities",
+        (_msg('markdown.sections_and_entities')),
         "",
     ]
     example_written = False
@@ -2478,7 +2471,7 @@ def render_accepted_cda_mappings_markdown(
             if descriptions:
                 lines += [descriptions[0], ""]
             lines += [
-                "| Name in dataset | `model.json` datapoint | `cda-mapping.json` target | Name in CDA template | Status |",
+                (_msg('markdown.name_in_dataset_model_json_datapoint_cda_mapping')),
                 "|---|---|---|---|---|",
             ]
             for row in entity_rows:
@@ -2535,7 +2528,7 @@ def render_accepted_cda_mappings_markdown(
                 lines += [
                     *[_configuration_instruction(row) for row in excerpt_rows or entity_rows],
                     "",
-                    "Abridged configuration excerpt — edit the corresponding entry in the full JSON file:",
+                    (_msg('markdown.abridged_configuration_excerpt_edit_the_corresponding_entry_in')),
                     "",
                     "```json",
                     _configuration_excerpt(excerpt_rows or entity_rows, mapping),
@@ -2549,9 +2542,9 @@ def render_accepted_cda_mappings_markdown(
                     )
             if show_example or complex_mapping:
                 lines += [
-                    "Resulting CDA placement — read-only consequence of the JSON configuration:",
+                    (_msg('markdown.resulting_cda_placement_read_only_consequence_of_the')),
                     "",
-                    "Text in `{braces}` names a generated CDA datapoint. It is an explanatory placeholder, not XML to enter manually.",
+                    _msg("markdown.text_in_braces_names_a_generated_cda_datapoint"),
                     "",
                     "```xml",
                     "<!-- Read-only illustration; do not copy this into cda-mapping.json. -->",
@@ -2559,12 +2552,10 @@ def render_accepted_cda_mappings_markdown(
                 lines.extend(_contextual_xml(entity_rows, view, cda))
                 lines += ["```", ""]
     lines.extend(_structural_and_completion_lines(mapping, cda))
-    return localize_markdown(
-        "\n".join(lines).rstrip() + "\n", output_language,
-        protected_values=(model, cda, mapping),
-    )
+    return ("\n".join(lines).rstrip() + "\n")
 
 
+@localized
 def render_cda_mapping_markdown(
     model: Mapping[str, Any],
     cda: Mapping[str, Any],
@@ -2579,53 +2570,41 @@ def render_cda_mapping_markdown(
     headline_counts = coverage_headline_counts(model, cda, mapping, audit)
     template = view["template"]
     lines = [
-        "# Dataset-to-CDA mapping decisions",
+        (_msg('markdown.dataset_to_cda_mapping_decisions')),
         "",
         f"Template: **{template.get('display_name') or template.get('name') or 'ClinicalDocument'}** "
         f"(`{template.get('id')}` @ `{template.get('effective_date')}`)",
         "",
         format_coverage_headline(headline_counts),
         "",
-        "This file is the manual decision workbench. It contains only unresolved "
-        "dataset datapoints and the CDA leaves that may help resolve them. Accepted "
-        "mappings are documented in `cda-mapping-details.md`; the exhaustive source "
-        "and target trees are in `cda-mapping-trees.md`.",
+        (_msg('markdown.this_file_is_the_manual_decision_workbench_it')),
         "",
-        "- ! **Evidence candidate** — related evidence exists, but no executable mapping is selected.",
-        "- ? **Possible target (unproven)** — type-compatible and reachable, but not semantic evidence.",
-        "- × **No generated target** — manual template review has not yet produced a candidate.",
+        (_msg('markdown.evidence_candidate_related_evidence_exists_but_no_executable')),
+        (_msg('markdown.possible_target_unproven_type_compatible_and_reachable_but')),
+        (_msg('markdown.no_generated_target_manual_template_review_has_not')),
         "",
-        "Reviewed mappings, narrative-only decisions, and intentional nulls are "
-        "resolved decisions and therefore omitted here. Their counts remain in "
-        "the headline and their details remain in `cda-mapping-details.md` and "
-        "the exhaustive trees.",
+        (_msg('markdown.reviewed_mappings_narrative_only_decisions_and_intentional_nulls')),
         "",
-        "Nothing in a candidate list is selected automatically. Edit `cda-mapping.json`. "
-        "Do not edit the XML-like template skeletons in this report; all trees, tables, "
-        "and excerpts below are generated read-only evidence.",
+        (_msg('markdown.nothing_in_a_candidate_list_is_selected_automatically')),
         "",
-        "## Unresolved dataset tree",
+        (_msg('markdown.unresolved_dataset_tree')),
         "",
         *_review_dataset_tree(model, review_rows),
         "",
-        "## CDA review tree",
+        (_msg('markdown.cda_review_tree')),
         "",
     ]
     cda_review_tree = _review_cda_tree(view, cda, review_rows)
     lines += cda_review_tree if len(cda_review_tree) > 3 else [
-        "No unresolved datapoint currently has a generated CDA candidate."
+        (_msg('markdown.no_unresolved_datapoint_currently_has_a_generated_cda'))
     ]
-    lines += ["", "## Decisions", ""]
+    lines += ["", (_msg('markdown.decisions')), ""]
     if not review_rows:
-        lines += ["No dataset datapoints currently require target selection.", ""]
-        return localize_markdown(
-            "\n".join(lines).rstrip() + "\n", output_language,
-            protected_values=(model, cda, mapping, audit),
-        )
+        lines += [(_msg('markdown.no_dataset_datapoints_currently_require_target_selection')), ""]
+        return ("\n".join(lines).rstrip() + "\n")
 
     lines += [
-        "Every card corresponds to an explicit `null` entry in `cda-mapping.json`. "
-        "Retaining `null` is valid when the clinical representation remains unproven.",
+        (_msg('markdown.every_card_corresponds_to_an_explicit_null_entry')),
         "",
     ]
     for row in review_rows:
@@ -2636,9 +2615,9 @@ def render_cda_mapping_markdown(
         lines += [
             f"### {row['name']}",
             "",
-            f"Dataset datapoint: `{row['path']}`",
+            f"{_msg('markdown.dataset_datapoint')} `{row['path']}`",
             "",
-            f"**Why review is required:** {row['reason']}",
+            f"{_msg('markdown.why_review_is_required')} {row['reason']}",
             "",
         ]
         if gap:
@@ -2650,7 +2629,7 @@ def render_cda_mapping_markdown(
         selectable: list[str] = []
         if candidates:
             lines += [
-                "#### Evidence candidates",
+                (_msg('markdown.evidence_candidates')),
                 "",
                 "| CDA target | Name / explanation in CDA template | Datatype | Confidence | Evidence | Result |",
                 "|---|---|---|---|---|---|",
@@ -2677,17 +2656,17 @@ def render_cda_mapping_markdown(
                 )
             lines.append("")
         else:
-            lines += ["No semantic evidence candidate was generated.", ""]
+            lines += [(_msg('markdown.no_semantic_evidence_candidate_was_generated')), ""]
 
         lines.extend(_possible_target_lines(detail, cda))
-        lines += [f"**Action:** {row['action']}", ""]
+        lines += [f"{_msg('markdown.action')} {row['action']}", ""]
         if selectable:
             lines += [
-                "Selectable values established by the mapping evidence:",
+                (_msg('markdown.selectable_values_established_by_the_mapping_evidence')),
                 "",
                 *[f"{index}. `{name}`" for index, name in enumerate(selectable, 1)],
                 "",
-                "Example edit (choose only after review):",
+                (_msg('markdown.example_edit_choose_only_after_review')),
                 "",
                 "```json",
                 json.dumps(
@@ -2700,7 +2679,7 @@ def render_cda_mapping_markdown(
             ]
         else:
             lines += [
-                "Current editable state:",
+                (_msg('markdown.current_editable_state')),
                 "",
                 "```json",
                 json.dumps(
@@ -2711,12 +2690,10 @@ def render_cda_mapping_markdown(
                 "```",
                 "",
             ]
-    return localize_markdown(
-        "\n".join(lines).rstrip() + "\n", output_language,
-        protected_values=(model, cda, mapping, audit),
-    )
+    return ("\n".join(lines).rstrip() + "\n")
 
 
+@localized
 def render_cda_mapping_trees_markdown(
     model: Mapping[str, Any],
     cda: Mapping[str, Any],
@@ -2736,56 +2713,44 @@ def render_cda_mapping_trees_markdown(
         raise ValueError("coverage headline and CDA coverage tree disagree")
     template = view["template"]
     lines = [
-        "# Dataset-to-CDA coverage trees",
+        (_msg('markdown.dataset_to_cda_coverage_trees')),
         "",
         f"Template: **{template.get('display_name') or template.get('name') or 'ClinicalDocument'}** "
         f"(`{template.get('id')}` @ `{template.get('effective_date')}`)",
         "",
         format_coverage_headline(headline_counts),
         "",
-        "This report is exhaustive. The status gutter is the first column of every "
-        "leaf line; hierarchy branches remain visually independent from status.",
+        (_msg('markdown.this_report_is_exhaustive_the_status_gutter_is')),
         "",
-        "- ✓ **Mapped** — selected executable mapping.",
-        "- ! **Suggested** — a writable CDA leaf exists, but no executable mapping is selected.",
-        "- × **No target** — no suitable writable CDA leaf was found.",
-        "- = **Intentionally unmapped** — the field remains `null` by an "
-        "explicit reviewed decision.",
-        "- ○ **No source** — a reportable writable CDA leaf has no dataset counterpart.",
-        "- ▲ **Required gap** — an active owner-required CDA value has no "
-        "portable configured source; this combines with its coverage symbol "
-        "(for example `○▲`).",
-        "- ◆ **Site-owned requirement** — an active owner-required CDA value is "
-        "explicitly delegated to the named `cda.values` or "
-        "`cda.fallback_if_active` site channel; `○◆` means configuration-owned "
-        "construction with no dataset-field source.",
-        "- ✓! **Mapped and suggested** — one datapoint is selected and another remains under review.",
+        (_msg('markdown.mapped_selected_executable_mapping')),
+        (_msg('markdown.suggested_a_writable_cda_leaf_exists_but_no')),
+        (_msg('markdown.no_target_no_suitable_writable_cda_leaf_was')),
+        (_msg('markdown.intentionally_unmapped_the_field_remains_null_by_an')),
+        (_msg('markdown.no_source_a_reportable_writable_cda_leaf_has')),
+        (_msg('markdown.required_gap_an_active_owner_required_cda_value')),
+        (_msg('markdown.site_owned_requirement_an_active_owner_required_cda')),
+        (_msg('markdown.mapped_and_suggested_one_datapoint_is_selected_and')),
         "",
-        "The CDA tree excludes generic datatype-expansion plumbing and fixed, "
-        "conditional-fixed, or system-supplied values. Those remain available in `cda.json`.",
-        "The required-gap and site-ownership markers evaluate the mapping rendered "
-        "for this report. `◆` records a portable ownership declaration; it does not "
-        "claim that a concrete site value was checked.",
+        (_msg('markdown.the_cda_tree_excludes_generic_datatype_expansion_plumbing')),
+        (_msg('markdown.the_required_gap_and_site_ownership_markers_evaluate')),
         "",
-        "## Complete dataset tree",
+        (_msg('markdown.complete_dataset_tree')),
         "",
         "`Dataset datapoint` → `{logical CDA target}`",
         "",
         *_dataset_coverage_tree(model, coverage),
         "",
-        "## Complete CDA coverage tree",
+        (_msg('markdown.complete_cda_coverage_tree')),
         "",
         "`Logical CDA target` ← `dataset datapoint`",
         "",
         *cda_tree,
         "",
     ]
-    return localize_markdown(
-        "\n".join(lines).rstrip() + "\n", output_language,
-        protected_values=(model, cda, mapping, audit),
-    )
+    return ("\n".join(lines).rstrip() + "\n")
 
 
+@localized
 def render_cda_mapping_extended_trees_markdown(
     model: Mapping[str, Any],
     cda: Mapping[str, Any],
@@ -2806,56 +2771,43 @@ def render_cda_mapping_extended_trees_markdown(
     headline_counts["no_source_leaves"] = physical_no_source
     template = view["template"]
     lines = [
-        "# Extended dataset-to-CDA coverage trees",
+        (_msg('markdown.extended_dataset_to_cda_coverage_trees')),
         "",
-        "Edit `cda-mapping.json`, not this report.",
+        (_msg('markdown.edit_cda_mapping_json_not_this_report')),
         "",
         f"Document template: **{template.get('display_name') or template.get('name') or 'ClinicalDocument'}** "
         f"(`{template.get('id')}` @ `{template.get('effective_date')}`)",
         "",
         format_coverage_headline(headline_counts),
         "",
-        "The primary tree line is kept compact. Indented evidence lines mean:",
+        (_msg('markdown.the_primary_tree_line_is_kept_compact_indented')),
         "",
-        "- `S:` source concept OID, stable dataset path, logical type and cardinality;",
-        "- `T:` owning template/revision, template-relative XPath, CDA datatype, "
-        "cardinality, conformance and required ValueSet where available;",
-        "- `A:` exact ART-DECOR Beschreibung on the target or an owner-template "
-        "ancestor, with its template-relative path;",
-        "- `R:` executable transform, structural rule, active required-leaf "
-        "completion policy, reviewed default or site responsibility;",
-        "- `G:` reviewed non-transmission or unresolved evidence gate and reopening condition.",
+        (_msg('markdown.s_source_concept_oid_stable_dataset_path_logical')),
+        (_msg('markdown.t_owning_template_revision_template_relative_xpath_cda')),
+        (_msg('markdown.art_decor_description_evidence')),
+        (_msg('markdown.r_executable_transform_structural_rule_reviewed_default_or')),
+        (_msg('markdown.g_reviewed_non_transmission_or_unresolved_evidence_gate')),
         "",
-        "Status: `✓` mapped; `!` suggested but not selected; `×` no approved "
-        "target; `=` intentionally unmapped; `○` physical CDA leaf without a "
-        "dataset counterpart; `D` exact reviewed target default; `▲` unresolved "
-        "required construction; `◆` site-owned required construction. Markers may combine.",
+        (_msg('markdown.status_mapped_suggested_but_not_selected_no_approved')),
         "",
-        "Logical targets identify separately reviewable occurrences. When several "
-        "logical occurrences write one repeatable CDA leaf, the report also names "
-        "the shared physical target. The inverse no-source count is therefore "
-        "computed after logical-to-physical resolution.",
+        (_msg('markdown.logical_targets_identify_separately_reviewable_occurrences_when_several')),
         "",
-        "The CDA tree excludes generic datatype-expansion plumbing and fixed, "
-        "conditional-fixed, or system-supplied values. Those remain available in `cda.json`.",
+        (_msg('markdown.the_cda_tree_excludes_generic_datatype_expansion_plumbing')),
         "",
-        "## Complete dataset tree",
+        (_msg('markdown.complete_dataset_tree')),
         "",
         "`Dataset datapoint` → `{logical CDA target}`",
         "",
         *_extended_dataset_coverage_tree(model, cda, mapping, audit, coverage),
         "",
-        "## Complete physical CDA coverage tree",
+        (_msg('markdown.complete_physical_cda_coverage_tree')),
         "",
         "`{physical CDA target}` ← `dataset datapoint` (with logical occurrence where distinct)",
         "",
         *cda_tree,
         "",
     ]
-    return localize_markdown(
-        "\n".join(lines).rstrip() + "\n", output_language,
-        protected_values=(model, cda, mapping, audit),
-    )
+    return ("\n".join(lines).rstrip() + "\n")
 
 
 def _constraint_xml(
@@ -2914,6 +2866,7 @@ def _constraint_xml(
     return element
 
 
+@localized
 def write_readable_cda(
     model_dir: Path,
     cda: Mapping[str, Any],
@@ -2944,30 +2897,25 @@ def write_readable_cda(
     stats = cda.get("stats", {})
     summary = mapping_audit.get("summary", {})
     lines = [
-        "# Expanded CDA template",
+        (_msg('markdown.expanded_cda_template')),
         "",
         f"- Template: `{template.get('name') or template.get('display_name') or ''}`",
         f"- Identity: `{template.get('id')}` @ `{template.get('effective_date')}`",
-        f"- Reachable template revisions: {stats.get('reachable_templates', 0)}",
-        f"- Effective elements: {stats.get('elements', 0)}",
-        f"- Effective attributes: {stats.get('attributes', 0)}",
-        f"- Named targets: {stats.get('targets', 0)}",
-        f"- Writable value targets: {stats.get('writable_value_targets', 0)}",
-        f"- Executable dataset mappings: {summary.get('executable_fields', 0)}",
+        f"- {_msg('markdown.reachable_template_revisions')} {stats.get('reachable_templates', 0)}",
+        f"- {_msg('markdown.effective_elements')} {stats.get('elements', 0)}",
+        f"- {_msg('markdown.effective_attributes')} {stats.get('attributes', 0)}",
+        f"- {_msg('markdown.named_targets')} {stats.get('targets', 0)}",
+        f"- {_msg('markdown.writable_value_targets')} {stats.get('writable_value_targets', 0)}",
+        f"- {_msg('markdown.executable_dataset_mappings')} {summary.get('executable_fields', 0)}",
         "",
-        "The companion XML is the effective compiled constraint tree. It retains",
-        "human-readable descriptions and inserts XML comments at nodes with named",
-        "CDA targets, source-template identities, or mapped dataset paths.",
+        _msg('markdown.the_companion_xml_is_the_effective_compiled_constraint'),
         "",
-        "Mapping decisions and alternatives are recorded in `mapping-audit.json`.",
+        (_msg('markdown.mapping_decisions_and_alternatives_are_recorded_in_mapping')),
         "",
     ]
     markdown_path = model_dir / "cda-expanded-readable.md"
     markdown_path.write_text(
-        localize_markdown(
-            "\n".join(lines), output_language,
-            protected_values=(cda, mapping_audit),
-        ),
+        ("\n".join(lines)),
         encoding="utf-8",
     )
     return xml_path, markdown_path

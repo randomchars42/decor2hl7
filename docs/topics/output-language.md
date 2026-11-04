@@ -41,6 +41,8 @@ decor2hl7 --output-language de build
 
 The global option appears before the command name. Rerun the artifact-producing
 command after changing the setting so its generated Markdown is refreshed.
+Guides copied into initialized bundles retain their source report language;
+regenerate them with `build` or `propose-input` before refreshing the bundle.
 
 ## What is translated
 
@@ -79,8 +81,11 @@ Translations are data files rather than Python source:
 Both files are packaged with the application. Every entry has a stable,
 namespaced message ID: `cli.*` for complete command messages and help,
 `ui.*` for composed terminal output, and `markdown.*` for generated report
-prose. Code and compatibility localization resolve messages through these IDs;
-English source text is not a catalog key. Changing the wording or translation
+prose. Presentation code constructs messages directly through these IDs;
+there is no runtime search or substitution of English fragments. An explicit
+report language scopes nested presentation helpers, while supplied owner text
+is inserted unchanged. Argparse labels are constructed in the chosen language
+before formatting. English source text is not a catalog key. Changing the wording or translation
 does not require changing its ID. An existing ID must not be renamed or reused
 for a different meaning merely because its wording changes.
 
@@ -90,7 +95,6 @@ role and remains meaningful when its wording changes. Avoid ordinal suffixes
 or IDs derived solely from the entire English sentence.
 
 The English catalog defines the complete message-ID set. Other catalogs must
-use the same IDs and formatting placeholders. Duplicate replacement source
-text within a namespace, invalid IDs, missing messages, placeholder drift,
+use the same IDs and formatting placeholders. Invalid IDs, missing messages, placeholder drift,
 unsupported languages, and translation of protected technical terms are test
 failures.

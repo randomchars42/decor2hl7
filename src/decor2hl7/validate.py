@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .i18n import message as _msg
+
 from collections import defaultdict
 from typing import Any, Mapping
 
@@ -29,7 +31,7 @@ from .cooccurrence import (
     unavoidable_targets_problems,
 )
 from .cda.semantics import (
-    direct_compatibility, identifier_root_for_target,
+    identifier_root_for_target,
     transformed_compatibility, valid_oid,
 )
 from .transforms import mapping_rules, validate_transform
@@ -43,6 +45,11 @@ from .cda.terminology import (
 
 def check_site(site: Mapping[str, Any], cda: Mapping[str, Any] | None = None) -> list[str]:
     errors: list[str] = []
+    if "transport" in site:
+        from .transport import configuration_error
+        error = configuration_error(site, require_destination=False)
+        if error:
+            errors.append(error)
     timezone = str(site.get("timezone") or "")
     if timezone:
         try:
@@ -184,6 +191,21 @@ def check_config(
     *, require_site_configuration: bool = True,
 ) -> list[str]:
     errors: list[str] = []
+    for label, mapping, parse in (
+        ("cda-mapping", cda_mapping, mapping_rules),
+        ("csv-mapping", csv_mapping, mapping_locator),
+    ):
+        raw_fields = mapping.get("fields", {})
+        if not isinstance(raw_fields, Mapping):
+            errors.append(_msg('ui.mapping_fields_type', label=label))
+            continue
+        for path, raw in raw_fields.items():
+            try:
+                parse(raw)
+            except ValueError as error:
+                errors.append(f"{label}: {path}: {error}")
+    if errors:
+        return errors
     model_identity = model.get("meta", {})
     expected_identity = {
         "dataset_id": model_identity.get("dataset_id"),
@@ -665,7 +687,7 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
         if str(rule.get("role") or "error").casefold() not in {"fatal", "error"}:
             continue
         result = evaluate_assertion(
-            str(rule.get("test") or ""), dummy_context, dummy_root, rule.get("lets", {})
+            str(rule.get("test") or ""), dummy_context, dummy_root, rule.get("lets", {}), rule.get("namespaces", {})
         )
         if result is None:
             errors.append(
@@ -706,6 +728,57 @@ def validate_record(record: Mapping[str, Any], model: Mapping[str, Any]) -> list
                     walk(row.get("instances", {}), depth + 1, current)
         walk(record.get("instances", {}), 0, ())
         return out
+
+    groups = model.get("groups", {})
+    for group_path, group in groups.items():
+        if not group.get("repeating"):
+            continue
+        ancestors: list[str] = []
+        parent = str(group.get("parent") or "")
+        seen = {group_path}
+        cyclic = False
+        while parent:
+            if parent in seen:
+                problems.append(_problem("error", group_path, _msg('ui.group_cycle')))
+                cyclic = True
+                break
+            seen.add(parent)
+            ancestor = groups.get(parent, {})
+            if ancestor.get("repeating"):
+                ancestors.insert(0, parent)
+            parent = str(ancestor.get("parent") or "")
+
+        if cyclic:
+            continue
+
+        def check_group(scope: Mapping[str, Any], depth: int, coordinates: str) -> None:
+            instances = scope.get("instances", {})
+            if depth < len(ancestors):
+                for index, row in enumerate(instances.get(ancestors[depth], [])):
+                    check_group(row, depth + 1, coordinates + f"[{index}]")
+                return
+            rows = instances.get(group_path, [])
+            if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
+                problems.append(_problem("error", group_path + coordinates, _msg('ui.group_occurrences_type')))
+                return
+            # Non-repeated optional ancestors activate only when their subtree
+            # contains data or occurrences in this parent scope.
+            parent_path = str(group.get("parent") or "")
+            while parent_path and parent_path not in ancestors:
+                ancestor = groups.get(parent_path, {})
+                if not ancestor.get("min"):
+                    prefix = parent_path + "."
+                    if not any(str(key).startswith(prefix) and value is not None for key, value in scope.get("values", {}).items()) and not any(str(key).startswith(prefix) and value for key, value in instances.items()):
+                        return
+                parent_path = str(ancestor.get("parent") or "")
+            count = len(rows)
+            minimum, maximum = int(group.get("min") or 0), group.get("max")
+            if count < minimum:
+                problems.append(_problem("error", group_path + coordinates, _msg('ui.group_minimum', count=count, minimum=minimum)))
+            if maximum is not None and count > int(maximum):
+                problems.append(_problem("error", group_path + coordinates, _msg('ui.group_maximum', count=count, maximum=maximum)))
+
+        check_group(record, 0, "")
 
     for path, field in model.get("fields", {}).items():
         occurrences = occurrence_values(path, field)
