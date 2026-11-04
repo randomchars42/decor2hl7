@@ -20,6 +20,10 @@ reviewed recovery overlay in
 preserves human decisions that the owner-rule proposal correctly declines to
 infer. It is accepted policy only for the model and CDA hashes it records.
 
+Release `2026.1.3` has a separate
+[reviewed migration contract](reference-2026.1.3.md). It does not replace this
+reference, its recovery hashes, or the companion-workspace test identity.
+
 ## Allergy
 
 The allergy group maps to the selected Allergies and Intolerances section,

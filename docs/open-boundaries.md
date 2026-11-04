@@ -6,7 +6,7 @@ relevant topic or reference-transaction page.
 
 ## Specification and terminology
 
-### Referral Actions terminology is unavailable
+### Historical reference Referral Actions terminology is unavailable
 
 The selected profile's ValueSet `1.2.276.0.76.11.53@2015-11-17` includes
 CodeSystem
@@ -19,6 +19,23 @@ The reviewed finite `Typ Verlegung` conversion is target-scoped and does not
 repair this closure. The boundary closes only with the exact publication, an
 upstream-confirmed successor identity, or another authoritative complete source
 that can be reviewed as an exact artifact.
+
+For the separate `2026.1.3` snapshot, this ValueSet is extensional and complete;
+it no longer needs the missing CodeSystem to establish its members. That does
+not publish the historical CodeSystem. Its selected source still exposes logical
+referral options outside the complete formal binding. Those options require
+owner alignment and remain rejected under the
+[new profile contract](reference-2026.1.3.md).
+
+### New source and CDA transport domains differ
+
+In release `2026.1.3`, source Transportmethod binds to
+`1.2.276.0.76.11.41@2024-02-14T09:42:48` while the CDA observation binds to
+the same OID at `2015-11-17T00:00:00`. The newer SNOMED CT ground/air categories
+do not establish the older local vehicle-category distinctions. Preserve the
+source fact in Transport narrative and keep structured selection suspended.
+Closing this requires aligned owner bindings or a complete reviewed lossless
+crosswalk, followed by exact output and intended-receiver validation.
 
 ### Exact historical CCD Product prototype is not published
 
@@ -118,6 +135,16 @@ scenarios therefore cannot exercise a legal negative-isolation record. Closing
 this requires an upstream cardinality or conditional-rule clarification.
 
 ## Validation and delivery
+
+### New allergy discriminator is rejected by the provided receiver
+
+The `2026.1.3` owner example and complete allergy ValueSet admit J01 for the
+antibiotic category. The unchanged provided receiver rejects that discriminator;
+validation-only copies using the former A07AA isolate the incompatibility.
+The active mapping and original documents retain J01. Closing this requires
+receiver/publication alignment or a separately approved compatibility contract
+with complete clinical semantics. A passing diagnostic copy is not permission
+to narrow or rewrite an antibiotic statement, and validates no import or storage.
 
 ### Published AKTIN validation applies stricter content rules
 

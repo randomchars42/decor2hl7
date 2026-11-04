@@ -27,6 +27,8 @@ from decor2hl7.conformance import (
     _extract_cda,
     _extract_decor,
     assemble_decor_closure,
+    compile_schematron,
+    decor_core_dir,
     sha256_file,
     validate_cda_documents,
     validate_xsd,
@@ -37,6 +39,32 @@ from decor2hl7.retrieval.fetch import _fetch_direct
 
 
 class ConformanceTests(unittest.TestCase):
+    def test_source_validator_has_pinned_relative_datatype_catalogue(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            release = Path(temporary) / "release"
+            core = decor_core_dir(release)
+            core.mkdir(parents=True)
+            catalogue = core / "DECOR-supported-datatypes.xml"
+            catalogue.write_bytes(b"<supported-datatypes/>")
+            validator = Path(temporary) / "model" / "decor-source.xsl"
+
+            def compile_stage(
+                release_dir: Path, source: Path, stylesheet: Path, output: Path,
+            ) -> str:
+                if output == validator:
+                    # doc($datatypeFile) resolves against this output location,
+                    # not the original package or intermediate stylesheet.
+                    self.assertEqual(
+                        output.with_name(catalogue.name).read_bytes(),
+                        catalogue.read_bytes(),
+                    )
+                output.write_bytes(b"<stylesheet/>")
+                return ""
+
+            with patch("decor2hl7.conformance._run_xslt", side_effect=compile_stage):
+                compiled = compile_schematron(release, core / "DECOR.sch", validator)
+            self.assertEqual(compiled["sha256"], sha256_file(validator))
+
     def test_profile_extension_projection_is_exact_and_cda_core_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

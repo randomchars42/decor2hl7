@@ -2989,6 +2989,7 @@ def _annotate_targets(
                 )
                 if str(targets.get(ancestor, {}).get("template_id") or "")
                 != base_template_id
+                and len(targets.get(ancestor, {}).get("locations", [])) == 1
             ), "")
             if not anchor:
                 aliases = []

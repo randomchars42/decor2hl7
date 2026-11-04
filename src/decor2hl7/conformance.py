@@ -368,6 +368,12 @@ def compile_schematron(
     release_dir: Path, schematron: Path, output: Path
 ) -> dict[str, Any]:
     """Compile ISO Schematron to an XSLT 2.0 validator candidate."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # DECOR.sch resolves these catalogues relative to the generated validator.
+    # Keep its pinned local dependencies beside it rather than depending on
+    # the stylesheet's fallback to a live assets server.
+    for catalogue in sorted(decor_core_dir(release_dir).glob("DECOR-supported-datatypes*.xml")):
+        shutil.copyfile(catalogue, output.parent / catalogue.name)
     iso = decor_core_dir(release_dir) / "iso-schematron"
     with tempfile.TemporaryDirectory(prefix="decor2hl7-sch-") as temporary:
         temp = Path(temporary)

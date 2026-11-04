@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "description": "Expected rejection cases for the exact selected source and target contracts; do not normalize to nearby codes.",
+  "cases": [
+    {
+      "base_case": "SCENARIO-01",
+      "changes": {
+        "administrative_verlegungsentlassungsinformationen.typ_verlegung": "intern: Beobachtungsstation der Notaufnahme/INZ"
+      },
+      "expected_phase": "source-normalization",
+      "expected": "reject"
+    },
+    {
+      "base_case": "SCENARIO-01",
+      "changes": {
+        "administrative_verlegungsentlassungsinformationen.typ_verlegung": "Verlegung in ein anderes Krankenhaus"
+      },
+      "expected_phase": "source-normalization",
+      "expected": "reject"
+    },
+    {
+      "base_case": "SCENARIO-01",
+      "changes": {
+        "administrative_verlegungsentlassungsinformationen.typ_verlegung": "Sonstiges"
+      },
+      "expected_phase": "source-normalization",
+      "expected": "reject"
+    },
+    {
+      "base_case": "SCENARIO-01",
+      "changes": {
+        "administrative_verlegungsentlassungsinformationen.typ_verlegung": "7"
+      },
+      "expected_phase": "source-normalization",
+      "expected": "reject"
+    },
+    {
+      "base_case": "SCENARIO-01",
+      "changes": {
+        "administrative_aufnahmeinformationen.transport.transportmittel": "RTW"
+      },
+      "expected_phase": "source-normalization",
+      "expected": "reject"
+    },
+    {
+      "base_case": "SCENARIO-01",
+      "changes": {
+        "masnahmen.isolation.isolation": "Patient muss nicht isoliert werden"
+      },
+      "expected_phase": "cda-assertion",
+      "expected": "reject negative isolation with the required reason retained"
+    },
+    {
+      "base_case": "SCENARIO-01",
+      "changes": {
+        "masnahmen.isolation.isolation": "Patient muss nicht isoliert werden",
+        "masnahmen.isolation.isolation_begrundung": null
+      },
+      "expected_phase": "source-validation",
+      "expected": "reject missing mandatory reason"
+    }
+  ]
+}

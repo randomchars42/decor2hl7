@@ -208,6 +208,11 @@ class MappingInferenceTests(unittest.TestCase):
                 },
                 "groups": {},
                 "fields": {"referral": field},
+                "value_sets": {"referral-vs@2025-01-01": {
+                    "id": "referral-vs", "effective_date": "2025-01-01",
+                    "codes": {"NA": {"code_system": "1.2.3", "display_name": "Notarzt"}},
+                    "unresolved_includes": [],
+                }},
             }
             target = compile_cda([project], model)
             target_name = "Referral.code"
@@ -1892,7 +1897,7 @@ class MappingInferenceTests(unittest.TestCase):
             contrast = "allergies.contrast_allergy"
             negation_target = "Allergy.negationInd"
             discriminator_target = "Allergy.participant.playingEntity.code"
-            model = {"fields": {
+            model: dict[str, Any] = {"fields": {
                 agent: {
                     "name": "Agent", "short_name": "agent", "type": "code",
                     "repeat_chain": [],
@@ -2016,6 +2021,38 @@ class MappingInferenceTests(unittest.TestCase):
             self.assertEqual(
                 validate_structures(model, cda_model, cda_mapping), []
             )
+
+            # An initial actionable boolean candidate hides report context.
+            # Shared-target rejection must still recover its group context
+            # when the example pass creates independent occurrences.
+            for field in model["fields"].values():
+                field["parent"] = "allergies"
+            model["groups"]["allergies"] = {"concept": "allergies"}
+            primary = {
+                "target": negation_target, "confidence": "STRONG", "score": 73,
+                "mapping": {"target": negation_target, "transform": {"type": "not"}},
+            }
+            details: dict[str, dict[str, Any]] = {
+                path: {
+                    "selected": discriminator_target if path == agent else primary["mapping"],
+                    "primary": {"target": discriminator_target} if path == agent else primary,
+                    "alternatives": [], "context": None,
+                }
+                for path in model["fields"]
+            }
+            groups: dict[str, dict[str, Any]] = {"allergies": {
+                "selected": "Allergy.section",
+                "primary": {"target": "Allergy.section", "node": context["node"]},
+                "alternatives": [], "context": None,
+            }}
+            proposal = mapping_compiler._mapping_admissibility(
+                model, cda_model, [source],
+                {path: item["selected"] for path, item in details.items()},
+                details, groups, value_set_members([source]),
+            )
+            self.assertIsNotNone(proposal["fields"][antibiotic])
+            self.assertIsNotNone(proposal["fields"][contrast])
+            self.assertIn(rule_name, proposal["structures"])
 
 
 if __name__ == "__main__":

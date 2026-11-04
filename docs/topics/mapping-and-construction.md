@@ -27,6 +27,23 @@ identity order. Equal scores therefore do not make generated proposals, audits
 or reports depend on process hash randomization; scoring and admission gates
 remain unchanged.
 
+Source `items` and analysis `concept`/`exception` representations share one
+member identity within an exact ValueSet revision: code plus code system.
+Repeated representations enrich designations rather than becoming competing
+discriminator candidates; exceptions remain exceptions. Shared-target rejection
+does not discard the established group context needed by later occurrence-rule
+inference. These rules do not create a terminology crosswalk.
+
+Enumeration discovery uses the exact required target binding, including its
+revision. A shared ValueSet OID does not authorize transfer between revisions.
+Known finite direct-code and enum outputs are checked against compiled required
+membership during proposal admission and portable configuration validation,
+before rendering. Incompatible domains remain unselected until a reviewed
+crosswalk or wording-only decision establishes how to preserve the source fact.
+Generated enumeration transforms select the normalized canonical choice, so a
+site alias cannot silently omit a formally admitted value by changing its raw
+input spelling. Explicit reviewer-owned raw selectors retain their meaning.
+
 Evidence strength and executability are separate. An executable selection must
 pass the applicable physical, datatype, terminology, cardinality, occurrence,
 claim, companion, and co-occurrence gates. Shared targets and ambiguous

@@ -26,6 +26,12 @@ Physical source identity includes template OID, effective date, element ID, and
 template-local path. Flattened target names remain stable configuration keys,
 while `path` and `locations` preserve the actual hierarchy.
 
+When a contained template occurs in several sections, its generic targets remain
+ambiguous. Occurrence-qualified targets use the nearest uniquely located
+containing target as their anchor, looking past reused intermediate templates.
+Each alias retains one exact physical location and the same constraints; the
+compiler does not select a clinical section on the reviewer's behalf.
+
 ## Datatypes and writable values
 
 The XSD graph supplies structural types, datatype aliases, extension and
@@ -91,6 +97,10 @@ packages. It validates broad source-project evidence under a report-only policy
 and separately assembles a validator from only the exact template revisions
 selected at physical document locations. Assembly fails if a selected formal
 include or contains reference is absent or revision-inconsistent.
+
+Generated validators carry the pinned DECOR supported-datatype catalogues beside
+their stylesheets. Relative catalogue lookup therefore works offline; it must
+not turn a blocked network fallback into apparent owner datatype failures.
 
 Generated template Schematron supplies bounded supporting evidence such as
 cardinality, fixed values, bindings, required attributes, and concrete

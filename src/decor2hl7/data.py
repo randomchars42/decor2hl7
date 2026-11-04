@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 from .csv_input import read_csv_table
 from .contracts import InputLocator, NormalizedRecord, normalized_record, locator as checked_locator
-from .domain import accepted_values, logical_values
+from .domain import accepted_values, admitted_logical_values
 from .transforms import OMIT, apply_transform, validate_transform
 
 _MISSING = object()
@@ -282,7 +282,7 @@ def _canonical_code(
     CDA ``nullFlavor`` for an unrecognized code.
     """
     values = accepted_values(field)
-    logical = logical_values(field)
+    logical = admitted_logical_values(field)
     formal = field.get("formal_terminology", {})
     status = (
         str(formal.get("status") or "")
