@@ -1,6 +1,5 @@
 """Resolve the selected workspace files and admit a reviewed runtime bundle."""
 from __future__ import annotations
-import argparse
 import hashlib
 import re
 from pathlib import Path
@@ -10,10 +9,6 @@ from .contracts import (RuntimeBundle, dataset_model, cda_model, input_mapping,
                         code_mapping, target_mapping, site_config)
 from .workspace import (selected_release, selected_transaction, transaction_model_dir,
                         transaction_mapping_dir, transaction_site_dir, release_site_dir, load_json)
-
-def _root(args: argparse.Namespace) -> Path:
-    return Path(args.root).resolve()
-
 
 def _require(path: Path, hint: str = "") -> Path:
     if path.exists():
