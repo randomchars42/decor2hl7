@@ -59,7 +59,7 @@ src/decor2hl7/
 │   ├── artifacts.py        identity and artifact-form contracts
 │   ├── expansion.py        frozen terminology expansions
 │   ├── sources.py          reviewed external source catalog
-│   ├── fetch.py            recursive cache/manifest/closure workflow
+│   ├── fetch.py            cache admission, root acquisition and explicit crawl stages
 │   └── xml.py              XML helpers and narrow repairs
 ├── compile/                model and mapping compilation
 │   ├── artifacts.py        validated compiler inputs and degradation
