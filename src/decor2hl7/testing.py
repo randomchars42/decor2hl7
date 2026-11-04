@@ -7,6 +7,7 @@ production, but writes neither production state nor transport output.
 
 from __future__ import annotations
 
+from .contracts import NormalizedRecord
 from .hashing import json_digest as json_digest
 
 import csv
@@ -900,7 +901,7 @@ def run_fixture(
     errors.extend(validate.check_config(
         model, cda, csv_mapping, cda_mapping, codes_mapping, site
     ))
-    records: list[dict[str, Any]] = []
+    records: list[NormalizedRecord] = []
     summary = {"records": 0, "errors": 0, "warnings": 0}
     if not errors:
         records = ingest(test_dir / "input", model, csv_mapping, codes_mapping, site)

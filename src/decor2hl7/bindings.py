@@ -239,11 +239,11 @@ def construction_supplied_targets(
     for name in mapping.get("target_defaults", {}):
         supplied.add(physical(name))
     supplied.update(site_requirement_targets(cda, mapping))
-    for rule in structure_rules(mapping):
+    for structure in structure_rules(mapping):
         for key in ("target", "cda_target", "discriminator"):
-            if rule.get(key):
-                supplied.add(physical(rule[key]))
-        for branch in rule.get("branches", []):
+            if structure.get(key):
+                supplied.add(physical(structure[key]))
+        for branch in structure.get("branches", []):
             if not isinstance(branch, Mapping):
                 continue
             for key in ("target", "cda_target", "discriminator"):
@@ -252,7 +252,7 @@ def construction_supplied_targets(
             constants = branch.get("constants", {})
             if isinstance(constants, Mapping):
                 supplied.update(physical(name) for name in constants)
-        constants = rule.get("constants", {})
+        constants = structure.get("constants", {})
         if isinstance(constants, Mapping):
             supplied.update(physical(name) for name in constants)
     site_cda = site.get("cda", {}) if isinstance(site, Mapping) else {}

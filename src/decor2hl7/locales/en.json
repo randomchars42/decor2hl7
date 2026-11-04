@@ -351,5 +351,6 @@
   "ui.pending_timestamp_invalid": "invalid prepared_at",
   "ui.pending_checksum_mismatch": "payload checksum mismatch",
   "ui.committed_identity_missing": "committed document identity is missing for {stream_key!r}",
-  "ui.pending_bundle_mismatch": "pending document {path} does not match the selected release and transaction"
+  "ui.pending_bundle_mismatch": "pending document {path} does not match the selected release and transaction",
+  "ui.contract_invalid": "invalid {kind} data shape at {path}"
 }
