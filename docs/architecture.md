@@ -37,6 +37,7 @@ not a second copy of those semantic rules.
 src/decor2hl7/
 ├── cli.py                  command parsing and specification/setup commands
 ├── runtime.py              execution, pending delivery and run orchestration
+├── contracts.py            checked stable data shapes and named runtime bundle
 ├── runtime_config.py       selected runtime files and configuration paths
 ├── bundle.py               shared exact mapping-lock admission
 ├── pending.py              typed, validated pending document metadata
@@ -185,6 +186,21 @@ delivery.
 
 See
 [`topics/input-runtime-and-delivery.md`](topics/input-runtime-and-delivery.md).
+
+## Checked data contracts
+
+`contracts.py` defines the shared serialized shapes for dataset fields/groups,
+CDA nodes/targets, input and target mappings, site configuration and normalized
+occurrences. Runtime loading validates these shapes before bundle admission.
+`RuntimeBundle` names its six products explicitly instead of relying on tuple
+positions. Normalization checks its resulting records at the owning boundary.
+
+These types describe the internal format, not the names or membership of a
+particular specification. New datapoints, template identities and terminology
+members remain data. Additional non-executable owner metadata is retained as
+JSON; executable semantics remain checked by their owning validators. The
+contract readers preserve serialized values and do not add defaults, rename
+keys or migrate formats.
 
 ## Dependency direction
 

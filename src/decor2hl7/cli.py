@@ -864,9 +864,12 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     root = _root(args)
     release = selected_release(root)
-    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(
+    runtime_bundle = _runtime_files(
         root, args.cda_mapping, args.site_config
     )
+    model, cda = runtime_bundle.model, runtime_bundle.cda
+    csv_mapping, codes_mapping = runtime_bundle.csv_mapping, runtime_bundle.codes_mapping
+    cda_mapping, site = runtime_bundle.cda_mapping, runtime_bundle.site
     errors = verify_manifest(release_spec_dir(root, release))
     errors.extend(validate.verify_compiled_cda(cda))
     errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
@@ -901,7 +904,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     _print_source_parity(parity)
     closure = model.get("meta", {}).get("artifact_closure", {})
     unavailable = closure.get("unavailable_artifacts", []) if isinstance(closure, Mapping) else []
-    if unavailable:
+    if isinstance(unavailable, list) and unavailable:
         _out(f"build {_msg('ui.warning')} {len(unavailable)} {_msg('ui.unavailable_dependency_artifacts')}")
     if errors:
         _out((_msg('ui.configuration_errors')))
@@ -1037,9 +1040,12 @@ def cmd_check_input(args: argparse.Namespace) -> int:
 
     root = _root(args)
     source_root = input_dir(root, args.input, required=True)
-    model, cda, csv_mapping, codes_mapping, cda_mapping, site = _runtime_files(
+    runtime_bundle = _runtime_files(
         root, args.cda_mapping, args.site_config
     )
+    model, cda = runtime_bundle.model, runtime_bundle.cda
+    csv_mapping, codes_mapping = runtime_bundle.csv_mapping, runtime_bundle.codes_mapping
+    cda_mapping, site = runtime_bundle.cda_mapping, runtime_bundle.site
     errors = validate.verify_compiled_cda(cda)
     errors.extend(validate.check_config(model, cda, csv_mapping, cda_mapping, codes_mapping, site))
     if errors:

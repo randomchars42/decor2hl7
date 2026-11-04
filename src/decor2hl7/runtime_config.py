@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 from .bundle import admit_mapping
+from .contracts import (RuntimeBundle, dataset_model, cda_model, input_mapping,
+                        code_mapping, target_mapping, site_config)
 from .workspace import (selected_release, selected_transaction, transaction_model_dir,
                         transaction_mapping_dir, transaction_site_dir, release_site_dir, load_json)
 
@@ -79,9 +81,7 @@ def _runtime_files(
     root: Path,
     cda_mapping_override: str | Path | None = None,
     site_config_override: str | Path | None = None,
-) -> tuple[
-    dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]
-]:
+) -> RuntimeBundle:
     release = selected_release(root)
     transaction = selected_transaction(root)
     model_dir = transaction_model_dir(root, release, transaction)
@@ -91,13 +91,13 @@ def _runtime_files(
     mapping_path = _cda_mapping_path(
         root, release, transaction, cda_mapping_override
     )
-    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build`"))
-    cda = load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`"))
-    csv_mapping = load_json(_require(csv_path, "run `decor2hl7 init-site-config`"))
-    codes_mapping = load_json(_require(codes_path, "run `decor2hl7 init-site-config`"))
-    cda_mapping = load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`"))
-    site = load_json(_require(site_path, "run `decor2hl7 init-site-config`"))
+    model = dataset_model(load_json(_require(model_dir / "model.json", "run `decor2hl7 build`")))
+    cda = cda_model(load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`")))
+    csv_mapping = input_mapping(load_json(_require(csv_path, "run `decor2hl7 init-site-config`")))
+    codes_mapping = code_mapping(load_json(_require(codes_path, "run `decor2hl7 init-site-config`")))
+    cda_mapping = target_mapping(load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`")))
+    site = site_config(load_json(_require(site_path, "run `decor2hl7 init-site-config`")))
     admit_mapping(mapping_path, release, transaction, model, cda)
-    return model, cda, csv_mapping, codes_mapping, cda_mapping, site
+    return RuntimeBundle(model, cda, csv_mapping, codes_mapping, cda_mapping, site)
 
 

@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from .contracts import InputLocator, NormalizedRecord, normalized_record, locator as checked_locator
 from .domain import accepted_values, logical_values
 from .transforms import OMIT, apply_transform, validate_transform
 
@@ -404,7 +405,7 @@ def normalize_value(
     return text
 
 
-def mapping_locator(value: Any) -> dict[str, Any] | None:
+def mapping_locator(value: object) -> InputLocator | None:
     """Normalize a CSV mapping entry.
 
     ``SOURCE:COLUMN`` is the concise current syntax. Object locators add a
@@ -428,7 +429,7 @@ def mapping_locator(value: Any) -> dict[str, Any] | None:
             raise ValueError(_msg('ui.locator_parse_type'))
         if "transform" in value and not isinstance(value["transform"], Mapping):
             raise ValueError(_msg('ui.locator_transform_type'))
-        return dict(value)
+        return checked_locator(dict(value))
     raise ValueError(_msg('ui.locator_format'))
 
 
@@ -735,7 +736,7 @@ def ingest(
     csv_mapping: Mapping[str, Any],
     codes_mapping: Mapping[str, Any],
     site: Mapping[str, Any],
-) -> list[dict[str, Any]]:
+) -> list[NormalizedRecord]:
     """Read configured CSV sources into normalized records.
 
     Repeating dataset groups are represented as occurrence rows instead of
@@ -850,7 +851,7 @@ def ingest(
                     "must configure an occurrence key"
                 )
 
-    records: list[dict[str, Any]] = []
+    records: list[NormalizedRecord] = []
     for key in keys:
         values: dict[str, Any] = {}
         instances: dict[str, list[dict[str, Any]]] = {}
@@ -959,5 +960,5 @@ def ingest(
             str(site.get("null_flavor", {}).get("missing_required") or "NI"),
         )
 
-        records.append({"key": key, "values": values, "instances": instances, "problems": problems})
+        records.append(normalized_record({"key": key, "values": values, "instances": instances, "problems": problems}))
     return records

@@ -10,6 +10,7 @@ CDA constraints (for example ``negationInd`` plus ``nullFlavor``).
 """
 from __future__ import annotations
 
+from .contracts import MappingRule, mapping_rule
 from .i18n import message as _msg
 
 import calendar
@@ -33,7 +34,7 @@ _REVIEWED_CODED_MAP_AUTHORIZATION = _ReviewedCodedMapAuthorization()
 _REVIEWED_CODED_MAP_MARKER = "__decor2hl7_reviewed_coded_map__"
 
 
-def mapping_rules(value: Any) -> list[dict[str, Any]]:
+def mapping_rules(value: object) -> list[MappingRule]:
     """Normalize a mapping value to rule dictionaries.
 
     Direct strings are the concise form; objects carry transforms and structure.
@@ -44,7 +45,7 @@ def mapping_rules(value: Any) -> list[dict[str, Any]]:
     if not items:
         raise ValueError(_msg('ui.mapping_empty_list'))
     allowed = {"target", "cda_target", "transform", "mode", "structure", "reason", "active_if", "branch"}
-    out: list[dict[str, Any]] = []
+    out: list[MappingRule] = []
     for item in items:
         if isinstance(item, str) and item.strip():
             out.append({"target": item})
@@ -57,7 +58,7 @@ def mapping_rules(value: Any) -> list[dict[str, Any]]:
         for key in allowed - {"transform"}:
             if key in item and not isinstance(item[key], str):
                 raise ValueError(_msg('ui.mapping_rule_type', key=key))
-        out.append(dict(item))
+        out.append(mapping_rule(dict(item)))
     return out
 
 
