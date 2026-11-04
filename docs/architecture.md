@@ -91,7 +91,8 @@ src/decor2hl7/
 ├── assertions.py           ART-DECOR assertion evaluation
 ├── validate.py             model/config/record validation
 ├── conformance.py          package and CDA validation gates
-├── testing.py              synthetic and authored scenarios
+├── scenario.py             authored source admission and preparation
+├── testing.py              fixture generation and end-to-end mapping tests
 ├── state.py                SQLite lineage, delivery history, runs, and locking
 └── transport.py            bounded delivery adapters
 ```
@@ -188,6 +189,10 @@ See
 [`topics/input-runtime-and-delivery.md`](topics/input-runtime-and-delivery.md).
 
 ## Checked data contracts
+
+CLI argument objects stop at `cli.py`; runtime entry points take explicit paths,
+dates and execution options. One admitted runtime bundle is reused by rendering,
+recovery and delivery within the run.
 
 `contracts.py` defines the shared serialized shapes for dataset fields/groups,
 CDA nodes/targets, input and target mappings, site configuration and normalized

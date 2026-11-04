@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .runtime_config import _root, _require, _explicit_path, _cda_mapping_path, _site_paths, _runtime_files
-from .runtime import cmd_transform, cmd_send, cmd_run, cmd_extract_source, cmd_run_source, cmd_status
+from .runtime_config import _require, _explicit_path, _cda_mapping_path, _site_paths, _runtime_files
+from . import runtime
 from .ui import say as _say, out as _out
 from .i18n import OUTPUT_LANGUAGE as _OUTPUT_LANGUAGE
 from . import __version__
@@ -57,6 +58,60 @@ class _LocalizedArgumentParser(argparse.ArgumentParser):
         self._positionals.title = translator.text("ui.positional_arguments").removesuffix(":")
         self._optionals.title = translator.text("ui.options").removesuffix(":")
         self.add_argument("-h", "--help", action="help", help=translator.text("cli.help"))
+
+
+def _root(args: argparse.Namespace) -> Path:
+    return Path(args.root).resolve()
+
+
+def _parse_since(value: str | None) -> dt.date | None:
+    if value is None:
+        return None
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError("--since must use YYYY-MM-DD") from error
+
+
+def cmd_transform(args: argparse.Namespace) -> int:
+    return runtime.transform_documents(
+        _root(args), input_override=args.input,
+        cda_mapping_override=args.cda_mapping, site_config_override=args.site_config,
+    )
+
+
+def cmd_send(args: argparse.Namespace) -> int:
+    return runtime.send_documents(
+        _root(args), files=args.files, site_config_override=args.site_config
+    )
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    return runtime.run_documents(
+        _root(args), input_override=args.input,
+        cda_mapping_override=args.cda_mapping, site_config_override=args.site_config,
+        send=args.send,
+    )
+
+
+def cmd_extract_source(args: argparse.Namespace) -> int:
+    return runtime.extract_source_snapshot(
+        _root(args), output_path=args.output, since=_parse_since(args.since),
+        site_config_override=args.site_config, output_language=args.output_language,
+    )
+
+
+def cmd_run_source(args: argparse.Namespace) -> int:
+    return runtime.run_source(
+        _root(args), since=_parse_since(args.since),
+        snapshot_output=args.snapshot_output, cda_mapping_override=args.cda_mapping,
+        site_config_override=args.site_config, limit=args.limit,
+        dry_run=args.dry_run, send=args.send, output_language=args.output_language,
+    )
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    return runtime.runtime_status(_root(args))
 
 
 def _network(root: Path, ipv6_override: bool = False) -> tuple[str, str, bool, str]:
