@@ -1,6 +1,7 @@
 .PHONY: baseline check check-unit check-reference mypy-report testrun
 
 UNIT_TEST_MODULES := $(patsubst %.py,%,$(subst /,.,$(filter-out tests/test_closure.py,$(wildcard tests/test_*.py))))
+REFERENCE_WORKSPACE ?= ../test-workplace
 
 check: check-unit check-reference
 
@@ -10,7 +11,7 @@ check-unit:
 	python3 -m unittest $(UNIT_TEST_MODULES)
 
 check-reference:
-	python3 -m unittest tests.test_closure
+	DECOR2HL7_REFERENCE_WORKSPACE="$(REFERENCE_WORKSPACE)" python3 -m unittest tests.test_closure
 	$(MAKE) testrun
 
 baseline:
@@ -37,7 +38,7 @@ mypy-report:
 	@echo "Wrote mypy-output.txt"
 
 testrun:
-	python3 -m decor2hl7 --root ../test-workplace check-cda-mapping && \
-	python3 -m decor2hl7 --root ../test-workplace setup-test --force \
-		--scenario tests/fixtures/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases && \
-	python3 -m decor2hl7 --root ../test-workplace test-cda-mapping
+	python3 -m decor2hl7 --root "$(REFERENCE_WORKSPACE)" check-cda-mapping && \
+	python3 -m decor2hl7 --root "$(REFERENCE_WORKSPACE)" setup-test --force \
+		--scenario valid-reference-cases && \
+	python3 -m decor2hl7 --root "$(REFERENCE_WORKSPACE)" test-cda-mapping

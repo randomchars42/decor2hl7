@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import hashlib
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -53,7 +54,9 @@ class ReferenceClosureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         project_root = Path(__file__).resolve().parents[2]
-        cls.workspace = project_root / "test-workplace"
+        cls.workspace = Path(os.environ.get(
+            "DECOR2HL7_REFERENCE_WORKSPACE", str(project_root / "test-workplace"),
+        )).resolve()
         cls.model_dir = (
             cls.workspace / "model" / REFERENCE_RELEASE / REFERENCE_TRANSACTION
         )
@@ -86,33 +89,20 @@ class ReferenceClosureTests(unittest.TestCase):
     def test_native_sqlite_runs_reference_cases_and_replacement_lineage(self) -> None:
         from decor2hl7.cli import main
         from decor2hl7 import state
-        from decor2hl7.testing import setup_fixture
+        from decor2hl7.integration_testing import setup_integration_test
         from decor2hl7.workspace import load_json, release_site_dir, transaction_out_dir
-        from scripts.create_sqlite_test_source import create_source
 
-        selection = self._load(self.workspace / "decor2hl7.json")
-        release, transaction = selection["release"], selection["transaction"]
-        mapping = self._load(
-            self.workspace / "mapping" / REFERENCE_RELEASE / REFERENCE_TRANSACTION / "cda-mapping.json"
-        )
-        scenario = Path(__file__).parent / "fixtures/scenarios" / REFERENCE_RELEASE / REFERENCE_TRANSACTION / "valid-reference-cases"
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            shutil.copyfile(self.workspace / "decor2hl7.json", root / "decor2hl7.json")
-            for name in ("spec", "model", "mapping"):
-                (root / name).symlink_to(self.workspace / name, target_is_directory=True)
-            fixture = root / "fixture"
-            setup_fixture(
-                fixture, release, transaction, self._load(self.model_dir / "model.json"),
-                self._load(self.model_dir / "cda.json"), mapping, scenario_dir=scenario,
-            )
+            output_dir = Path(tmp) / "integration"
+            evidence = setup_integration_test(self.workspace, output_dir)
+            # An installed setup must remain runnable after relocation, with
+            # no symlinks or dependence on the auxiliary test workspaces.
+            relocated = Path(tmp) / "relocated"
+            output_dir.rename(relocated)
+            self.assertFalse(any(path.is_symlink() for path in relocated.rglob("*")))
+            root = relocated / "workspace"
+            release, transaction = evidence["release"], evidence["transaction"]
             bundle = root / "site" / REFERENCE_RELEASE / REFERENCE_TRANSACTION
-            evidence = create_source(fixture, bundle, written_at="2026-06-01T12:00:00Z")
-            # Default configuration stores site.json and the database one level
-            # above transaction SQL. Exercise that path rather than the cwd.
-            site_dir = release_site_dir(root, release)
-            (bundle / "site.json").rename(site_dir / "site.json")
-            (bundle / "source.sqlite").rename(site_dir / "source.sqlite")
             output = StringIO()
 
             def run(*arguments: str) -> None:
@@ -189,8 +179,8 @@ class ReferenceClosureTests(unittest.TestCase):
                     self.assertEqual(cells.count(expected), 1, cells)
             run("run-source", "--since", "2026-01-01", "--send")
             self.assertEqual(state.load_state(root / "state")["documents"], delivered)
-            self.assertEqual(len(list((bundle / "spool").rglob("*.xml"))), len(expected_cases))
-            with sqlite3.connect(site_dir / "source.sqlite") as connection:
+            self.assertEqual(len(list((root / "spool").rglob("*.xml"))), len(expected_cases))
+            with sqlite3.connect(relocated / "input/source.sqlite") as connection:
                 connection.execute(
                     'UPDATE cases SET "notfallanamnese.notfallanamnese_des_patienten" = ? WHERE case_id = ?',
                     ("Synthetic corrected history.", expected_cases[0]),

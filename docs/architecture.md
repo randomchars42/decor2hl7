@@ -96,7 +96,10 @@ src/decor2hl7/
 ├── validate.py             model/config/record validation
 ├── conformance.py          package and CDA validation gates
 ├── scenario.py             authored source admission and preparation
+├── scenarios/              packaged, exactly versioned authored test definitions
 ├── testing.py              fixture generation and end-to-end mapping tests
+├── sqlite_fixture.py       synthetic SQLite source and extraction-query builder
+├── integration_testing.py  independent integration workspace assembly
 ├── state.py                SQLite lineage, delivery history, runs, and locking
 └── transport.py            bounded delivery adapters
 ```
@@ -115,6 +118,7 @@ Artifact-producing commands own their output paths:
 | `propose-input` | site-local CSV/code proposals |
 | `init-site-config` | reviewed site bundle |
 | `setup-test` | isolated generated or authored fixture |
+| `setup-integration-test` | independent reviewed workspace and synthetic SQLite source |
 
 The detailed acquisition-to-mapping sequence is in
 [`specification-to-mapping-pipeline.md`](specification-to-mapping-pipeline.md).

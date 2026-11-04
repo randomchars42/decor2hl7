@@ -41,7 +41,7 @@ cp /data/decor2hl7-reference/decor2hl7.json .
 cp -a /data/decor2hl7-reference/config /data/decor2hl7-reference/spec .
 cp -a /data/decor2hl7-reference/model /data/decor2hl7-reference/mapping .
 mkdir -p test/scenarios
-cp -a /path/to/decor2hl7/tests/fixtures/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases \
+cp -a /path/to/decor2hl7/src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases \
   test/scenarios/
 decor2hl7 check-cda-mapping
 ```
@@ -137,7 +137,7 @@ For workspace isolation and instructions for authoring your own cases, follow
 the [specification and mapping test setup](testing.md#1-test-the-specification-and-mapping).
 It explains `scenario.json`, source CSVs, coverage, and expected fields/templates.
 
-Use the [valid reference cases](../../tests/fixtures/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases/README.md)
+Use the [valid reference cases](../../src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases/README.md)
 copied into `test/scenarios/` during setup. The command prepares an isolated
 fixture containing `input/` CSVs, a
 `config/` site bundle, and `expected.json` below

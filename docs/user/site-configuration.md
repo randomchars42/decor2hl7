@@ -288,6 +288,11 @@ occurrence, or source behavior, consult the
 
 ## SQLite input and a local integration test
 
+Use [setup-integration-test](integration-testing.md) to create a complete fictional
+SQLite source and independent runtime workspace from a reviewed setup. This
+command is available in the installed application and uses an exact matching
+packaged scenario.
+
 The testing guide provides a [runnable SQLite baseline](testing.md#build-a-runnable-sqlite-baseline)
 from complete authored records. It shows how to create the database, SQL files,
 and test-site bundle, then check extraction and input. Continue with its
