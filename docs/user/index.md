@@ -47,8 +47,9 @@ For installation and workspace creation, see the [project README](../../README.m
 ## Set up testing
 
 For a ready-to-run synthetic SQLite rehearsal, use the
-[integration setup command](integration-testing.md). It creates a new environment
-from your reviewed specification and its matching packaged cases.
+[integration setup command](testing.md#build-a-runnable-sqlite-baseline). It
+creates a new environment from your reviewed specification and its matching
+packaged cases.
 
 Use the [testing guide](testing.md) to prepare an isolated workspace, then choose
 the level you are working on:

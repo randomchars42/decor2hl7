@@ -9,7 +9,8 @@ Runtime consumes the reviewed setup and external input. It writes documents
 and delivery history to this workspace:
 
 ```text
-/data/decor2hl7-test-input/                 complete fictional source snapshot
+/data/decor2hl7-test-input/                 source snapshot, outside the workspace
+../input/source.sqlite                    synthetic source for the direct-start route
 WORKSPACE/
 ├── decor2hl7.json                          selected release and transaction
 ├── spec/2026.1.2/                          cached validation packages
@@ -29,38 +30,34 @@ while output and history still belong to the selected workspace.
 
 ## Populate the practice workspace
 
-If you followed guide 2, use its `/data/decor2hl7-test` workspace and complete
-`/data/decor2hl7-test-input` snapshot, then continue at step 1. Keep its reviewed
-site configuration, including the renamed columns and local spool.
+If you followed guide 2, run `cd /data/decor2hl7-site-test/workspace` and use its
+complete `/data/decor2hl7-test-input` snapshot, then continue at step 1. Keep its
+reviewed site configuration, including the renamed columns and local spool.
 
-To start directly, first create the practice workspace from
-[guide 1](specification-and-mapping.md#set-up-the-practice-workspace). Then
-populate a fresh site and input directory from the authored cases:
+To start directly, replace `/data/decor2hl7-reference` with your prepared
+specification workspace and create a new runtime environment:
 
 ```bash
-cd /data/decor2hl7-test
-decor2hl7 setup-test --scenario test/scenarios/valid-reference-cases \
-  --test-dir test/runtime-fixture
-cp -a test/runtime-fixture/input /data/decor2hl7-test-input
-mkdir -p site/2026.1.2/notaufnahmeregister--60
-cp test/runtime-fixture/config/site.json site/2026.1.2/
-cp test/runtime-fixture/config/csv-mapping.json site/2026.1.2/notaufnahmeregister--60/
-cp test/runtime-fixture/config/codes-mapping.json site/2026.1.2/notaufnahmeregister--60/
+decor2hl7 --root /data/decor2hl7-reference setup-integration-test \
+  --output /tmp/decor2hl7-integration
+cd /tmp/decor2hl7-integration/workspace
+decor2hl7 check
+decor2hl7 extract-source --output /data/decor2hl7-test-input --since 2026-06-01
 ```
 
-The copied bundle supplies fictional identifiers, local aliases, and required
-CDA values. In `site/2026.1.2/site.json`, replace `transport` with the local
-practice destination:
+Use new output and snapshot directories, separate from the source workspace.
+Setup copies the reviewed models and mapping, generates scenario-specific site
+values and a SQLite database at `../input/source.sqlite`, and starts with fresh
+history. It configures local `spool/` delivery. Open `../README.md` for commands,
+`../fixture/expected.json` for expected cases, and `../integration-test.json` for
+initial identities and checksums. Setup itself sends nothing.
 
-```json
-{
-  "transport": { "adapter": "spool", "directory": "/data/decor2hl7-test/spool" }
-}
-```
-
-Use unused input and site paths for this direct-start route. Examples below use
-`2026.1.2 / notaufnahmeregister--60`; run commands from the practice workspace
-root. For correction, retry, and rejection exercises, follow the
+The extraction above creates the snapshot used below. Examples use
+`2026.1.2 / notaufnahmeregister--60`; run commands from the runtime workspace
+root. Matching packaged cases also exist for `2026.1.3`; use that release key in
+output paths when selected. For custom cases and timestamp options, see the
+[SQLite setup](testing.md#build-a-runnable-sqlite-baseline). For correction,
+retry, rejection, and receiver exercises, follow the
 [runtime testing guide](testing.md#3-test-runtime-and-delivery).
 
 ## 1. Check the files for this run
@@ -123,10 +120,10 @@ Independent CDA conformance is a separate gate from mapping and input validity.
 Send the pending documents after inspection and validation. To deliver only
 specific reviewed documents, pass their XML filenames to `send`.
 
-With the site guide's spool configuration, a successful handover creates:
+With the practice spool configuration, a successful handover creates:
 
 ```text
-/data/decor2hl7-test/spool/
+WORKSPACE/spool/
 └── YYYY-MM/
     └── <document-stem>/
         ├── <document-stem>.xml
@@ -166,12 +163,14 @@ For a configured ODBC or SQLite source, first preview extraction and
 classification, then enable delivery:
 
 ```bash
-decor2hl7 run-source --dry-run
-decor2hl7 run-source --send
+decor2hl7 run-source --since 2026-06-01 --dry-run
+decor2hl7 run-source --since 2026-06-01 --send
 decor2hl7 status
 ```
 
-Each invocation creates a replayable snapshot under `state/snapshots/`.
+The explicit date includes the fixed synthetic records. For a real source, use
+the site's approved rescan window. Each invocation creates a replayable snapshot
+under `state/snapshots/`.
 The dry run creates source evidence but no XML or document-state commit.
 `--snapshot-output PATH` selects a new snapshot directory, and
 `--since YYYY-MM-DD` changes the rescan window. `--limit 20` is a development

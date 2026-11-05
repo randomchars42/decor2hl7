@@ -14,9 +14,7 @@ WORKSPACE/
 ├── spec/2026.1.2/                          fetched specification and closure
 ├── model/2026.1.2/notaufnahmeregister--60/   generated models, proposal, diagnostics
 ├── mapping/2026.1.2/notaufnahmeregister--60/ editable mapping, lock, and review guides
-└── test/
-    ├── scenarios/                         authored fictional records
-    └── 2026.1.2/notaufnahmeregister--60/    generated mapping-test fixture and output
+└── test/2026.1.2/notaufnahmeregister--60/    fictional input, test config, results
 ```
 
 Edit reviewed decisions in `mapping/`. The generated models and reports explain
@@ -29,9 +27,10 @@ Install decor2hl7 as described in the [README](../../README.md#install). To
 follow this guide with working examples, use a prepared reference workspace for
 `2026.1.2 / notaufnahmeregister--60`, including its reviewed model additions and
 mapping. In the commands below, replace `/data/decor2hl7-reference` with its
-location, and `/path/to/decor2hl7` with the source checkout.
+location. The installed application includes matching fictional cases.
 
-Create a new practice directory and copy the matching setup and authored cases:
+Create a new practice directory, copy the matching setup, and populate its test
+fixture:
 
 ```bash
 mkdir /data/decor2hl7-test
@@ -40,16 +39,15 @@ decor2hl7 init
 cp /data/decor2hl7-reference/decor2hl7.json .
 cp -a /data/decor2hl7-reference/config /data/decor2hl7-reference/spec .
 cp -a /data/decor2hl7-reference/model /data/decor2hl7-reference/mapping .
-mkdir -p test/scenarios
-cp -a /path/to/decor2hl7/src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases \
-  test/scenarios/
 decor2hl7 check-cda-mapping
+decor2hl7 setup-test --scenario valid-reference-cases
 ```
 
 Expect the mapping check to succeed. The copied selection, models, reviewed
-mapping, and lock must agree. Keep this practice workspace for guides 2 and 3;
-the next guide populates its site configuration and source snapshot. Run the
-remaining commands here.
+mapping, and lock must agree. Expect fictional CSVs, `config/`, and
+`expected.json` under `test/2026.1.2/notaufnahmeregister--60/`. Run the remaining
+commands here. Guide 2 uses this reviewed setup to create a separate site
+practice environment with its own input database.
 
 ## 1. Inspect the prepared specification
 
@@ -137,11 +135,10 @@ For workspace isolation and instructions for authoring your own cases, follow
 the [specification and mapping test setup](testing.md#1-test-the-specification-and-mapping).
 It explains `scenario.json`, source CSVs, coverage, and expected fields/templates.
 
-Use the [valid reference cases](../../src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases/README.md)
-copied into `test/scenarios/` during setup. The command prepares an isolated
-fixture containing `input/` CSVs, a
-`config/` site bundle, and `expected.json` below
-`test/2026.1.2/notaufnahmeregister--60/`. Running it writes `out/results.md`,
+Use the packaged [valid reference cases](../../src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases/README.md)
+prepared during setup. The fixture contains `input/` CSVs, a `config/` site
+bundle, and `expected.json` below
+`test/2026.1.2/notaufnahmeregister--60/`. The test writes `out/results.md`,
 `out/results.json`, and the example XML documents.
 
 Open `results.md` first: expect `PASS`. Resolve errors for unexercised mapped
@@ -151,18 +148,20 @@ XML and compare values and repeated occurrences with the fixture CSVs.
 Mapping-test success and complete CDA conformance are separate results.
 
 ```bash
-decor2hl7 setup-test \
-  --scenario test/scenarios/valid-reference-cases
 decor2hl7 test-cda-mapping
 decor2hl7 validate-cda test/2026.1.2/notaufnahmeregister--60/out/*.xml \
   --report test/2026.1.2/notaufnahmeregister--60/out/conformance
 ```
 
-For another specification, use a scenario matching its exact identity.
+The packaged name selects cases for the exact release and transaction;
+`2026.1.2` and `2026.1.3` have separate reference scenarios. For another
+specification, supply an authored directory with `setup-test --scenario PATH`.
 Without `--scenario`, generated smoke-test input may need adjustment for
 mutually exclusive clinical branches. Use `--force` when deliberately replacing
-an existing fixture after mapping changes. Inspect `out/conformance.md` for
-validation stages and `out/conformance.json` for the complete diagnostics.
+an existing fixture after mapping changes:
+`decor2hl7 setup-test --scenario valid-reference-cases --force`.
+Inspect `out/conformance.md` for validation stages and `out/conformance.json`
+for the complete diagnostics.
 
 ## 4. Hand over the reviewed setup
 

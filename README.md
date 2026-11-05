@@ -133,8 +133,8 @@ decor2hl7 propose-input --input /data/clinical-export
 decor2hl7 init-site-config
 decor2hl7 check-input --input /data/clinical-export
 
-# Isolated mapping verification
-decor2hl7 setup-test
+# Isolated mapping verification with matching packaged cases
+decor2hl7 setup-test --scenario valid-reference-cases
 decor2hl7 test-cda-mapping
 
 # Independent SQLite integration rehearsal from this reviewed setup
@@ -156,11 +156,10 @@ validation and delivery steps are understood for the deployment.
 For a configured ODBC or SQLite source, `decor2hl7 run-source --send` performs
 bounded extraction into a replayable atomic snapshot and then uses the identical
 ingestion, transformation, delivery, and SQLite lineage pipeline. See the
-[site configuration guide](docs/user/site-configuration.md#sqlite-input-and-a-local-integration-test)
-for native SQLite input and a reproducible synthetic integration test.
-The [integration test guide](docs/user/integration-testing.md) explains the
-packaged scenarios, independent setup command, local spool and optional receiver
-configuration.
+[site configuration guide](docs/user/site-configuration.md#3-add-database-extraction-when-needed)
+for native SQLite input. The [testing guide](docs/user/testing.md#build-a-runnable-sqlite-baseline)
+explains the packaged scenarios, independent setup command, local spool and
+optional receiver rehearsal.
 
 ## Project maintenance
 

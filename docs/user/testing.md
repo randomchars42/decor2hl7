@@ -8,14 +8,14 @@ Use the same reviewed specification across three kinds of tests:
 | [Site input](#2-test-the-site-input) | Your site configuration and representative source rows | Joins, parsing, aliases, repeated rows, and extraction |
 | [Runtime and delivery](#3-test-runtime-and-delivery) | An isolated workspace and local spool | Pending output, delivery, replay, corrections, and failures |
 
-Examples use `2026.1.2 / notaufnahmeregister--60`. Replace the keys and source
-checkout path for your selected specification. Python and decor2hl7 must be
-installed; independent CDA validation also needs Java and the fetched validation
-packages.
+Examples use `2026.1.2 / notaufnahmeregister--60`. Replace the keys for your
+selected specification. Python and decor2hl7 must be installed; independent CDA
+validation also needs Java and the fetched validation packages.
 
-For a complete fictional SQLite rehearsal, the [integration setup command](integration-testing.md)
-creates an independent workspace and input database in one step. Use the manual
-steps below when adapting authored cases or testing your own site configuration.
+For a complete fictional SQLite rehearsal, start with the
+[integration setup command](#build-a-runnable-sqlite-baseline). It creates an
+independent workspace and input database in one step. Use levels 1 and 2 to
+adapt authored cases or test your own site configuration.
 
 ## Prepare a test workspace
 
@@ -47,16 +47,22 @@ Begin in the [test workspace](#prepare-a-test-workspace) prepared above.
 
 ### Prepare authored cases
 
-Start from the complete [reference scenario](../../src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases/README.md)
-for this release. Copy it to a new directory before adapting cases:
+To use the complete [reference scenario](../../src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases/README.md)
+without changing its cases, prepare it by its packaged name:
 
 ```bash
-cp -a /path/to/decor2hl7/src/decor2hl7/scenarios/2026.1.2/notaufnahmeregister--60/valid-reference-cases \
-  /data/decor2hl7-test-cases
+decor2hl7 setup-test --scenario valid-reference-cases --test-dir test/mapping
 ```
 
-The copied directory contains `scenario.json` and `input/` CSVs. Keep these
-parts aligned when adding or changing cases:
+The installed application selects the exact release and transaction. Packaged
+reference cases exist for `2026.1.2` and `2026.1.3`, both with transaction
+`notaufnahmeregister--60`. An unavailable identity fails rather than using
+another version's cases.
+
+To change cases, copy the scenario directory from the source checkout or the
+`scenario/` snapshot in a [generated rehearsal](#build-a-runnable-sqlite-baseline)
+to `/data/decor2hl7-test-cases`. It contains `scenario.json` and `input/` CSVs.
+Keep these parts aligned when adding or changing cases:
 
 | In `scenario.json` | What to set |
 |---|---|
@@ -103,12 +109,18 @@ test/mapping/
 └── out/                     results.md, results.json, and example XML
 ```
 
-Edit the authored `scenario.json` and CSVs, then rerun setup to refresh the
-fixture. Use `--force` when intentionally replacing an existing fixture.
+For custom cases, edit the authored `scenario.json` and CSVs, then refresh the
+fixture before testing:
+
+```bash
+decor2hl7 setup-test --scenario /data/decor2hl7-test-cases --test-dir test/mapping --force
+```
+
+`--force` deliberately replaces an existing fixture after source or mapping
+changes. For either packaged or custom cases, run:
 
 ```bash
 decor2hl7 check-cda-mapping
-decor2hl7 setup-test --scenario /data/decor2hl7-test-cases --test-dir test/mapping
 decor2hl7 test-cda-mapping --test-dir test/mapping
 decor2hl7 validate-cda test/mapping/out/*.xml --report test/mapping/out/conformance
 ```
@@ -186,30 +198,69 @@ diagnostic. Keep the valid input for the runtime rehearsal.
 
 ### Build a runnable SQLite baseline
 
-To try the complete pipeline before adapting your site, turn the authored
-fixture from level 1 into a SQLite bundle. From the test workspace:
+To try extraction and runtime with fictional data, start from a reviewed
+specification workspace. Replace `/data/decor2hl7-reference` with its location;
+guide 1's `/data/decor2hl7-test` also works. The source needs its selected fetched
+specification, compiled models, reviewed CDA mapping, and matching lock.
 
 ```bash
-python3 /path/to/decor2hl7/scripts/create_sqlite_test_source.py \
-  --fixture test/mapping --output test/sqlite-source \
-  --written-at 2026-06-01T12:00:00Z
-decor2hl7 check --site-config test/sqlite-source
-decor2hl7 extract-source --site-config test/sqlite-source \
-  --output test/snapshots/baseline-1 --since 2026-01-01
-decor2hl7 check-input --site-config test/sqlite-source --input test/snapshots/baseline-1
+decor2hl7 --root /data/decor2hl7-reference setup-integration-test \
+  --output /tmp/decor2hl7-integration
+cd /tmp/decor2hl7-integration/workspace
+decor2hl7 check
+decor2hl7 extract-source --output ../input/baseline-1 --since 2026-06-01
+decor2hl7 check-input --input ../input/baseline-1
 ```
 
-Use an unused output path. `test/sqlite-source/` contains `source.sqlite`,
-`site.json`, both mapping JSONs, `sql/`, and `fixture.json`. Its transport writes
-to its own `spool/`; the freshness guard is disabled to permit identical replay.
-This baseline exercises the generated fixture's layout. Your own export,
-queries, ODBC driver, and local mappings need the site-specific checks above.
+Use a new output directory outside both the source workspace and any custom
+scenario directory. If you used this path in guide 3, choose another here for
+fresh delivery history. Setup copies the exact specification evidence, selected
+models and validator, reviewed mapping and lock, and required `config/` files.
+The copies are independent, including files reached through source symlinks,
+and can be large. Mapping-review reports remain in the source workspace.
+
+The result separates source data from runtime:
+
+```text
+/tmp/decor2hl7-integration/
+├── README.md                  commands for this setup
+├── integration-test.json      identities, expected cases and initial checksums
+├── scenario/                  preserved authored scenario.json and input CSVs
+├── fixture/                   mapping-test input, config, and expected.json
+├── input/
+│   ├── source.sqlite          synthetic source database
+│   └── baseline-1/            snapshot created by extract-source above
+└── workspace/
+    ├── decor2hl7.json
+    ├── spec/                  exact release evidence and validation tools
+    ├── model/                 selected compiled models and validator
+    ├── mapping/               reviewed CDA mapping and lock
+    └── site/                  scenario-specific values, mappings and SQL
+```
+
+Setup uses `valid-reference-cases` for the exact selected identity. To use custom
+cases, add `--scenario /data/decor2hl7-test-cases`; the release key, transaction
+key, OID, and effective date must match. `--written-at 2026-06-01T12:00:00Z`
+sets the synthetic case-write timestamp; this is the default and needs a
+timezone. Use its date as `--since` when running the rehearsal.
+
+The site bundle comes from the authored scenario, with local `spool/` transport.
+Source site settings, output, and runtime history are left in the source
+workspace. Setup performs no fetch, rebuild, extraction, transformation, or
+delivery. The commands above then verify extraction: compare the snapshot
+manifest's row counts and maximum write timestamp with `../integration-test.json`.
+The long extraction window and disabled freshness guard permit fixed-input
+replay. Your actual export, queries, ODBC driver, and local mappings need the
+site-specific checks above.
 
 ## 3. Test runtime and delivery
 
 Use the [SQLite baseline](#build-a-runnable-sqlite-baseline) in the separate
-[test workspace](#prepare-a-test-workspace), or substitute `test/site` for your
-database rehearsal. For CSV input, prepare with
+`/tmp/decor2hl7-integration/workspace`, with its own output and history. Run the
+commands below from that directory. To test your own site, use the
+[copied test workspace](#prepare-a-test-workspace) instead and add
+`--site-config test/site` to each command that consumes site configuration.
+For CSV input, prepare with
 `transform --site-config test/site --input /data/site-test-input` and replay with
 `run` using those options plus `--send`.
 
@@ -218,21 +269,21 @@ database rehearsal. For CSV input, prepare with
 Start with a fresh test workspace history and run the following sequence:
 
 ```bash
-decor2hl7 run-source --site-config test/sqlite-source --since 2026-01-01 --dry-run
-decor2hl7 run-source --site-config test/sqlite-source --since 2026-01-01
+decor2hl7 run-source --since 2026-06-01 --dry-run
+decor2hl7 run-source --since 2026-06-01
 decor2hl7 validate-cda out/2026.1.2/notaufnahmeregister--60/*.xml \
   --report test/runtime/conformance
-decor2hl7 send --site-config test/sqlite-source
+decor2hl7 send
 decor2hl7 status
-decor2hl7 run-source --site-config test/sqlite-source --since 2026-01-01 --send
+decor2hl7 run-source --since 2026-06-01 --send
 ```
 
 | Step | Expected result and where to look |
 |---|---|
 | Dry run | A snapshot and run-ledger entry appear under `state/`; no XML or document version is committed. |
-| Prepare | XML/JSON pairs appear under `out/2026.1.2/notaufnahmeregister--60/` and remain pending. Inspect sidecar warnings and compare XML with the source. |
+| Prepare | XML/JSON pairs appear under `out/2026.1.2/notaufnahmeregister--60/` and remain pending. Inspect sidecar warnings and `source_snapshot`; compare XML with `../fixture/input/` and expected cases in `../fixture/expected.json`. |
 | Validate | `test/runtime/conformance.md` and `.json` describe the independent CDA checks. Resolve failures before delivery. |
-| Send | Pairs appear under `test/sqlite-source/spool/YYYY-MM/<document-stem>/`; `status` shows no pending documents for the batch. |
+| Send | Pairs appear under `spool/YYYY-MM/<document-stem>/`; `status` shows no pending documents for the batch. |
 | Replay | Unchanged records produce no additional committed versions or spool entries. |
 
 For a site with the freshness guard enabled, an unchanged database snapshot may
@@ -241,7 +292,7 @@ against an advancing replication watermark.
 
 ### Exercise a correction and a failure
 
-In the baseline's `test/sqlite-source/source.sqlite`, change one mapped value
+In the baseline's `../input/source.sqlite`, change one mapped value
 with a SQLite client. For example:
 
 ```sql
@@ -258,10 +309,10 @@ should reuse the same pending version and payload checksum. Then validate and
 send the correction:
 
 ```bash
-decor2hl7 run-source --site-config test/sqlite-source --since 2026-01-01
+decor2hl7 run-source --since 2026-06-01
 decor2hl7 validate-cda out/2026.1.2/notaufnahmeregister--60/*-v2.xml \
   --report test/runtime/correction
-decor2hl7 send --site-config test/sqlite-source
+decor2hl7 send
 decor2hl7 status
 ```
 
@@ -279,10 +330,27 @@ the case and parsing error. A separate CSV test can remove a required column to
 exercise a structural failure, reported by the command. Restore valid input
 from the authored case before continuing.
 
-Local spool tests establish handover. Receiver acceptance needs a configured
-test receiver: verify import and stored values for both the initial document
-and its correction. The [open receiver boundaries](../open-boundaries.md#validation-and-delivery)
+### Rehearse delivery to a test receiver
+
+Prepare a separate environment with the agreed HTTP endpoint:
+
+```bash
+decor2hl7 --root /data/decor2hl7-reference setup-integration-test \
+  --output /tmp/decor2hl7-receiver-test \
+  --receiver-url http://127.0.0.1:9090/aktin/cda/fhir/Binary
+```
+
+Replace the URL with your test receiver's endpoint. Setup sends nothing. Change
+to `/tmp/decor2hl7-receiver-test/workspace`, then follow the prepare and validate
+steps above before sending. In this environment `send` uses HTTP instead of
+spool. Verify receiver validation, import, stored values, and correction
+acceptance separately. The [open receiver boundaries](../open-boundaries.md#validation-and-delivery)
 describe the remaining profile and protocol constraints.
+
+Recreate disposable environments from their reviewed source and scenario. Keep
+exact validated documents, checksums, reports, and receiver responses separately
+when preserving acceptance evidence; newly generated documents do not replace
+that evidence.
 
 For changes to decor2hl7 itself, use the separate
 [developer checks](../../README.md#project-maintenance), including unit and exact

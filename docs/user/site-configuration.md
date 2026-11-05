@@ -8,15 +8,21 @@ Start with the matching specification and reviewed mapping from guide 1. This
 workflow adds the source snapshot and site configuration:
 
 ```text
-/data/decor2hl7-test-input/                 source CSVs, outside the workspace
-WORKSPACE/
-├── decor2hl7.json                          selected specification
-├── model/2026.1.2/notaufnahmeregister--60/   dataset fields and compiled CDA model
-├── mapping/2026.1.2/notaufnahmeregister--60/ reviewed portable mapping and lock
-├── site/2026.1.2/
-│   ├── site.json                          input relationships and deployment values
-│   └── notaufnahmeregister--60/            CSV/code mappings and extraction SQL
-└── test/site-fixture/                     complete fictional records and seed config
+/data/decor2hl7-test-input/                    CSV copy for the column/join exercise
+/data/decor2hl7-site-test/
+├── README.md                                commands for the generated setup
+├── integration-test.json                     identities and initial checksums
+├── scenario/                                preserved authored cases
+├── fixture/                                 fictional CSVs and expected.json
+├── input/source.sqlite                      synthetic source, outside workspace/
+└── workspace/
+    ├── decor2hl7.json                        selected specification
+    ├── spec/                                exact evidence and validation tools
+    ├── model/2026.1.2/notaufnahmeregister--60/ compiled models and validator
+    ├── mapping/2026.1.2/notaufnahmeregister--60/ reviewed mapping and lock
+    └── site/2026.1.2/
+        ├── site.json                        input relationships and test-site values
+        └── notaufnahmeregister--60/          CSV/code mappings and extraction SQL
 ```
 
 Read field names from `model/` and mapping decisions from `mapping/`. Record
@@ -24,30 +30,40 @@ local filenames, columns, codes, and joins in `site/`.
 
 ## Populate the practice workspace
 
-Continue in `/data/decor2hl7-test` from
+Use the reviewed `/data/decor2hl7-test` setup from
 [guide 1's setup](specification-and-mapping.md#set-up-the-practice-workspace).
-If starting here, complete that setup first. It supplies the exact models,
-reviewed mapping, and authored cases needed below.
+If starting here, substitute your prepared specification workspace. Its selected
+models, reviewed mapping, lock, and fetched specification must agree.
 
-Generate a complete fixture, copy its fictional input to a new external
-directory, and seed the default site files with its test values:
+Create a separate environment with a matching packaged scenario, then check its
+generated SQLite source:
 
 ```bash
-cd /data/decor2hl7-test
-decor2hl7 setup-test --scenario test/scenarios/valid-reference-cases \
-  --test-dir test/site-fixture
-cp -a test/site-fixture/input /data/decor2hl7-test-input
-mkdir -p site/2026.1.2/notaufnahmeregister--60
-cp test/site-fixture/config/site.json site/2026.1.2/
-cp test/site-fixture/config/csv-mapping.json site/2026.1.2/notaufnahmeregister--60/
-cp test/site-fixture/config/codes-mapping.json site/2026.1.2/notaufnahmeregister--60/
+decor2hl7 --root /data/decor2hl7-test setup-integration-test \
+  --output /data/decor2hl7-site-test
+cd /data/decor2hl7-site-test/workspace
+decor2hl7 check
+decor2hl7 extract-source --output ../input/baseline-1 --since 2026-06-01
+decor2hl7 check-input --input ../input/baseline-1
+cp -a ../fixture/input /data/decor2hl7-test-input
 ```
 
-Use an unused input directory. Expect the fixture's complete CSV set, including
-cases, diagnoses, medications, and vital signs. The copied site files already
-contain fictional identifiers, local aliases, and required CDA construction
-values. The following steps adapt two column mappings and a diagnosis key;
-keep the other supplied data and configuration.
+Use new environment, snapshot, and CSV-copy directories; the environment must be
+outside the source workspace. Expect a complete CSV set in `../input/baseline-1/`,
+including cases, diagnoses, medications, and vital signs. Compare row counts and
+the fixed write timestamp in `.decor2hl7-snapshot.json` with
+`../integration-test.json`.
+
+The generated site files contain fictional identifiers, local aliases, required
+CDA values, SQL, and local spool transport. They describe the scenario; test
+your actual site configuration separately using the [site test setup](testing.md#2-test-the-site-input).
+The setup copies selected runtime models and the reviewed mapping; keep the
+source workspace for the full mapping-review reports.
+
+For the CSV exercise below, the last command makes an editable copy of the
+authored input. In `site/2026.1.2/site.json`, set `source.adapter` to `null` to
+use that copy. Then adapt two column mappings and a diagnosis key, keeping all
+other supplied data and configuration.
 
 Examples use release `2026.1.2`, transaction `notaufnahmeregister--60`, and
 commands run from the workspace root. JSON examples are excerpts to merge into
@@ -169,16 +185,16 @@ columns to the source; keys still define identity.
 The practice configuration supplies `timezone`, `organization`, and fictional
 identifiers. For a real site, replace them with approved deployment values.
 For coded input, map local aliases to accepted values shown in the code guide;
-a value outside the dataset domain needs review. Use the site requirements in
-`mapping/2026.1.2/notaufnahmeregister--60/cda-mapping-trees-extended.md` (`◆`
-and `R:` lines) and the `check-cda-mapping` output to fill `cda.values` and
-`cda.fallback_if_active` in `site.json`.
+a value outside the dataset domain needs review. Run `decor2hl7 check-cda-mapping`
+to list site requirements, then fill `cda.values` and `cda.fallback_if_active` in
+`site.json`. For explanations, consult the source workspace's
+`cda-mapping-trees-extended.md` (`◆` and `R:` lines).
 
-For a local file handover, replace the generated `transport` block with:
+The practice setup already uses a local file handover:
 
 ```json
 {
-  "transport": { "adapter": "spool", "directory": "/data/decor2hl7-test/spool" }
+  "transport": { "adapter": "spool", "directory": "spool" }
 }
 ```
 
@@ -187,9 +203,11 @@ portable mapping when adapting local files and codes.
 
 ## 3. Add database extraction when needed
 
-For a ready-to-run database exercise, use the
-[SQLite baseline](testing.md#build-a-runnable-sqlite-baseline). The SQL excerpts
-below illustrate adapting queries to your own source schema.
+The initial extraction exercised the generated SQLite queries. To repeat that
+baseline after the CSV exercise, create a fresh
+[SQLite rehearsal](testing.md#build-a-runnable-sqlite-baseline). Its original
+column names differ from the renamed CSVs. The SQL excerpts below illustrate
+adapting queries to your own source schema.
 
 For ODBC or SQLite, keep the same CSV mappings and input relationships. Create
 one query per input source under the transaction directory:
@@ -286,15 +304,5 @@ Continue with a transformation and output inspection in
 occurrence, or source behavior, consult the
 [technical input contract](../topics/input-runtime-and-delivery.md).
 
-## SQLite input and a local integration test
-
-Use [setup-integration-test](integration-testing.md) to create a complete fictional
-SQLite source and independent runtime workspace from a reviewed setup. This
-command is available in the installed application and uses an exact matching
-packaged scenario.
-
-The testing guide provides a [runnable SQLite baseline](testing.md#build-a-runnable-sqlite-baseline)
-from complete authored records. It shows how to create the database, SQL files,
-and test-site bundle, then check extraction and input. Continue with its
-[runtime rehearsal](testing.md#3-test-runtime-and-delivery) for local delivery,
-unchanged replay, corrections, and rejected records.
+For local delivery, unchanged replay, corrections, and rejected records, continue
+with the [runtime rehearsal](testing.md#3-test-runtime-and-delivery).

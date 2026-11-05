@@ -284,7 +284,7 @@ They report their actual outcomes; creating a setup does not claim that its
 profile, receiver acceptance, import/storage or replacement protocol passed.
 Clinical expectations remain in the versioned scenario, while replay and
 correction mechanics use the common runtime. See the
-[integration test guide](../user/integration-testing.md).
+[runtime and delivery tests](../user/testing.md#3-test-runtime-and-delivery).
 
 ## Transport
 
