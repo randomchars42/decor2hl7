@@ -42,10 +42,13 @@ def write_json(path: Path, value: Any) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(value, handle, indent=2, ensure_ascii=False, sort_keys=False)
-            handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp_name, path)
     except BaseException:
-        try: os.unlink(tmp_name)
+        try:
+            os.unlink(tmp_name)
         except OSError: pass
         raise
 
@@ -58,10 +61,13 @@ def write_bytes(path: Path, value: bytes) -> None:
     )
     try:
         with os.fdopen(fd, "wb") as handle:
-            handle.write(value); handle.flush(); os.fsync(handle.fileno())
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp_name, path)
     except BaseException:
-        try: os.unlink(tmp_name)
+        try:
+            os.unlink(tmp_name)
         except OSError: pass
         raise
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
-from collections import Counter, defaultdict, deque
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -15,7 +15,7 @@ from .mapping_reports import render_mapping_analysis
 from .mapping_decisions import association_request
 from ..contracts import MappingAudit
 from ..text import normalize_match_text as _norm
-from ..i18n import message as _msg, localized
+from ..i18n import localized
 from ..workspace import write_json
 from ..domain import accepted_values, logical_values
 from ..cda.semantics import (
@@ -244,7 +244,9 @@ def _implementation_paths(
             for implementation in list(concept):
                 if local(implementation.tag) != "implementation" or not implementation.get("xpath"):
                     continue
-                template_id = ""; effective = ""; template_xpath = ""
+                template_id = ""
+                effective = ""
+                template_xpath = ""
                 for child in list(implementation):
                     if local(child.tag) != "templateLocation":
                         continue
@@ -936,7 +938,7 @@ def _vocabulary_candidates(
     }
 
     vs_hits: list[tuple[str, Mapping[str, Any], str]] = []
-    for oid in value_sets:
+    for oid in sorted(value_sets):
         for name, target in by_vs.get(oid, []):
             vs_hits.append((name, target, oid))
             actionable, warnings = _direct(field, target)
@@ -953,7 +955,7 @@ def _vocabulary_candidates(
 
     term_hits: list[tuple[str, Mapping[str, Any], tuple[str, str]]] = []
     term_by_template: dict[str, list[tuple[str, Mapping[str, Any], tuple[str, str]]]] = defaultdict(list)
-    for term in terms:
+    for term in sorted(terms):
         for name, target in by_code.get(term, []):
             row = (name, target, term)
             term_hits.append(row)
@@ -1956,10 +1958,10 @@ def _formal_origin_labels(
     seen = {concept_id}
     while queue:
         current, depth = queue.popleft()
-        rows.extend((current, depth, label) for label in labels.get(current, set()))
+        rows.extend((current, depth, label) for label in sorted(labels.get(current, set())))
         if depth >= maximum_depth:
             continue
-        for related in neighbours.get(current, set()):
+        for related in sorted(neighbours.get(current, set())):
             if related not in seen:
                 seen.add(related)
                 queue.append((related, depth + 1))
@@ -3324,17 +3326,6 @@ def _mapping_admissibility(
 
 
 
-def _cda_mapping_analysis(
-    model: Mapping[str, Any], cda: Mapping[str, Any], xml_paths: Iterable[Path],
-) -> tuple[dict[str, Any], MappingAudit, str, str]:
-    paths = list(xml_paths)
-    fields, details, groups, members = _mapping_candidates(model, cda, paths)
-    proposal = _mapping_admissibility(model, cda, paths, fields, details, groups, members)
-    audit = build_mapping_audit(model, cda, proposal, details, groups)
-    report, appendix = render_mapping_analysis(model, cda, proposal, details, groups)
-    return proposal, audit, report, appendix
-
-
 @localized
 def cda_mapping_audit(
     model: Mapping[str, Any],
@@ -3344,15 +3335,12 @@ def cda_mapping_audit(
     output_language: str = "en",
 ) -> tuple[dict[str, Any], MappingAudit, str, str]:
     """Return proposal, complete structured audit and both reports."""
-    proposal, audit, report, details = _cda_mapping_analysis(
-        model, cda, xml_paths
-    )
-    return (
-        proposal,
-        audit,
-        (report),
-        (details),
-    )
+    paths = list(xml_paths)
+    fields, details, groups, members = _mapping_candidates(model, cda, paths)
+    proposal = _mapping_admissibility(model, cda, paths, fields, details, groups, members)
+    audit = build_mapping_audit(model, cda, proposal, details, groups)
+    report, appendix = render_mapping_analysis(model, cda, proposal, details, groups)
+    return proposal, audit, report, appendix
 
 
 def mapping_field_delta(
@@ -3715,19 +3703,3 @@ def write_cda_mapping(
         model_dir, enriched_cda, audit, output_language=output_language
     )
     return cda_proposal
-
-
-@localized
-def write_mapping_model(
-    evidence: Iterable[Path],
-    model_dir: Path,
-    model: Mapping[str, Any],
-    cda: Mapping[str, Any],
-    *,
-    output_language: str = "en",
-) -> dict[str, Any]:
-    """Compiler-boundary name for writing mapping artifacts."""
-    return write_cda_mapping(
-        evidence, model_dir, model, cda,
-        output_language=output_language,
-    )

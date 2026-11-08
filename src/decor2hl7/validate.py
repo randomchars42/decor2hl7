@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from .i18n import message as _msg
-
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import xml.etree.ElementTree as ET
 
 from .contracts import NormalizedRecord
 from .domain import accepted_values, logical_values
-from .i18n import Translator
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-import xml.etree.ElementTree as ET
+from .i18n import Translator, message as _msg
 
 from .assertions import evaluate as evaluate_assertion
 from .bindings import (
@@ -675,7 +673,9 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
     locations: dict[str, Mapping[str, Any]] = {}
     def walk(nodes: list[Mapping[str, Any]], prefix: tuple[int, ...] = ()) -> None:
         for index, node in enumerate(nodes):
-            here = prefix + (index,); key = ".".join(map(str, here)); locations[key] = node
+            here = prefix + (index,)
+            key = ".".join(map(str, here))
+            locations[key] = node
             prohibited = str(node.get("conformance") or "").upper() == "NP"
             if prohibited and (node.get("mandatory") or int(node.get("min") or 0) > 0):
                 errors.append(f"compiled CDA node {key} is NP but also required")
@@ -704,7 +704,8 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
                         + ", ".join(invalid)
                     )
             for attr_index, attr in enumerate(node.get("attributes", [])):
-                attr_key = ".".join(map(str, here + (100000 + attr_index,))); locations[attr_key] = attr
+                attr_key = ".".join(map(str, here + (100000 + attr_index,)))
+                locations[attr_key] = attr
                 if attr.get("optional") is False and attr.get("value") is None and not attr.get("targets"):
                     errors.append(f"compiled CDA required attribute {attr_key} has neither fixed value nor target")
             walk(list(node.get("children", [])), here)
@@ -769,7 +770,8 @@ def _occurrence_values(
         for index, row in enumerate(rows if isinstance(rows, list) else []):
             current = coords + (index,)
             if not isinstance(row, Mapping):
-                out.append((path + "".join(f"[{i}]" for i in current), None, {})); continue
+                out.append((path + "".join(f"[{i}]" for i in current), None, {}))
+                continue
             if depth == len(chain) - 1:
                 scope = row.get("values", {})
                 out.append((
@@ -922,7 +924,8 @@ def validate_record(record: Mapping[str, Any], model: Mapping[str, Any]) -> list
 def validate_records(records: list[NormalizedRecord], model: Mapping[str, Any]) -> dict[str, int]:
     counts = {"records": len(records), "errors": 0, "warnings": 0}
     for record in records:
-        problems = validate_record(record, model); record["problems"] = problems
+        problems = validate_record(record, model)
+        record["problems"] = problems
         counts["errors"] += sum(problem["severity"] == "error" for problem in problems)
         counts["warnings"] += sum(problem["severity"] == "warning" for problem in problems)
     return counts
