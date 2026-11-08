@@ -1,6 +1,5 @@
 """Input-to-document execution, pending handover and committed lineage."""
 from __future__ import annotations
-import argparse
 import datetime as dt
 import hashlib
 import json
@@ -9,11 +8,13 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from . import __version__
 from .hashing import json_digest as _json_digest
-from .pending import read_pending
-from .contracts import OperationConfig
+from .pending import DocumentIdentity, read_pending
+from .contracts import RuntimeBundle, SiteConfig, site_config
 from .i18n import message as _msg, Translator, OUTPUT_LANGUAGE as _OUTPUT_LANGUAGE
 from .ui import say as _say
-from .runtime_config import _root, _require, _explicit_path, _site_paths, _runtime_files, _safe_key
+from .runtime_config import (
+    require_path, explicit_path, site_paths, load_runtime_bundle, safe_document_key,
+)
 from .workspace import (selected_release, selected_transaction, state_dir, transaction_out_dir,
                         input_dir, load_json, write_json, write_bytes)
 
@@ -96,7 +97,7 @@ def _transformation_context(
 
 def _document_identity(
     record_key: str, document_version: int, site: Mapping[str, Any],
-) -> dict[str, Any]:
+) -> DocumentIdentity:
     root = str(site.get("identifiers", {}).get("document_root") or "")
     return {
         "document_id": {
@@ -124,6 +125,7 @@ def _recover_spool_publications(
     root: Path, out_dir: Path, site: Mapping[str, Any],
     site_config_override: str | Path | None,
     cda_mapping_override: str | Path | None,
+    runtime_bundle: RuntimeBundle,
 ) -> int:
     from . import state, transport
 
@@ -142,7 +144,10 @@ def _recover_spool_publications(
         if transport.is_published(path, site, workspace=root):
             # This records a handover that already happened. Do it before
             # pruning, even if today's source changed or the case is absent.
-            sent, failed = _send_paths(root, [path], site_config_override, cda_mapping_override)
+            sent, failed = _send_paths(
+                root, [path], site_config_override, cda_mapping_override,
+                runtime_bundle=runtime_bundle,
+            )
             if failed:
                 raise ValueError(Translator(_OUTPUT_LANGUAGE.get()).text(
                     "cli.spool_recovery_failed", path=path,
@@ -157,7 +162,7 @@ def _quarantine_record(
 ) -> None:
     key = str(record.get("key") or "unknown")
     directory = state_dir(root) / "quarantine" / run_id
-    stem = _safe_key(key)
+    stem = safe_document_key(key)
     write_json(directory / f"{stem}.json", {
         "key": key,
         "stage": stage,
@@ -178,13 +183,14 @@ def _transform(
     dry_run: bool = False,
     source_snapshot: Mapping[str, Any] | None = None,
     prune_absent: bool = True,
+    runtime_bundle: RuntimeBundle | None = None,
 ) -> tuple[list[Path], dict[str, int]]:
     from .cda.render import emit
     from . import data, state, validate
 
     release = selected_release(root)
     transaction = selected_transaction(root)
-    bundle = _runtime_files(
+    bundle = runtime_bundle or load_runtime_bundle(
         root, cda_mapping_override, site_config_override
     )
     model, cda = bundle.model, bundle.cda
@@ -209,7 +215,9 @@ def _transform(
     run_id = run_id or dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S")
     state_path = state_dir(root)
     recovered = (
-        _recover_spool_publications(root, out_dir, site, site_config_override, cda_mapping_override)
+        _recover_spool_publications(
+            root, out_dir, site, site_config_override, cda_mapping_override, bundle
+        )
         if not dry_run else 0
     )
     current_state = state.load_state(state_path)
@@ -241,12 +249,12 @@ def _transform(
             skipped_unchanged += 1
             continue
         if dry_run:
-            emitted.append(Path(f"{_safe_key(raw_key)}-v{document_version}.xml"))
+            emitted.append(Path(f"{safe_document_key(raw_key)}-v{document_version}.xml"))
             continue
         previous = state.previous_document_loaded(current_state, stream_key)
         if disposition == "CHANGED" and previous is None:
             raise ValueError(_msg('ui.committed_identity_missing', stream_key=stream_key))
-        stem = f"{_safe_key(raw_key)}-v{document_version}"
+        stem = f"{safe_document_key(raw_key)}-v{document_version}"
         xml_path = out_dir / f"{stem}.xml"
         identity = _document_identity(raw_key, document_version, site)
         artifact = {
@@ -305,29 +313,30 @@ def _new_run_id() -> str:
     )
 
 
-def _failure_threshold(
-    root: Path,
-    cda_mapping_override: str | Path | None,
-    site_config_override: str | Path | None,
+def _failure_threshold(site: SiteConfig) -> int:
+    operation = site.get("operation") or {}
+    return operation.get("failure_threshold") or 0
+
+
+def transform_documents(
+    root: Path, *, input_override: str | Path | None = None,
+    cda_mapping_override: str | Path | None = None,
+    site_config_override: str | Path | None = None,
 ) -> int:
-    site = _runtime_files(root, cda_mapping_override, site_config_override).site
-    operation: OperationConfig = site.get("operation") or {}
-    return int(operation.get("failure_threshold") or 0) if isinstance(operation, Mapping) else 0
-
-
-def cmd_transform(args: argparse.Namespace) -> int:
     from . import state
 
-    root = _root(args)
     run_id = _new_run_id()
     with state.workspace_lock(state_dir(root)):
         state.start_run(state_dir(root), run_id, kind="transform")
         try:
-            emitted, summary = _transform(
-                root, args.input, args.cda_mapping, args.site_config,
-                run_id=run_id,
+            runtime_bundle = load_runtime_bundle(
+                root, cda_mapping_override, site_config_override
             )
-            threshold = _failure_threshold(root, args.cda_mapping, args.site_config)
+            emitted, summary = _transform(
+                root, input_override, cda_mapping_override, site_config_override,
+                run_id=run_id, runtime_bundle=runtime_bundle,
+            )
+            threshold = _failure_threshold(runtime_bundle.site)
             ok = int(summary["invalid"]) <= threshold
             state.finish_run(
                 state_dir(root), run_id,
@@ -348,17 +357,22 @@ def _send_paths(
     root: Path, paths: list[Path] | None = None,
     site_config_override: str | Path | None = None,
     cda_mapping_override: str | Path | None = None,
+    *, runtime_bundle: RuntimeBundle | None = None,
 ) -> tuple[int, int]:
     from . import state, transport
 
     release = selected_release(root)
     transaction = selected_transaction(root)
-    site = _runtime_files(root, cda_mapping_override, site_config_override).site
+    bundle = runtime_bundle or load_runtime_bundle(
+        root, cda_mapping_override, site_config_override
+    )
+    site = bundle.site
     error = transport.configuration_error(site)
     if error:
         raise ValueError(error)
     out_dir = transaction_out_dir(root, release, transaction)
     candidates = paths if paths is not None else sorted(out_dir.glob("*.xml"))
+    committed = state.delivered_artifacts(state_dir(root))
     sent = failed = 0
     for path in candidates:
         sidecar_path = path.with_suffix(".json")
@@ -376,8 +390,10 @@ def _send_paths(
             _say(_msg("ui.pending_bundle_mismatch", path=path))
             failed += 1
             continue
-        raw_key = str(info["key"])
-        stream_key = str(info["state_key"])
+        raw_key = info["key"]
+        stream_key = info["state_key"]
+        if (stream_key, info["document_version"], info["fingerprint"]) in committed:
+            continue
         disposition, expected_version = state.classify(
             state_dir(root), stream_key, str(info["fingerprint"])
         )
@@ -418,35 +434,28 @@ def _send_paths(
             state_dir(root), key=stream_key, digest=str(info["fingerprint"]),
             document_version=document_version, file=str(path),
             spec_version=str(release["key"]), status=delivery_status,
-            document_id=(
-                info.get("document_id")
-                if isinstance(info.get("document_id"), Mapping) else None
-            ),
-            set_id=(
-                info.get("set_id")
-                if isinstance(info.get("set_id"), Mapping) else None
-            ),
-            previous=(
-                info.get("previous_document")
-                if isinstance(info.get("previous_document"), Mapping) else None
-            ),
+            document_id=info["document_id"], set_id=info["set_id"],
+            previous=info["previous_document"],
         )
+        committed.add((stream_key, document_version, info["fingerprint"]))
         _say(f"delivered {path.name}: {message}")
         sent += 1
     return sent, failed
 
 
-def cmd_send(args: argparse.Namespace) -> int:
+def send_documents(
+    root: Path, *, files: Sequence[str] = (),
+    site_config_override: str | Path | None = None,
+) -> int:
     from . import state
 
-    root = _root(args)
     run_id = _new_run_id()
     with state.workspace_lock(state_dir(root)):
         state.start_run(state_dir(root), run_id, kind="send")
         try:
             sent, failed = _send_paths(
-                root, [Path(value) for value in args.files] if args.files else None,
-                args.site_config,
+                root, [Path(value) for value in files] if files else None,
+                site_config_override,
             )
             state.finish_run(
                 state_dir(root), run_id,
@@ -462,30 +471,39 @@ def cmd_send(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 2
 
 
-def cmd_run(args: argparse.Namespace) -> int:
+def run_documents(
+    root: Path, *, input_override: str | Path | None = None,
+    cda_mapping_override: str | Path | None = None,
+    site_config_override: str | Path | None = None, send: bool = False,
+) -> int:
     from . import state
 
-    root = _root(args)
     run_id = _new_run_id()
     with state.workspace_lock(state_dir(root)):
         state.start_run(state_dir(root), run_id, kind="run")
         try:
-            if args.send:
+            runtime_bundle = load_runtime_bundle(
+                root, cda_mapping_override, site_config_override
+            )
+            if send:
                 from .transport import configuration_error
-                site = _runtime_files(root, args.cda_mapping, args.site_config).site
+                site = runtime_bundle.site
                 error = configuration_error(site)
                 if error:
                     raise ValueError(error)
             emitted, summary = _transform(
-                root, args.input, args.cda_mapping, args.site_config,
-                run_id=run_id,
+                root, input_override, cda_mapping_override, site_config_override,
+                run_id=run_id, runtime_bundle=runtime_bundle,
             )
             print(json.dumps(summary, ensure_ascii=False))
             failed = 0
-            if args.send:
-                sent, failed = _send_paths(root, emitted, args.site_config, args.cda_mapping)
+            if send:
+                sent, failed = _send_paths(
+                    root, emitted, site_config_override, cda_mapping_override,
+                    runtime_bundle=runtime_bundle,
+                )
                 print(json.dumps({"sent": sent, "failed": failed}))
-            threshold = _failure_threshold(root, args.cda_mapping, args.site_config)
+            threshold = _failure_threshold(runtime_bundle.site)
             failure_count = int(summary["invalid"]) + failed
             ok = failure_count <= threshold
             state.finish_run(
@@ -498,7 +516,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 state_dir(root), run_id, status="failed", error=str(error),
             )
             raise
-    if args.send:
+    if send:
         return 0 if ok else 2
     _say((_msg('ui.documents_were_emitted_but_not_sent_pass_send')))
     return 0 if ok else 2
@@ -506,16 +524,19 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def _source_site(
     root: Path,
-    site_config_override: str | Path | None,
-) -> tuple[Path, Path, dict[str, Any]]:
+    site_config_override: str | Path | None, *,
+    admitted_site: SiteConfig | None = None,
+) -> tuple[Path, Path, SiteConfig]:
     from . import source, validate
 
     release = selected_release(root)
     transaction = selected_transaction(root)
-    bundle, _, _, site_path = _site_paths(
+    bundle, _, _, site_path = site_paths(
         root, release, transaction, site_config_override
     )
-    site = load_json(_require(site_path, "run `decor2hl7 init-site-config`"))
+    site = admitted_site if admitted_site is not None else site_config(
+        load_json(require_path(site_path, "run `decor2hl7 init-site-config`")), site_path,
+    )
     errors = validate.check_site(site)
     errors.extend(source.query_errors(site, bundle))
     if errors:
@@ -526,21 +547,14 @@ def _source_site(
     return bundle, site_path.parent, site
 
 
-def _parse_since(value: str | None) -> dt.date | None:
-    if value is None:
-        return None
-    try:
-        return dt.date.fromisoformat(value)
-    except ValueError as error:
-        raise ValueError("--since must use YYYY-MM-DD") from error
-
-
-def cmd_extract_source(args: argparse.Namespace) -> int:
+def extract_source_snapshot(
+    root: Path, *, output_path: str | Path, since: dt.date | None = None,
+    site_config_override: str | Path | None = None, output_language: str = "en",
+) -> int:
     from . import source, state
 
-    root = _root(args)
-    bundle, config_dir, site = _source_site(root, args.site_config)
-    output = _explicit_path(args.output)
+    bundle, config_dir, site = _source_site(root, site_config_override)
+    output = explicit_path(output_path)
     run_id = _new_run_id()
     with state.workspace_lock(state_dir(root)):
         state.start_run(
@@ -549,8 +563,8 @@ def cmd_extract_source(args: argparse.Namespace) -> int:
         )
         try:
             manifest = source.extract(
-                site, bundle, output, since=_parse_since(args.since),
-                config_dir=config_dir, output_language=args.output_language,
+                site, bundle, output, since=since,
+                config_dir=config_dir, output_language=output_language,
             )
             state.finish_run(
                 state_dir(root), run_id, status="extracted",
@@ -570,23 +584,32 @@ def cmd_extract_source(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_run_source(args: argparse.Namespace) -> int:
+def run_source(
+    root: Path, *, since: dt.date | None = None,
+    snapshot_output: str | Path | None = None,
+    cda_mapping_override: str | Path | None = None,
+    site_config_override: str | Path | None = None, limit: int | None = None,
+    dry_run: bool = False, send: bool = False, output_language: str = "en",
+) -> int:
     from . import source, state
 
-    root = _root(args)
-    bundle, config_dir, site = _source_site(root, args.site_config)
-    if args.dry_run and args.send:
-        raise ValueError("--dry-run and --send cannot be combined")
-    _runtime_files(root, args.cda_mapping, args.site_config)
-    if args.send:
+    if dry_run and send:
+        raise ValueError(_msg('ui.source_preview_send_conflict'))
+    runtime_bundle = load_runtime_bundle(
+        root, cda_mapping_override, site_config_override
+    )
+    bundle, config_dir, site = _source_site(
+        root, site_config_override, admitted_site=runtime_bundle.site,
+    )
+    if send:
         from .transport import configuration_error
         error = configuration_error(site)
         if error:
             raise ValueError(error)
     run_id = _new_run_id()
     snapshot = (
-        _explicit_path(args.snapshot_output)
-        if args.snapshot_output else state_dir(root) / "snapshots" / run_id
+        explicit_path(snapshot_output)
+        if snapshot_output else state_dir(root) / "snapshots" / run_id
     )
     with state.workspace_lock(state_dir(root)):
         state.start_run(
@@ -597,8 +620,8 @@ def cmd_run_source(args: argparse.Namespace) -> int:
         source_stream: str | None = None
         try:
             manifest = source.extract(
-                site, bundle, snapshot, since=_parse_since(args.since),
-                config_dir=config_dir, output_language=args.output_language,
+                site, bundle, snapshot, since=since,
+                config_dir=config_dir, output_language=output_language,
             )
             source_config = site.get("source", {})
             require_advance = (
@@ -615,7 +638,7 @@ def cmd_run_source(args: argparse.Namespace) -> int:
                 "source_identity_sha256": manifest["source_identity_sha256"],
             })
             previous_maximum = state.last_snapshot_max_ts(state_dir(root), source_stream)
-            if not args.dry_run and require_advance and previous_maximum is not None:
+            if not dry_run and require_advance and previous_maximum is not None:
                 if maximum is None or str(maximum) <= previous_maximum:
                     raise ValueError(
                         "source snapshot has not advanced: last completed "
@@ -624,26 +647,27 @@ def cmd_run_source(args: argparse.Namespace) -> int:
 
             snapshot_evidence = {"path": str(snapshot), **manifest}
             emitted, summary = _transform(
-                root, snapshot, args.cda_mapping, args.site_config,
-                run_id=run_id, limit=args.limit, dry_run=args.dry_run,
+                root, snapshot, cda_mapping_override, site_config_override,
+                run_id=run_id, limit=limit, dry_run=dry_run,
                 source_snapshot=snapshot_evidence,
-                prune_absent=False,
+                prune_absent=False, runtime_bundle=runtime_bundle,
             )
             print(json.dumps(summary, ensure_ascii=False))
             sent = failed = 0
-            if args.send:
-                sent, failed = _send_paths(root, emitted, args.site_config, args.cda_mapping)
+            if send:
+                sent, failed = _send_paths(
+                    root, emitted, site_config_override, cda_mapping_override,
+                    runtime_bundle=runtime_bundle,
+                )
                 print(json.dumps({"sent": sent, "failed": failed}))
-            threshold = int(
-                site.get("operation", {}).get("failure_threshold") or 0
-            ) if isinstance(site.get("operation", {}), Mapping) else 0
+            threshold = _failure_threshold(site)
             failure_count = int(summary["invalid"]) + failed
             ok = failure_count <= threshold
             status = (
                 "failed" if not ok else
-                "inspected" if args.dry_run else
-                "partial" if args.limit is not None else
-                "completed" if args.send else "transformed"
+                "inspected" if dry_run else
+                "partial" if limit is not None else
+                "completed" if send else "transformed"
             )
             state.finish_run(
                 state_dir(root), run_id, status=status,
@@ -667,30 +691,34 @@ def cmd_run_source(args: argparse.Namespace) -> int:
                 source_stream=source_stream,
             )
             raise
-    if not args.send and not args.dry_run:
-        _say("documents were emitted but not delivered; pass --send for handover")
+    if not send and not dry_run:
+        _say(_msg('ui.source_documents_not_delivered'))
     return 0 if ok else 2
 
 
-def cmd_status(args: argparse.Namespace) -> int:
+def runtime_status(
+    root: Path,
+) -> int:
     from . import state
 
-    root = _root(args)
     release = selected_release(root)
     transaction = selected_transaction(root)
     current = state.load_state(state_dir(root))
     out_dir = transaction_out_dir(root, release, transaction)
     pending = 0
+    committed = state.delivered_artifacts(state_dir(root))
     for sidecar_path in out_dir.glob("*.json") if out_dir.exists() else []:
-        info = load_json(sidecar_path)
-        stream_key = str(info.get("state_key") or _state_key(transaction, str(info.get("key"))))
+        info = read_pending(sidecar_path.with_suffix(".xml"))
+        if info["transaction"] != transaction or info["release"] != release["key"]:
+            raise ValueError(_msg("ui.pending_bundle_mismatch", path=sidecar_path))
+        if (info["state_key"], info["document_version"], info["fingerprint"]) in committed:
+            continue
         disposition, _ = state.classify_loaded(
-            current, stream_key, str(info.get("fingerprint"))
+            current, info["state_key"], info["fingerprint"],
         )
         pending += disposition != "UNCHANGED"
     print(json.dumps({
         "delivered_documents": len(current.get("documents", {})),
-        "sent_documents": len(current.get("documents", {})),
         "pending_documents": pending,
         "recent_runs": state.recent_runs(state_dir(root), 5),
         "release": release.get("key"),

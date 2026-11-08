@@ -1,21 +1,23 @@
 """Resolve the selected workspace files and admit a reviewed runtime bundle."""
 from __future__ import annotations
-import argparse
+
 import hashlib
 import re
 from pathlib import Path
 from typing import Any, Mapping
+
 from .bundle import admit_mapping
-from .contracts import (RuntimeBundle, dataset_model, cda_model, input_mapping,
-                        code_mapping, target_mapping, site_config)
-from .workspace import (selected_release, selected_transaction, transaction_model_dir,
-                        transaction_mapping_dir, transaction_site_dir, release_site_dir, load_json)
+from .contracts import (
+    RuntimeBundle, dataset_model, cda_model, input_mapping,
+    code_mapping, target_mapping, site_config,
+)
+from .workspace import (
+    selected_release, selected_transaction, transaction_model_dir,
+    transaction_mapping_dir, transaction_site_dir, release_site_dir, load_json,
+)
 
-def _root(args: argparse.Namespace) -> Path:
-    return Path(args.root).resolve()
 
-
-def _require(path: Path, hint: str = "") -> Path:
+def require_path(path: Path, hint: str = "") -> Path:
     if path.exists():
         return path
     message = f"missing {path}"
@@ -24,12 +26,12 @@ def _require(path: Path, hint: str = "") -> Path:
     raise ValueError(message)
 
 
-def _explicit_path(value: str | Path) -> Path:
+def explicit_path(value: str | Path) -> Path:
     path = Path(value).expanduser()
     return path.resolve()
 
 
-def _cda_mapping_path(
+def cda_mapping_path(
     root: Path,
     release: Mapping[str, Any],
     transaction: Mapping[str, Any],
@@ -37,11 +39,11 @@ def _cda_mapping_path(
 ) -> Path:
     if override is None:
         return transaction_mapping_dir(root, release, transaction) / "cda-mapping.json"
-    path = _explicit_path(override)
+    path = explicit_path(override)
     return path / "cda-mapping.json" if path.is_dir() or not path.suffix else path
 
 
-def _site_paths(
+def site_paths(
     root: Path,
     release: Mapping[str, Any],
     transaction: Mapping[str, Any],
@@ -61,7 +63,7 @@ def _site_paths(
             bundle / "codes-mapping.json",
             release_site_dir(root, release) / "site.json",
         )
-    path = _explicit_path(override)
+    path = explicit_path(override)
     if path.suffix:
         bundle = path.parent
         site = path
@@ -71,13 +73,13 @@ def _site_paths(
     return bundle, bundle / "csv-mapping.json", bundle / "codes-mapping.json", site
 
 
-def _safe_key(value: str) -> str:
+def safe_document_key(value: str) -> str:
     base = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "record"
     digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
     return f"{base}--{digest}"
 
 
-def _runtime_files(
+def load_runtime_bundle(
     root: Path,
     cda_mapping_override: str | Path | None = None,
     site_config_override: str | Path | None = None,
@@ -85,19 +87,30 @@ def _runtime_files(
     release = selected_release(root)
     transaction = selected_transaction(root)
     model_dir = transaction_model_dir(root, release, transaction)
-    _, csv_path, codes_path, site_path = _site_paths(
+    _, csv_path, codes_path, site_path = site_paths(
         root, release, transaction, site_config_override
     )
-    mapping_path = _cda_mapping_path(
+    mapping_path = cda_mapping_path(
         root, release, transaction, cda_mapping_override
     )
-    model = dataset_model(load_json(_require(model_dir / "model.json", "run `decor2hl7 build`")))
-    cda = cda_model(load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`")))
-    csv_mapping = input_mapping(load_json(_require(csv_path, "run `decor2hl7 init-site-config`")))
-    codes_mapping = code_mapping(load_json(_require(codes_path, "run `decor2hl7 init-site-config`")))
-    cda_mapping = target_mapping(load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`")))
-    site = site_config(load_json(_require(site_path, "run `decor2hl7 init-site-config`")))
+    model_path, cda_path = model_dir / "model.json", model_dir / "cda.json"
+    model = dataset_model(
+        load_json(require_path(model_path, "run `decor2hl7 build`")), model_path,
+    )
+    cda = cda_model(
+        load_json(require_path(cda_path, "run `decor2hl7 build`")), cda_path,
+    )
+    csv_mapping = input_mapping(
+        load_json(require_path(csv_path, "run `decor2hl7 init-site-config`")), csv_path,
+    )
+    codes_mapping = code_mapping(
+        load_json(require_path(codes_path, "run `decor2hl7 init-site-config`")), codes_path,
+    )
+    cda_mapping = target_mapping(
+        load_json(require_path(mapping_path, "run `decor2hl7 init-cda-mapping`")), mapping_path,
+    )
+    site = site_config(
+        load_json(require_path(site_path, "run `decor2hl7 init-site-config`")), site_path,
+    )
     admit_mapping(mapping_path, release, transaction, model, cda)
     return RuntimeBundle(model, cda, csv_mapping, codes_mapping, cda_mapping, site)
-
-

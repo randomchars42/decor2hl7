@@ -20,7 +20,7 @@ from decor2hl7.compile.artifacts import compiler_inputs, selected_closure_templa
 from decor2hl7.compile.mapping import mapping_field_delta
 from decor2hl7.compile.schematron import read_datatype_cooccurrences
 from decor2hl7.cooccurrence import unavoidable_targets_problems
-from decor2hl7.testing import json_digest
+from decor2hl7.hashing import json_digest
 from decor2hl7.transforms import cda_target_name, mapping_rules
 
 

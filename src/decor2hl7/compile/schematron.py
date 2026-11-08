@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..contracts import cda_model, json_object
+
 from collections import Counter
 from itertools import product
 from pathlib import Path
@@ -394,8 +396,9 @@ def _matched_targets(
     return sorted(name for score, _, name in scored if score == best)
 
 
-def attach_constraints(cda: dict[str, Any], include_dir: Path) -> dict[str, Any]:
+def attach_constraints(raw_cda: object, include_dir: Path) -> dict[str, Any]:
     """Attach uniquely cross-referenced constraints to compiled CDA targets."""
+    cda = cda_model(raw_cda)
     constraints = read_constraints(include_dir.glob("*.sch")) if include_dir.is_dir() else []
     targets = cda.get("targets", {})
     target_index: dict[tuple[str, str], list[tuple[str, str, list[str]]]] = {}
@@ -428,11 +431,11 @@ def attach_constraints(cda: dict[str, Any], include_dir: Path) -> dict[str, Any]
     datatype_rules, datatype_summary = read_datatype_cooccurrences(
         include_dir.glob("DTr1_*.sch") if include_dir.is_dir() else []
     )
-    cda["datatype_constraints"] = {
+    cda["datatype_constraints"] = json_object({
         "version": 1,
         "source": "generated-datatype-schematron",
         "rules": datatype_rules,
-    }
+    })
     summary = {
         "source": "generated-template-schematron",
         "constraints": len(constraints),
@@ -442,5 +445,5 @@ def attach_constraints(cda: dict[str, Any], include_dir: Path) -> dict[str, Any]
         ).items())),
         "datatype_cooccurrence": datatype_summary,
     }
-    cda["schematron_evidence"] = summary
+    cda["schematron_evidence"] = json_object(summary)
     return summary

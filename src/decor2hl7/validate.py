@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from .i18n import message as _msg
-
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import xml.etree.ElementTree as ET
 
 from .contracts import NormalizedRecord
 from .domain import accepted_values, logical_values
-from .i18n import Translator
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-import xml.etree.ElementTree as ET
+from .i18n import Translator, message as _msg
 
 from .assertions import evaluate as evaluate_assertion
 from .bindings import (
@@ -185,11 +184,15 @@ def check_site(site: Mapping[str, Any], cda: Mapping[str, Any] | None = None) ->
     return errors
 
 
-def check_config(
-    model: Mapping[str, Any], cda: Mapping[str, Any], csv_mapping: Mapping[str, Any],
-    cda_mapping: Mapping[str, Any], codes_mapping: Mapping[str, Any] | None = None,
-    site: Mapping[str, Any] | None = None,
-    *, require_site_configuration: bool = True,
+@dataclass(frozen=True)
+class TargetClaims:
+    paths: Mapping[str, list[str]]
+    targets: set[str]
+    presence_only: Mapping[str, bool]
+
+
+def _mapping_shape_errors(
+    csv_mapping: Mapping[str, Any], cda_mapping: Mapping[str, Any],
 ) -> list[str]:
     errors: list[str] = []
     for label, mapping, parse in (
@@ -205,8 +208,14 @@ def check_config(
                 parse(raw)
             except ValueError as error:
                 errors.append(f"{label}: {path}: {error}")
-    if errors:
-        return errors
+    return errors
+
+
+def _mapping_identity_errors(
+    model: Mapping[str, Any], cda: Mapping[str, Any],
+    csv_mapping: Mapping[str, Any], cda_mapping: Mapping[str, Any],
+) -> list[str]:
+    errors: list[str] = []
     model_identity = model.get("meta", {})
     expected_identity = {
         "dataset_id": model_identity.get("dataset_id"),
@@ -285,6 +294,14 @@ def check_config(
                     f"cda-mapping: field_reviews[{path!r}] is intentionally "
                     "unmapped but fields contains a mapping"
                 )
+    return errors
+
+
+def _target_field_errors(
+    model: Mapping[str, Any], cda: Mapping[str, Any],
+    cda_mapping: Mapping[str, Any], site: Mapping[str, Any] | None,
+) -> tuple[list[str], TargetClaims]:
+    errors: list[str] = []
     targets = cda.get("targets", {})
     datapoints = cda.get("datapoints", {})
     structures_by_id = {
@@ -488,8 +505,17 @@ def check_config(
             ):
                 if not identifier_root_for_target(cda_target_name, target, site):
                     errors.append(f"cda-mapping: {path} -> {target_name} is an II without a fixed/configured root")
+    return errors, TargetClaims(claims, configured_targets, configured_target_modes)
+
+
+def _construction_errors(
+    cda: Mapping[str, Any], cda_mapping: Mapping[str, Any],
+    site: Mapping[str, Any] | None, claims: TargetClaims,
+) -> list[str]:
+    errors: list[str] = []
+    targets = cda.get("targets", {})
     for target_name, problems in unavoidable_targets_problems(
-        cda, configured_target_modes,
+        cda, claims.presence_only,
     ).items():
         for problem in problems:
             errors.append(
@@ -508,8 +534,8 @@ def check_config(
         )
     }
     declared_site_targets = site_requirement_targets(cda, cda_mapping)
-    supplied_targets = configured_targets | site_targets | declared_site_targets
-    for target_name in sorted(configured_targets | declared_site_targets):
+    supplied_targets = claims.targets | site_targets | declared_site_targets
+    for target_name in sorted(claims.targets | declared_site_targets):
         for required_target in map(
             str, targets.get(target_name, {}).get("non_null_requires", [])
         ):
@@ -520,10 +546,19 @@ def check_config(
                     f"cda-mapping: target {target_name} requires a non-null "
                     f"companion at {required_target}"
                 )
-    for target_name, paths in sorted(claims.items()):
+    for target_name, paths in sorted(claims.paths.items()):
         covered = covered_shared_claims(cda_mapping).get(target_name, set())
         if len(paths) > 1 and covered != set(paths):
             errors.append(f"cda-mapping: target {target_name} is assigned by multiple model fields without an explicit rule: " + ", ".join(sorted(paths)))
+    return errors
+
+
+def _input_mapping_errors(
+    model: Mapping[str, Any], csv_mapping: Mapping[str, Any],
+    codes_mapping: Mapping[str, Any] | None,
+) -> list[str]:
+    errors: list[str] = []
+    fields = set(model.get("fields", {}))
     for path, value in csv_mapping.get("fields", {}).items():
         if value is not None and mapping_locator(value) is None:
             errors.append(f"csv-mapping: {path} must be SOURCE:COLUMN, a locator object, or null")
@@ -579,6 +614,23 @@ def check_config(
                     and not explicit_unbound_code
                 ):
                     errors.append(f"codes-mapping: {path} maps {raw!r} to unknown canonical value {value!r}")
+    return errors
+
+
+def check_config(
+    model: Mapping[str, Any], cda: Mapping[str, Any], csv_mapping: Mapping[str, Any],
+    cda_mapping: Mapping[str, Any], codes_mapping: Mapping[str, Any] | None = None,
+    site: Mapping[str, Any] | None = None,
+    *, require_site_configuration: bool = True,
+) -> list[str]:
+    errors = _mapping_shape_errors(csv_mapping, cda_mapping)
+    if errors:
+        return errors
+    errors.extend(_mapping_identity_errors(model, cda, csv_mapping, cda_mapping))
+    target_errors, claims = _target_field_errors(model, cda, cda_mapping, site)
+    errors.extend(target_errors)
+    errors.extend(_construction_errors(cda, cda_mapping, site, claims))
+    errors.extend(_input_mapping_errors(model, csv_mapping, codes_mapping))
     if site is not None:
         errors.extend(check_site(site, cda))
         site_cda = site.get("cda", {})
@@ -621,7 +673,9 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
     locations: dict[str, Mapping[str, Any]] = {}
     def walk(nodes: list[Mapping[str, Any]], prefix: tuple[int, ...] = ()) -> None:
         for index, node in enumerate(nodes):
-            here = prefix + (index,); key = ".".join(map(str, here)); locations[key] = node
+            here = prefix + (index,)
+            key = ".".join(map(str, here))
+            locations[key] = node
             prohibited = str(node.get("conformance") or "").upper() == "NP"
             if prohibited and (node.get("mandatory") or int(node.get("min") or 0) > 0):
                 errors.append(f"compiled CDA node {key} is NP but also required")
@@ -650,7 +704,8 @@ def verify_compiled_cda(cda: Mapping[str, Any]) -> list[str]:
                         + ", ".join(invalid)
                     )
             for attr_index, attr in enumerate(node.get("attributes", [])):
-                attr_key = ".".join(map(str, here + (100000 + attr_index,))); locations[attr_key] = attr
+                attr_key = ".".join(map(str, here + (100000 + attr_index,)))
+                locations[attr_key] = attr
                 if attr.get("optional") is False and attr.get("value") is None and not attr.get("targets"):
                     errors.append(f"compiled CDA required attribute {attr_key} has neither fixed value nor target")
             walk(list(node.get("children", [])), here)
@@ -702,34 +757,37 @@ def _problem(severity: str, path: str, message: str) -> dict[str, str]:
     return {"severity": severity, "path": path, "message": message}
 
 
-def validate_record(record: Mapping[str, Any], model: Mapping[str, Any]) -> list[dict[str, str]]:
-    problems = list(record.get("problems", []))
+def _occurrence_values(
+    record: Mapping[str, Any], path: str, field: Mapping[str, Any],
+) -> list[tuple[str, Any, Mapping[str, Any]]]:
+    chain = list(field.get("repeat_chain") or ([] if not field.get("repeat") else [field.get("repeat")]))
+    if not chain:
+        scope = record.get("values", {})
+        return [(path, scope.get(path), scope)]
+    out: list[tuple[str, Any, Mapping[str, Any]]] = []
+    def walk(instances: Mapping[str, Any], depth: int, coords: tuple[int, ...]) -> None:
+        rows = instances.get(str(chain[depth]), []) if isinstance(instances, Mapping) else []
+        for index, row in enumerate(rows if isinstance(rows, list) else []):
+            current = coords + (index,)
+            if not isinstance(row, Mapping):
+                out.append((path + "".join(f"[{i}]" for i in current), None, {}))
+                continue
+            if depth == len(chain) - 1:
+                scope = row.get("values", {})
+                out.append((
+                    path + "".join(f"[{i}]" for i in current),
+                    scope.get(path), scope,
+                ))
+            else:
+                walk(row.get("instances", {}), depth + 1, current)
+    walk(record.get("instances", {}), 0, ())
+    return out
 
-    def occurrence_values(
-        path: str, field: Mapping[str, Any],
-    ) -> list[tuple[str, Any, Mapping[str, Any]]]:
-        chain = list(field.get("repeat_chain") or ([] if not field.get("repeat") else [field.get("repeat")]))
-        if not chain:
-            scope = record.get("values", {})
-            return [(path, scope.get(path), scope)]
-        out: list[tuple[str, Any, Mapping[str, Any]]] = []
-        def walk(instances: Mapping[str, Any], depth: int, coords: tuple[int, ...]) -> None:
-            rows = instances.get(str(chain[depth]), []) if isinstance(instances, Mapping) else []
-            for index, row in enumerate(rows if isinstance(rows, list) else []):
-                current = coords + (index,)
-                if not isinstance(row, Mapping):
-                    out.append((path + "".join(f"[{i}]" for i in current), None, {})); continue
-                if depth == len(chain) - 1:
-                    scope = row.get("values", {})
-                    out.append((
-                        path + "".join(f"[{i}]" for i in current),
-                        scope.get(path), scope,
-                    ))
-                else:
-                    walk(row.get("instances", {}), depth + 1, current)
-        walk(record.get("instances", {}), 0, ())
-        return out
 
+def _group_problems(
+    record: Mapping[str, Any], model: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    problems: list[dict[str, str]] = []
     groups = model.get("groups", {})
     for group_path, group in groups.items():
         if not group.get("repeating"):
@@ -781,8 +839,71 @@ def validate_record(record: Mapping[str, Any], model: Mapping[str, Any]) -> list
 
         check_group(record, 0, "")
 
+    return problems
+
+
+def _value_problems(
+    item_path: str, item: Any, field: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    problems: list[dict[str, str]] = []
+    if isinstance(item, Mapping) and item.get("nullFlavor"):
+        problems.append(_problem("warning", item_path, f"represented as nullFlavor {item['nullFlavor']}"))
+        return problems
+    numeric_values: list[tuple[str, int | float]] = []
+    if str(field.get("type") or "") == "quantity" and isinstance(item, Mapping):
+        if "value" in item and set(item) <= {"value", "unit"}:
+            value = item.get("value")
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                numeric_values.append((item_path, value))
+            else:
+                problems.append(_problem("error", item_path, "quantity value is not numeric"))
+        elif set(item) <= {"low", "high"} and set(item) == {"low", "high"}:
+            bounds: dict[str, int | float] = {}
+            for label in ("low", "high"):
+                bound = item.get(label)
+                value = bound.get("value") if isinstance(bound, Mapping) else None
+                if (
+                    isinstance(bound, Mapping)
+                    and set(bound) <= {"value", "unit"}
+                    and isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                ):
+                    bounds[label] = value
+                    numeric_values.append((f"{item_path}.{label}", value))
+                else:
+                    problems.append(_problem(
+                        "error", f"{item_path}.{label}",
+                        "quantity range bound is not a numeric quantity",
+                    ))
+            if set(bounds) == {"low", "high"} and bounds["low"] > bounds["high"]:
+                problems.append(_problem(
+                    "error", item_path, "quantity range low exceeds high",
+                ))
+        else:
+            problems.append(_problem(
+                "error", item_path,
+                "quantity must contain value, or low and high",
+            ))
+    elif isinstance(item, (int, float)) and not isinstance(item, bool):
+        numeric_values.append((item_path, item))
+    for numeric_path, numeric in numeric_values:
+        if field.get("min_value") is not None and numeric < field["min_value"]:
+            problems.append(_problem("error", numeric_path, f"{numeric} is below minimum {field['min_value']}"))
+        if field.get("max_value") is not None and numeric > field["max_value"]:
+            problems.append(_problem("error", numeric_path, f"{numeric} is above maximum {field['max_value']}"))
+    if isinstance(item, str):
+        if field.get("min_length") is not None and len(item) < field["min_length"]:
+            problems.append(_problem("error", item_path, "value is shorter than minimum length"))
+        if field.get("max_length") is not None and len(item) > field["max_length"]:
+            problems.append(_problem("error", item_path, "value is longer than maximum length"))
+    return problems
+
+
+def validate_record(record: Mapping[str, Any], model: Mapping[str, Any]) -> list[dict[str, str]]:
+    problems = list(record.get("problems", []))
+    problems.extend(_group_problems(record, model))
     for path, field in model.get("fields", {}).items():
-        occurrences = occurrence_values(path, field)
+        occurrences = _occurrence_values(record, path, field)
         if not occurrences and field.get("required") and not field.get("repeat_chain"):
             problems.append(_problem("error", path, "required field is absent after normalization"))
             continue
@@ -797,61 +918,14 @@ def validate_record(record: Mapping[str, Any], model: Mapping[str, Any]) -> list
         if maximum is not None and not field.get("repeat_chain") and len(check_values) > int(maximum):
             problems.append(_problem("error", path, f"{len(check_values)} values exceed maximum {maximum}"))
         for item_path, item in check_values:
-            if isinstance(item, Mapping) and item.get("nullFlavor"):
-                problems.append(_problem("warning", item_path, f"represented as nullFlavor {item['nullFlavor']}")); continue
-            numeric_values: list[tuple[str, int | float]] = []
-            if str(field.get("type") or "") == "quantity" and isinstance(item, Mapping):
-                if "value" in item and set(item) <= {"value", "unit"}:
-                    value = item.get("value")
-                    if isinstance(value, (int, float)) and not isinstance(value, bool):
-                        numeric_values.append((item_path, value))
-                    else:
-                        problems.append(_problem("error", item_path, "quantity value is not numeric"))
-                elif set(item) <= {"low", "high"} and set(item) == {"low", "high"}:
-                    bounds: dict[str, int | float] = {}
-                    for label in ("low", "high"):
-                        bound = item.get(label)
-                        value = bound.get("value") if isinstance(bound, Mapping) else None
-                        if (
-                            isinstance(bound, Mapping)
-                            and set(bound) <= {"value", "unit"}
-                            and isinstance(value, (int, float))
-                            and not isinstance(value, bool)
-                        ):
-                            bounds[label] = value
-                            numeric_values.append((f"{item_path}.{label}", value))
-                        else:
-                            problems.append(_problem(
-                                "error", f"{item_path}.{label}",
-                                "quantity range bound is not a numeric quantity",
-                            ))
-                    if set(bounds) == {"low", "high"} and bounds["low"] > bounds["high"]:
-                        problems.append(_problem(
-                            "error", item_path, "quantity range low exceeds high",
-                        ))
-                else:
-                    problems.append(_problem(
-                        "error", item_path,
-                        "quantity must contain value, or low and high",
-                    ))
-            elif isinstance(item, (int, float)) and not isinstance(item, bool):
-                numeric_values.append((item_path, item))
-            for numeric_path, numeric in numeric_values:
-                if field.get("min_value") is not None and numeric < field["min_value"]:
-                    problems.append(_problem("error", numeric_path, f"{numeric} is below minimum {field['min_value']}"))
-                if field.get("max_value") is not None and numeric > field["max_value"]:
-                    problems.append(_problem("error", numeric_path, f"{numeric} is above maximum {field['max_value']}"))
-            if isinstance(item, str):
-                if field.get("min_length") is not None and len(item) < field["min_length"]:
-                    problems.append(_problem("error", item_path, "value is shorter than minimum length"))
-                if field.get("max_length") is not None and len(item) > field["max_length"]:
-                    problems.append(_problem("error", item_path, "value is longer than maximum length"))
+            problems.extend(_value_problems(item_path, item, field))
     return problems
 
 def validate_records(records: list[NormalizedRecord], model: Mapping[str, Any]) -> dict[str, int]:
     counts = {"records": len(records), "errors": 0, "warnings": 0}
     for record in records:
-        problems = validate_record(record, model); record["problems"] = problems
+        problems = validate_record(record, model)
+        record["problems"] = problems
         counts["errors"] += sum(problem["severity"] == "error" for problem in problems)
         counts["warnings"] += sum(problem["severity"] == "warning" for problem in problems)
     return counts

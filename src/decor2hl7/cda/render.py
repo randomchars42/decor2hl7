@@ -1236,43 +1236,11 @@ def _render_node(
     )
 
 
-def _render_node_once(
-    node: Mapping[str, Any], parent: ET.Element | None, assignments: Mapping[str, Any],
-    target_defaults: Mapping[str, Any],
-    active_locations: set[tuple[int, ...]], cda: Mapping[str, Any],
-    location: tuple[int, ...], null_flavor: str, problems: list[str],
-    assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]],
-    occurrence: tuple[int, ...],
-    physical_values: Mapping[tuple[int, ...], tuple[Any, Mapping[str, Any]]],
-) -> list[ET.Element]:
-    required = _has_required_content(node)
-    source = node.get("origin", {})
-    node_identity = str(
-        source.get("path") or node.get("name") or "CDA element"
-    )
-    if source.get("template_id"):
-        node_identity += f" [{source.get('template_id')}@{source.get('template_effective_date') or 'dynamic'}]"
-
-    element = (
-        ET.Element(_qname(
-            str(node.get("name") or "element"),
-            str(node.get("namespace_uri") or "") or None,
-        ))
-        if parent is None
-        else ET.SubElement(parent, _qname(
-            str(node.get("name") or "element"),
-            str(node.get("namespace_uri") or "") or None,
-        ))
-    )
-    if node.get("xsi_type"):
-        element.set(f"{{{XSI}}}type", str(node["xsi_type"]))
-
-    validation_rules = list(node.get("validation_rules", []))
-    if validation_rules:
-        assertion_contexts.append((
-            element, validation_rules, dict(node.get("lets", {}))
-        ))
-
+def _render_attributes(
+    element: ET.Element, node: Mapping[str, Any], cda: Mapping[str, Any],
+    assignments: Mapping[str, Any], target_defaults: Mapping[str, Any],
+    occurrence: tuple[int, ...], node_identity: str,
+) -> None:
     conditional_fixed_attributes = {
         str(attr.get("name") or "")
         for attr in node.get("attributes", [])
@@ -1292,9 +1260,6 @@ def _render_node_once(
                 ),
                 str(value),
             )
-    if node.get("fixed_text") is not None:
-        element.text = str(node.get("fixed_text"))
-
     node_representation: Mapping[str, Any] = next(
         (
             cda.get("targets", {}).get(str(name), {}).get("value_representation")
@@ -1367,6 +1332,133 @@ def _render_node_once(
                 ),
                 str(value),
             )
+
+
+
+def _complete_required_value(
+    element: ET.Element, node: Mapping[str, Any], cda: Mapping[str, Any], *,
+    required: bool, assigned: Any, default: Any, child_count: int,
+    null_flavor: str, node_identity: str, problems: list[str],
+) -> None:
+    completion_target = next(
+        (
+            cda.get("targets", {}).get(str(name), {})
+            for name in node.get("targets", [])
+            if cda.get("targets", {}).get(str(name), {}).get(
+                "value_representation"
+            )
+        ),
+        None,
+    )
+    if (
+        required
+        and assigned is None
+        and default is None
+        and len(node.get("codes") or []) != 1
+        and child_count
+        and completion_target is not None
+        and completion_target.get("permits_null_flavor")
+    ):
+        legal = {
+            str(value)
+            for value in completion_target.get("null_flavor_exceptions", [])
+            if str(value) in NULL_FLAVORS
+        }
+        # OTH and UNC are the nullFlavors whose datatype rules can retain
+        # originalText-like payload. Prefer OTH because it denotes locally
+        # described content; never invent a payload-bearing fallback unless
+        # the bound profile explicitly admits it.
+        compatible = next(
+            (
+                value for value in ORIGINAL_TEXT_NULL_FLAVOR_PREFERENCE
+                if value in legal
+            ),
+            None,
+        )
+        if compatible is not None:
+            _write_value(
+                element,
+                {"nullFlavor": compatible},
+                completion_target,
+                node,
+                problems,
+                cda.get("terminology_constraints", {}),
+            )
+
+    if (
+        required and assigned is None and default is None
+        and not child_count and not element.attrib and not element.text
+    ):
+        if node.get("mandatory") or str(node.get("conformance") or "").upper() == "M":
+            raise ValueError(
+                f"mandatory CDA element {node_identity} has no fixed, mapped, "
+                "or default value and cannot use nullFlavor"
+            )
+        if node.get("children") and not _permits_null_flavor(node):
+            raise ValueError(
+                f"required complex CDA element {node_identity} has no fixed, "
+                "mapped, or child value; configure a required leaf instead"
+            )
+        # Scalar CDA values have always used the configured required-value
+        # nullFlavor fallback.  A complex structural value is stricter: its
+        # compiled datatype/model expansion must expose @nullFlavor before the
+        # renderer may use it in place of required child content.
+        target = completion_target
+        if target is not None:
+            selected_flavor = resolve_required_unmapped_null_flavor(
+                target, null_flavor,
+            )
+            _write_value(
+                element, {"nullFlavor": selected_flavor}, target, node,
+                problems,
+                cda.get("terminology_constraints", {}),
+            )
+        else:
+            element.set("nullFlavor", null_flavor)
+
+
+def _render_node_once(
+    node: Mapping[str, Any], parent: ET.Element | None, assignments: Mapping[str, Any],
+    target_defaults: Mapping[str, Any],
+    active_locations: set[tuple[int, ...]], cda: Mapping[str, Any],
+    location: tuple[int, ...], null_flavor: str, problems: list[str],
+    assertion_contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]],
+    occurrence: tuple[int, ...],
+    physical_values: Mapping[tuple[int, ...], tuple[Any, Mapping[str, Any]]],
+) -> list[ET.Element]:
+    required = _has_required_content(node)
+    source = node.get("origin", {})
+    node_identity = str(
+        source.get("path") or node.get("name") or "CDA element"
+    )
+    if source.get("template_id"):
+        node_identity += f" [{source.get('template_id')}@{source.get('template_effective_date') or 'dynamic'}]"
+
+    element = (
+        ET.Element(_qname(
+            str(node.get("name") or "element"),
+            str(node.get("namespace_uri") or "") or None,
+        ))
+        if parent is None
+        else ET.SubElement(parent, _qname(
+            str(node.get("name") or "element"),
+            str(node.get("namespace_uri") or "") or None,
+        ))
+    )
+    if node.get("xsi_type"):
+        element.set(f"{{{XSI}}}type", str(node["xsi_type"]))
+
+    validation_rules = list(node.get("validation_rules", []))
+    if validation_rules:
+        assertion_contexts.append((
+            element, validation_rules, dict(node.get("lets", {}))
+        ))
+
+    _render_attributes(
+        element, node, cda, assignments, target_defaults, occurrence, node_identity,
+    )
+    if node.get("fixed_text") is not None:
+        element.text = str(node.get("fixed_text"))
 
     assigned, target_name = _value_for_node(node, assignments)
     physical_target: Mapping[str, Any] | None = None
@@ -1465,81 +1557,11 @@ def _render_node_once(
             )
         )
 
-    completion_target = next(
-        (
-            cda.get("targets", {}).get(str(name), {})
-            for name in node.get("targets", [])
-            if cda.get("targets", {}).get(str(name), {}).get(
-                "value_representation"
-            )
-        ),
-        None,
+    _complete_required_value(
+        element, node, cda, required=required, assigned=assigned, default=default,
+        child_count=child_count, null_flavor=null_flavor,
+        node_identity=node_identity, problems=problems,
     )
-    if (
-        required
-        and assigned is None
-        and default is None
-        and len(node.get("codes") or []) != 1
-        and child_count
-        and completion_target is not None
-        and completion_target.get("permits_null_flavor")
-    ):
-        legal = {
-            str(value)
-            for value in completion_target.get("null_flavor_exceptions", [])
-            if str(value) in NULL_FLAVORS
-        }
-        # OTH and UNC are the nullFlavors whose datatype rules can retain
-        # originalText-like payload. Prefer OTH because it denotes locally
-        # described content; never invent a payload-bearing fallback unless
-        # the bound profile explicitly admits it.
-        compatible = next(
-            (
-                value for value in ORIGINAL_TEXT_NULL_FLAVOR_PREFERENCE
-                if value in legal
-            ),
-            None,
-        )
-        if compatible is not None:
-            _write_value(
-                element,
-                {"nullFlavor": compatible},
-                completion_target,
-                node,
-                problems,
-                cda.get("terminology_constraints", {}),
-            )
-
-    if (
-        required and assigned is None and default is None
-        and not child_count and not element.attrib and not element.text
-    ):
-        if node.get("mandatory") or str(node.get("conformance") or "").upper() == "M":
-            raise ValueError(
-                f"mandatory CDA element {node_identity} has no fixed, mapped, "
-                "or default value and cannot use nullFlavor"
-            )
-        if node.get("children") and not _permits_null_flavor(node):
-            raise ValueError(
-                f"required complex CDA element {node_identity} has no fixed, "
-                "mapped, or child value; configure a required leaf instead"
-            )
-        # Scalar CDA values have always used the configured required-value
-        # nullFlavor fallback.  A complex structural value is stricter: its
-        # compiled datatype/model expansion must expose @nullFlavor before the
-        # renderer may use it in place of required child content.
-        target = completion_target
-        if target is not None:
-            selected_flavor = resolve_required_unmapped_null_flavor(
-                target, null_flavor,
-            )
-            _write_value(
-                element, {"nullFlavor": selected_flavor}, target, node,
-                problems,
-                cda.get("terminology_constraints", {}),
-            )
-        else:
-            element.set("nullFlavor", null_flavor)
     return [element]
 
 

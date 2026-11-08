@@ -49,6 +49,17 @@ the resources and reviewed overlays that belong to one build. `crawl_complete`
 means discovery has settled; `build_ready` means mandatory compiler inputs are
 present. These states are independent.
 
+Root acquisition, build closure, evidence closure and checkpoint publication are
+separate procedural stages. Explicit crawl state owns pending/visited identities,
+roles and the shared HTTP request budget. Checkpoints observe that same state
+on normal completion, budget exhaustion and interruption; optional evidence
+never becomes a build dependency merely through shared caching.
+
+Artifact fetching separates checksum-checked cache admission, network attempts
+and representation storage. One request-budget increment means one actual HTTP
+attempt. Expansion evidence retains its own completeness state when a cached
+analysis definition remains usable.
+
 `fetch --offline` makes no HTTP requests. It validates deterministic cache
 files, repairs reconstructible manifest metadata, and records uncached
 references as retryable unavailable dependencies.
