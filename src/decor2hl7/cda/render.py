@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import re
 import xml.etree.ElementTree as ET
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ..assertions import validate_contexts
 from ..bindings import (
@@ -880,10 +880,18 @@ def _complete_linked_narratives(
         )
 
 
-def _coded_original_text(value: Any) -> Any:
+def _coded_original_text(
+    value: Any, *, rendered_attributes: Sequence[str], preserve_redundant: bool,
+) -> Any:
     """Preserve occurrence shape while extracting a coded value's wording."""
     if isinstance(value, list):
-        return [_coded_original_text(item) for item in value]
+        return [
+            _coded_original_text(
+                item, rendered_attributes=rendered_attributes,
+                preserve_redundant=preserve_redundant,
+            )
+            for item in value
+        ]
     if not isinstance(value, Mapping):
         return None
     flavor = coded_null_flavor(value)
@@ -897,7 +905,21 @@ def _coded_original_text(value: Any) -> Any:
         return None
     for key in ("raw", "canonical", "displayName", "display"):
         if value.get(key) not in (None, ""):
-            return value[key]
+            wording = value[key]
+            if (
+                not preserve_redundant
+                and not flavor
+                and "code" in rendered_attributes
+                and value.get("code") not in (None, "")
+                and any(
+                    str(wording) == str(value[attribute])
+                    for attribute in ("code", "displayName")
+                    if attribute in rendered_attributes
+                    and value.get(attribute) not in (None, "")
+                )
+            ):
+                return None
+            return wording
     return None
 
 
@@ -922,10 +944,21 @@ def _complete_value_companions(
                 None,
             )
             if parent_value is not None:
+                parent_target = next((
+                    targets[str(name)] for name in node.get("targets", [])
+                    if str(name) in assignments and str(name) in targets
+                ), {})
+                representation = parent_target.get("value_representation") or {}
                 for child in node.get("children", []):
                     if child.get("content_role") != "coded_original_text":
                         continue
-                    value = _coded_original_text(parent_value)
+                    value = _coded_original_text(
+                        parent_value,
+                        rendered_attributes=representation.get("attributes", []),
+                        preserve_redundant=bool(
+                            child.get("mandatory") or int(child.get("min") or 0) >= 1
+                        ),
+                    )
                     if value is None:
                         continue
                     for raw_name in child.get("targets", []):

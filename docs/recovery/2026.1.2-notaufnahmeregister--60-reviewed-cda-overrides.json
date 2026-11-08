@@ -1,6 +1,6 @@
 {
-  "version": 5,
-  "decision": "DEC-038, DEC-043, DEC-044, DEC-045, DEC-046",
+  "version": 7,
+  "decision": "DEC-038, DEC-043, DEC-044, DEC-045, DEC-046, DEC-047, DEC-048",
   "release": {
     "key": "2026.1.2",
     "date": "2026-04-27T18:50:33"
@@ -11,14 +11,14 @@
     "effective_date": "2026-03-25T00:00:00"
   },
   "base": "model/<release>/<transaction>/cda-mapping.proposed.json",
-  "merge_semantics": "Shallow-merge field_overrides into fields, including reviewed replacements whose selected target set differs from the generated proposal; merge narrative_overrides into narratives, structure_overrides into structures, field_review_overrides into field_reviews, target_default_overrides into target_defaults, and site_requirement_overrides into site_requirements; preserve all other generated keys.",
+  "merge_semantics": "Shallow-merge field_overrides into fields, including explicit nulls that suspend generated selections and reviewed replacements whose selected target set differs from the generated proposal; merge narrative_overrides into narratives, structure_overrides into structures, field_review_overrides into field_reviews, target_default_overrides into target_defaults, and site_requirement_overrides into site_requirements; preserve all other generated keys.",
   "expected": {
     "dataset_fields": 128,
     "generated_mapped_fields": 90,
-    "reviewed_mapped_fields": 121,
-    "reviewed_narrative_fields": 2,
-    "field_override_count": 38,
-    "narrative_target_count": 1,
+    "reviewed_mapped_fields": 118,
+    "reviewed_narrative_fields": 5,
+    "field_override_count": 41,
+    "narrative_target_count": 2,
     "structure_override_count": 3,
     "field_review_override_count": 5,
     "target_default_override_count": 6,
@@ -53,10 +53,7 @@
       "hauptkostentrager.name",
       "HeaderParticipantKostentraeger.scopingOrganization::OrganizationElements.name"
     ],
-    "hauptkostentrager.versicherungsverhaltnis.identifikation": [
-      "hauptkostentrager.participant_templateId_root_1.2.276.0.76.3.1.195.10.4.associatedEntity.id",
-      "HeaderParticipantKostentraeger.participant_templateId_root_1.2.276.0.76.10.2022.associatedEntity.id"
-    ],
+    "hauptkostentrager.versicherungsverhaltnis.identifikation": "HeaderParticipantKostentraeger.participant_templateId_root_1.2.276.0.76.10.2022.associatedEntity.id",
     "hauptkostentrager.versicherungsverhaltnis.weitere_versichertenstatuskodierung": "HeaderParticipantKostentraeger.translation",
     "administrative_aufnahmeinformationen.aufnahmezeitpunkt": [
       "CDAEncompassingEncounter.low",
@@ -329,7 +326,10 @@
         "type": "narrative",
         "prefix": "Kodierte Begründung: "
       }
-    }
+    },
+    "dokumentationsinformationen.berechnete_zeitintervalle.zeit_bis_zum_export": null,
+    "dokumentationsinformationen.datenbereitstellung.name_des_edis": null,
+    "dokumentationsinformationen.datenbereitstellung.version_des_edis": null
   },
   "narrative_overrides": {
     "Relevantdiagnostictestsorlaboratorydata.text": {
@@ -350,6 +350,34 @@
           "reason": "Preserve each reviewed X-ray examination-region occurrence in the Diagnostics section narrative without joining occurrences or coalescing them with structured diagnostic entries.",
           "decision": "DEC-044",
           "reviewed_at": "2026-09-15"
+        }
+      ]
+    },
+    "addendum-dokumentationsinformationen.text": {
+      "blocks": [
+        {
+          "type": "fact",
+          "source": "dokumentationsinformationen.berechnete_zeitintervalle.zeit_bis_zum_export",
+          "label": "Zeit bis zum Export",
+          "reason": "Preserve this EDIS datum in the Addendum narrative while its rejected structured mapping is suspended pending AKTIN clarification; see the identity-pinned suspended CDA mappings list.",
+          "decision": "DEC-048",
+          "reviewed_at": "2026-11-03"
+        },
+        {
+          "type": "fact",
+          "source": "dokumentationsinformationen.datenbereitstellung.name_des_edis",
+          "label": "Name des EDIS",
+          "reason": "Preserve this EDIS datum in the Addendum narrative while its rejected structured mapping is suspended pending AKTIN clarification; see the identity-pinned suspended CDA mappings list.",
+          "decision": "DEC-048",
+          "reviewed_at": "2026-11-03"
+        },
+        {
+          "type": "fact",
+          "source": "dokumentationsinformationen.datenbereitstellung.version_des_edis",
+          "label": "Version des EDIS",
+          "reason": "Preserve this EDIS datum in the Addendum narrative while its rejected structured mapping is suspended pending AKTIN clarification; see the identity-pinned suspended CDA mappings list.",
+          "decision": "DEC-048",
+          "reviewed_at": "2026-11-03"
         }
       ]
     }

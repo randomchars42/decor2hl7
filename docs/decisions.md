@@ -307,6 +307,29 @@ the hash-bound recovery overlay. See
 [`topics/mapping-and-construction.md`](topics/mapping-and-construction.md#declarative-transforms),
 and [`reference-transaction.md`](reference-transaction.md#other-reviewed-construction).
 
+### DEC-047 — Receiver-compatible payer identity and redundant coded wording
+
+The reference insurance number is mapped only to the generic payer's explicitly
+declared `associatedEntity/id`; the rejected duplicate in the Hauptkostenträger
+participant is omitted. Automatic optional `originalText` also omits exact
+duplicates of an emitted code or display name, while distinct wording, uncoded
+values, required companions and explicit mappings remain. The unchanged
+provided receiver remains the acceptance target. See
+[`reference-transaction.md`](reference-transaction.md#other-reviewed-construction)
+and [`topics/cda-compilation-and-validation.md`](topics/cda-compilation-and-validation.md#examples-fixed-values-and-construction-roles).
+
+### DEC-048 — Suspend rejected EDIS entries while preserving narrative facts
+
+For the selected reference profile, suspend the structured export-delay, EDIS
+name, and EDIS version mappings pending AKTIN clarification. Preserve the facts
+as reviewed Addendum narrative blocks, keep explicit null recovery overrides,
+and retain exact former mappings and attachment identities in the restoration
+list. Reintroduction requires confirmed profile placement and validation against
+the unchanged intended receiver. The discharge-timestamp entries and runtime
+replacement handling retain their existing rules. See
+[`reference-transaction.md`](reference-transaction.md#suspended-edis-mappings)
+and [`topics/mapping-and-construction.md`](topics/mapping-and-construction.md#narrative-presentation).
+
 ## Runtime and delivery
 
 ### DEC-034 — Bounded receiver transport adapters

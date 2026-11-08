@@ -757,6 +757,52 @@ class CdaDatatypeTests(unittest.TestCase):
             assert original is not None
             self.assertEqual(original.text, "Reviewed wording")
 
+            for coded in (
+                {"raw": "X", "code": "X", "codeSystem": "1.2.3"},
+                {
+                    "raw": "Example", "code": "X", "codeSystem": "1.2.3",
+                    "displayName": "Example",
+                },
+            ):
+                with self.subTest(coded=coded):
+                    record["values"]["coded"] = coded
+                    payload, problems = cda.emit(
+                        record, model, compiled,
+                        {"fields": {"coded": value_name}}, {},
+                    )
+                    self.assertEqual(problems, [])
+                    value = find_required(ET.fromstring(payload), f".//{{{HL7}}}value")
+                    self.assertEqual(value.get("code"), "X")
+                    self.assertIsNone(value.find(f"{{{HL7}}}originalText"))
+
+            # An explicit reviewed text assignment still wins, even when it
+            # repeats the display name.
+            record["values"]["wording"] = "Example"
+            payload, problems = cda.emit(
+                record, model, compiled,
+                {"fields": {"coded": value_name, "wording": text_name}}, {},
+            )
+            self.assertEqual(problems, [])
+            self.assertEqual(
+                find_required(ET.fromstring(payload), f".//{{{HL7}}}originalText").text,
+                "Example",
+            )
+
+            source.write_text(source.read_text().replace(
+                'name="hl7:originalText" datatype="ST" minimumMultiplicity="0"',
+                'name="hl7:originalText" datatype="ST" minimumMultiplicity="1"',
+            ))
+            required = compile_cda([source], model)
+            required_value, _ = target_at(required, "/hl7:value")
+            payload, problems = cda.emit(
+                record, model, required, {"fields": {"coded": required_value}}, {},
+            )
+            self.assertEqual(problems, [])
+            self.assertEqual(
+                find_required(ET.fromstring(payload), f".//{{{HL7}}}originalText").text,
+                "Example",
+            )
+
     def test_compose_coded_value_combines_code_and_product_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "template.xml"
@@ -844,10 +890,7 @@ class CdaDatatypeTests(unittest.TestCase):
             self.assertEqual(code.get("code"), "12345678")
             self.assertEqual(code.get("codeSystem"), "1.2.276.0.76.4.6")
             self.assertEqual(code.get("displayName"), "Example medicine")
-            self.assertEqual(
-                find_required(code, "{urn:hl7-org:v3}originalText").text,
-                "Example medicine",
-            )
+            self.assertIsNone(code.find("{urn:hl7-org:v3}originalText"))
 
             payload, problems = cda.emit(
                 {

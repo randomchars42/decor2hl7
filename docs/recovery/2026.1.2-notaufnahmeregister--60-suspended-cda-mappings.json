@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "status": "suspended_pending_aktin_clarification",
+  "decision": "DEC-048",
+  "reviewed_at": "2026-11-03",
+  "release": {
+    "key": "2026.1.2",
+    "date": "2026-04-27T18:50:33"
+  },
+  "transaction": {
+    "key": "notaufnahmeregister--60",
+    "id": "2.16.840.1.113883.2.6.60.3.4.60",
+    "effective_date": "2026-03-25T00:00:00"
+  },
+  "identity": {
+    "model_sha256": "3900674c668a80e1ea98dd1c03b7ad1178b83ec5cec1f4dbc1841d223d106fb8",
+    "cda_sha256": "eb588098b44ad57aa154c96c3e4f3be6aaedbaa43eb4e38b344fc211a4ea1a7d"
+  },
+  "document_template": {
+    "id": "1.2.276.0.76.3.1.195.10.93",
+    "effective_date": "2026-03-25T11:04:07"
+  },
+  "parent_template": {
+    "id": "1.2.276.0.76.3.1.195.10.73",
+    "effective_date": "2024-08-15T11:08:15"
+  },
+  "reason": "The unchanged provided receiver rejects these structured Addendum entries under rule d54839e7-true-d54947e0; the current Addendum template declares only entries .10.75, .10.76 and .10.77, while the structural overview still lists the EDIS entries.",
+  "current_behavior": {
+    "fields": null,
+    "narrative_target": "addendum-dokumentationsinformationen.text",
+    "block_type": "fact",
+    "compiled_attachments": "Retained as inactive candidate evidence; no structured mapping selects these entries."
+  },
+  "evidence": {
+    "current_addendum": "https://aktin.art-decor.pub/aktin-cda-ig-20260427T185033/tmp-1.2.276.0.76.3.1.195.10.73-2024-08-15T110815.html",
+    "structural_overview": "https://aktin.art-decor.pub/aktin-cda-ig-20260427T185033/4b95b0b7-c65b-4343-95b0-b7c65b334377.html",
+    "transition_notes": "https://aktin.art-decor.pub/aktin-cda-ig-20260427T185033/ccf734e8-7a99-4430-b734-e87a99043099.html"
+  },
+  "reintroduction_requirements": [
+    "Obtain AKTIN confirmation of whether each datum belongs in the selected transition profile, and the exact parent, entry template revision and value location to use.",
+    "Resolve the discrepancy between the structural overview, current Addendum containment and the provided receiver rules; confirmation of an old leaf definition alone is insufficient.",
+    "Review the confirmed targets against the current release/transaction and model identities. Do not apply the original mappings blindly to a newer profile.",
+    "Replace the narrative-only blocks with the confirmed structured mappings, update the reviewed recovery overlay and mapping reports, then verify both exact local conformance and the unchanged intended receiver."
+  ],
+  "mappings": [
+    {
+      "source": "dokumentationsinformationen.berechnete_zeitintervalle.zeit_bis_zum_export",
+      "label": "Zeit bis zum Export",
+      "source_concept_id": "2.16.840.1.113883.2.6.60.3.2.9.21742",
+      "original_mapping": "zeit_bis_zum_export.value",
+      "original_target_identity": {
+        "cda_target": "zeit_bis_zum_export.value",
+        "source_key": "1.2.276.0.76.3.1.195.10.85@2024-05-24T00:00:00|PATH:hl7:observation/hl7:value",
+        "revisionless_source_key": "1.2.276.0.76.3.1.195.10.85|ID:|PATH:hl7:observation/hl7:value",
+        "template_id": "1.2.276.0.76.3.1.195.10.85",
+        "template_effective_date": "2024-05-24T00:00:00",
+        "element_id": "",
+        "path": "hl7:observation/hl7:value"
+      },
+      "original_attachment": {
+        "transaction_id": "2.16.840.1.113883.2.6.60.3.4.60",
+        "transaction_effective_date": "2026-03-25T00:00:00",
+        "document_template_id": "1.2.276.0.76.3.1.195.10.93",
+        "document_template_effective_date": "2026-03-25T11:04:07",
+        "parent_template_id": "1.2.276.0.76.3.1.195.10.73",
+        "parent_template_effective_date": "2024-08-15T11:08:15",
+        "parent_element_id": "2.16.840.1.113883.2.6.60.3.9.196",
+        "element_name": "hl7:entry",
+        "template_id": "1.2.276.0.76.3.1.195.10.85",
+        "template_effective_date": "2024-05-24T00:00:00",
+        "minimum_multiplicity": 0,
+        "maximum_multiplicity": 1,
+        "conformance": "R",
+        "reason": "Reviewed placement of Zeit bis zum Export in the open Addendum Dokumentationsinformationen section; the selected source concept has an equal FLN-134 association to this exact entry template."
+      },
+      "template_definition": "https://aktin.art-decor.pub/aktin-cda-ig-20260427T185033/tmp-1.2.276.0.76.3.1.195.10.85-2024-05-24T000000.html"
+    },
+    {
+      "source": "dokumentationsinformationen.datenbereitstellung.name_des_edis",
+      "label": "Name des EDIS",
+      "source_concept_id": "2.16.840.1.113883.2.6.60.3.2.9.21738",
+      "original_mapping": "name_des_edis.value",
+      "original_target_identity": {
+        "cda_target": "name_des_edis.value",
+        "source_key": "1.2.276.0.76.3.1.195.10.86@2024-05-24T00:00:00|PATH:hl7:observation/hl7:value",
+        "revisionless_source_key": "1.2.276.0.76.3.1.195.10.86|ID:|PATH:hl7:observation/hl7:value",
+        "template_id": "1.2.276.0.76.3.1.195.10.86",
+        "template_effective_date": "2024-05-24T00:00:00",
+        "element_id": "",
+        "path": "hl7:observation/hl7:value"
+      },
+      "original_attachment": {
+        "transaction_id": "2.16.840.1.113883.2.6.60.3.4.60",
+        "transaction_effective_date": "2026-03-25T00:00:00",
+        "document_template_id": "1.2.276.0.76.3.1.195.10.93",
+        "document_template_effective_date": "2026-03-25T11:04:07",
+        "parent_template_id": "1.2.276.0.76.3.1.195.10.73",
+        "parent_template_effective_date": "2024-08-15T11:08:15",
+        "parent_element_id": "2.16.840.1.113883.2.6.60.3.9.196",
+        "element_name": "hl7:entry",
+        "template_id": "1.2.276.0.76.3.1.195.10.86",
+        "template_effective_date": "2024-05-24T00:00:00",
+        "minimum_multiplicity": 0,
+        "maximum_multiplicity": 1,
+        "conformance": "R",
+        "reason": "Reviewed placement of Name des EDIS in the open Addendum Dokumentationsinformationen section; the selected source concept has an equal FLN-135 association to this exact entry template."
+      },
+      "template_definition": "https://aktin.art-decor.pub/aktin-cda-ig-20260427T185033/tmp-1.2.276.0.76.3.1.195.10.86-2024-05-24T000000.html"
+    },
+    {
+      "source": "dokumentationsinformationen.datenbereitstellung.version_des_edis",
+      "label": "Version des EDIS",
+      "source_concept_id": "2.16.840.1.113883.2.6.60.3.2.9.21740",
+      "original_mapping": "version_des_edis.value",
+      "original_target_identity": {
+        "cda_target": "version_des_edis.value",
+        "source_key": "1.2.276.0.76.3.1.195.10.87@2024-05-24T00:00:00|PATH:hl7:observation/hl7:value",
+        "revisionless_source_key": "1.2.276.0.76.3.1.195.10.87|ID:|PATH:hl7:observation/hl7:value",
+        "template_id": "1.2.276.0.76.3.1.195.10.87",
+        "template_effective_date": "2024-05-24T00:00:00",
+        "element_id": "",
+        "path": "hl7:observation/hl7:value"
+      },
+      "original_attachment": {
+        "transaction_id": "2.16.840.1.113883.2.6.60.3.4.60",
+        "transaction_effective_date": "2026-03-25T00:00:00",
+        "document_template_id": "1.2.276.0.76.3.1.195.10.93",
+        "document_template_effective_date": "2026-03-25T11:04:07",
+        "parent_template_id": "1.2.276.0.76.3.1.195.10.73",
+        "parent_template_effective_date": "2024-08-15T11:08:15",
+        "parent_element_id": "2.16.840.1.113883.2.6.60.3.9.196",
+        "element_name": "hl7:entry",
+        "template_id": "1.2.276.0.76.3.1.195.10.87",
+        "template_effective_date": "2024-05-24T00:00:00",
+        "minimum_multiplicity": 0,
+        "maximum_multiplicity": 1,
+        "conformance": "R",
+        "reason": "Reviewed placement of Version des EDIS in the open Addendum Dokumentationsinformationen section; the selected source concept has an equal FLN-136 association to this exact entry template."
+      },
+      "template_definition": "https://aktin.art-decor.pub/aktin-cda-ig-20260427T185033/tmp-1.2.276.0.76.3.1.195.10.87-2024-05-24T000000.html"
+    }
+  ]
+}

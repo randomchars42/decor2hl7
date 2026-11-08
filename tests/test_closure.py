@@ -132,6 +132,61 @@ class ReferenceClosureTests(unittest.TestCase):
             expected_cases = evidence["cases"]
             self.assertEqual({item["set_id"]["extension"] for item in delivered.values()}, set(expected_cases))
             self.assertTrue(all(item["document_version"] == 1 and item["status"] == "published" for item in delivered.values()))
+            ns = {"h": "urn:hl7-org:v3"}
+            for path in out_dir.glob("*.xml"):
+                document = ET.parse(path)
+                for participant in document.findall("h:participant", ns):
+                    template = participant.find("h:templateId", ns)
+                    assert template is not None
+                    if template.get("root") == "1.2.276.0.76.3.1.195.10.4":
+                        self.assertIsNone(participant.find("h:associatedEntity/h:id", ns))
+                    elif template.get("root") == "1.2.276.0.76.10.2022":
+                        self.assertIsNotNone(participant.find("h:associatedEntity/h:id", ns))
+                        self.assertIsNone(participant.find("h:associatedEntity/h:code/h:originalText", ns))
+                for observation in document.findall(".//h:observation", ns):
+                    template = observation.find("h:templateId", ns)
+                    if template is not None and template.get("root") in {
+                        "1.2.276.0.76.3.1.195.10.29", "1.2.276.0.76.10.4073",
+                    }:
+                        value = observation.find("h:value", ns)
+                        assert value is not None
+                        self.assertIsNotNone(value.get("code"))
+                        self.assertIsNone(value.find("h:originalText", ns))
+                for code in document.findall(".//h:manufacturedMaterial/h:code", ns):
+                    if code.get("code"):
+                        self.assertIsNone(code.find("h:originalText", ns))
+                template_ids = {
+                    item.get("root")
+                    for item in document.findall(".//h:templateId", ns)
+                }
+                for suffix in ("85", "86", "87"):
+                    self.assertNotIn(
+                        "1.2.276.0.76.3.1.195.10." + suffix, template_ids,
+                    )
+                for suffix in ("75", "76", "77"):
+                    self.assertIn(
+                        "1.2.276.0.76.3.1.195.10." + suffix, template_ids,
+                    )
+                addenda = [
+                    section for section in document.findall(".//h:section", ns)
+                    if any(
+                        item.get("root") == "1.2.276.0.76.3.1.195.10.73"
+                        for item in section.findall("h:templateId", ns)
+                    )
+                ]
+                self.assertEqual(len(addenda), 1)
+                narrative = addenda[0].find("h:text", ns)
+                assert narrative is not None
+                cells = [
+                    "".join(cell.itertext())
+                    for cell in narrative.findall(".//h:td", ns)
+                ]
+                for expected in (
+                    "Zeit bis zum Export", "180 Stunden",
+                    "Name des EDIS", "decor2hl7 Referenz-EDIS",
+                    "Version des EDIS", "2026.1",
+                ):
+                    self.assertEqual(cells.count(expected), 1, cells)
             run("run-source", "--since", "2026-01-01", "--send")
             self.assertEqual(state.load_state(root / "state")["documents"], delivered)
             self.assertEqual(len(list((bundle / "spool").rglob("*.xml"))), len(expected_cases))
@@ -413,15 +468,18 @@ class ReferenceClosureTests(unittest.TestCase):
 
         proposal_overridden_by_review = {
             path: value for path, value in reviewed["fields"].items()
-            if value is not None and (
-                proposal["fields"].get(path) is None
-                or [
-                    cda_target_name(rule) for rule in mapping_rules(value)
-                ] != [
-                    cda_target_name(rule) for rule in mapping_rules(
-                        proposal["fields"].get(path)
-                    )
-                ]
+            if (
+                value is None and proposal["fields"].get(path) is not None
+            ) or (
+                value is not None and (
+                    proposal["fields"].get(path) is None or [
+                        cda_target_name(rule) for rule in mapping_rules(value)
+                    ] != [
+                        cda_target_name(rule) for rule in mapping_rules(
+                            proposal["fields"].get(path)
+                        )
+                    ]
+                )
             )
         }
         reviewed_only_defaults = {
@@ -457,10 +515,10 @@ class ReferenceClosureTests(unittest.TestCase):
             {
                 "dataset_fields": 128,
                 "generated_mapped_fields": 90,
-                "reviewed_mapped_fields": 121,
-                "reviewed_narrative_fields": 2,
-                "field_override_count": 38,
-                "narrative_target_count": 1,
+                "reviewed_mapped_fields": 118,
+                "reviewed_narrative_fields": 5,
+                "field_override_count": 41,
+                "narrative_target_count": 2,
                 "structure_override_count": 3,
                 "field_review_override_count": 5,
                 "target_default_override_count": 6,
@@ -573,6 +631,51 @@ class ReferenceClosureTests(unittest.TestCase):
                 "datatype_derived", False,
             )
         )
+
+    def test_suspended_edis_mappings_remain_recoverable_and_inactive(self) -> None:
+        recovery_dir = Path(__file__).resolve().parents[1] / "docs" / "recovery"
+        suspended = self._load(
+            recovery_dir / "2026.1.2-notaufnahmeregister--60-suspended-cda-mappings.json"
+        )
+        recovery = self._load(
+            recovery_dir / "2026.1.2-notaufnahmeregister--60-reviewed-cda-overrides.json"
+        )
+        proposal = self._load(self.model_dir / "cda-mapping.proposed.json")
+        reviewed = self._load(
+            self.workspace / "mapping" / REFERENCE_RELEASE
+            / REFERENCE_TRANSACTION / "cda-mapping.json"
+        )
+        model = self._load(self.model_dir / "model.json")
+        cda = self._load(self.model_dir / "cda.json")
+        attachments = self._load(
+            self.workspace / "config" / "cda-extensions.json"
+        )["attachments"]
+        self.assertEqual(suspended["identity"], recovery["identity"])
+        entries = suspended["mappings"]
+        self.assertEqual(
+            {entry["original_target_identity"]["template_id"] for entry in entries},
+            {"1.2.276.0.76.3.1.195.10." + n for n in ("85", "86", "87")},
+        )
+        self.assertEqual(len(entries), 3)
+        restored = dict(proposal["fields"])
+        restored.update(recovery["field_overrides"])
+        blocks = reviewed["narratives"][
+            suspended["current_behavior"]["narrative_target"]
+        ]["blocks"]
+        for entry in entries:
+            source = entry["source"]
+            original = entry["original_mapping"]
+            self.assertEqual(model["fields"][source]["concept"], entry["source_concept_id"])
+            self.assertEqual(proposal["fields"][source], original)
+            self.assertIsNone(reviewed["fields"][source])
+            self.assertIsNone(restored[source])
+            self.assertEqual(entry["original_target_identity"], proposal["target_identities"][original])
+            self.assertEqual(cda["targets"][original]["source_key"], entry["original_target_identity"]["source_key"])
+            self.assertIn(entry["original_attachment"], attachments)
+            self.assertEqual(
+                [(block["type"], block["label"]) for block in blocks if block["source"] == source],
+                [("fact", entry["label"])],
+            )
 
     def test_mapping_gaps_are_persisted_and_rendered(self) -> None:
         audit = self._load(self.model_dir / "mapping-audit.json")
