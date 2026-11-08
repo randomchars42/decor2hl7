@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..contracts import DatasetModel, dataset_model
+
 from collections import Counter
 import hashlib
 import json
@@ -243,7 +245,8 @@ def _descendants(code_system: Mapping[str, Any], anchor: str, include_anchor: bo
             if code in selected:
                 continue
             if any(parent in frontier for parent in item.get("parents", [])):
-                selected.add(str(code)); next_frontier.add(str(code))
+                selected.add(str(code))
+                next_frontier.add(str(code))
         frontier = next_frontier
     if not include_anchor:
         selected.discard(anchor)
@@ -286,7 +289,8 @@ def _expand_value_sets(
                     ref, str(include.get("effective_date") or ""), value_sets
                 )
                 if not referred:
-                    unresolved.append(dict(include)); continue
+                    unresolved.append(dict(include))
+                    continue
                 referred_key = _value_set_key(
                     str(referred.get("id") or ""), str(referred.get("effective_date") or "")
                 )
@@ -298,12 +302,14 @@ def _expand_value_sets(
             code = str(include.get("code") or "")
             system = str(include.get("code_system") or "")
             if not code or not system:
-                unresolved.append(dict(include)); continue
+                unresolved.append(dict(include))
+                continue
             code_system = _resolve_revision(
                 system, str(include.get("effective_date") or ""), code_systems
             )
             if not code_system:
-                unresolved.append(dict(include)); continue
+                unresolved.append(dict(include))
+                continue
             op = str(include.get("op") or "").casefold()
             if op in {"descendent-of", "descendant-of"}:
                 selected = _descendants(code_system, code, False)
@@ -312,15 +318,18 @@ def _expand_value_sets(
             elif op in {"", "equal", "="}:
                 selected = {code} if code in code_system.get("codes", {}) else set()
             else:
-                unresolved.append(dict(include)); continue
+                unresolved.append(dict(include))
+                continue
             if not selected:
-                unresolved.append(dict(include)); continue
+                unresolved.append(dict(include))
+                continue
             for selected_code in selected:
                 item = code_system.get("codes", {}).get(selected_code, {})
                 add_code(entry, selected_code, system, item)
         entry["unresolved_includes"] = unresolved
         entry["code_system"] = _dominant_code_system(entry)
-        visiting.remove(key); done.add(key)
+        visiting.remove(key)
+        done.add(key)
 
     for key in list(value_sets):
         expand(key)
@@ -992,18 +1001,21 @@ def _apply_terminal_original_semantics(
                     source.get(key) not in (None, "")
                     and node.get(key) != source.get(key)
                 ):
-                    node[key] = source.get(key); copied = True
+                    node[key] = source.get(key)
+                    copied = True
             for key in list_keys:
                 if node.get(key) != source.get(key):
                     node[key] = [
                         dict(item) if isinstance(item, Mapping) else item
                         for item in source.get(key, [])
-                    ]; copied = True
+                    ]
+                    copied = True
             if node.get("option_details") != source.get("option_details"):
                 node["option_details"] = {
                     str(key): dict(value) if isinstance(value, Mapping) else value
                     for key, value in source.get("option_details", {}).items()
-                }; copied = True
+                }
+                copied = True
             node["original_concept"] = source.get("concept")
             copied_any = copied
         done.add(identity)
@@ -1124,7 +1136,8 @@ def _formal_values(
     values: dict[str, dict[str, Any]] = {}
     refs = _formal_value_set_refs(field, value_sets)
     for ref in refs:
-        oid = str(ref.get("id") or ""); effective = str(ref.get("effective_date") or "")
+        oid = str(ref.get("id") or "")
+        effective = str(ref.get("effective_date") or "")
         value_set = _resolve_value_set(oid, effective, value_sets)
         for code, item in value_set.get("codes", {}).items():
             label = str(item.get("label") or item.get("display_name") or code)
@@ -1541,7 +1554,7 @@ def compile_model(
     terminology_paths: Iterable[Path] = (),
     transaction_source: Path | None = None,
     model_extensions: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> DatasetModel:
     if not transaction.exists():
         raise FileNotFoundError(f"missing {transaction}")
     root, repairs = parse_file(transaction)
@@ -1764,31 +1777,14 @@ def compile_model(
         ],
         **({"model_extensions": extension_meta} if extension_meta else {}),
     }
-    return {
+    return dataset_model({
         "version": 2,
         "meta": meta,
         "order": order,
         "groups": groups,
         "fields": fields,
         "value_sets": value_sets,
-    }
-
-
-def write_model(
-    transaction: Path,
-    resource_paths: Iterable[Path],
-    model_dir: Path,
-    terminology_paths: Iterable[Path] = (),
-    transaction_source: Path | None = None,
-    model_extensions: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    model = compile_model(
-        transaction, resource_paths, terminology_paths,
-        transaction_source=transaction_source,
-        model_extensions=model_extensions,
-    )
-    write_json(model_dir / "model.json", model)
-    return model
+    })
 
 
 def write_transaction_model(
@@ -1798,10 +1794,11 @@ def write_transaction_model(
     terminology: Iterable[Path],
     model_dir: Path,
     model_extensions: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> DatasetModel:
     """Write ``model.json`` from the authoritative source/analysis pair."""
-    return write_model(
-        analysis, resources, model_dir, terminology,
-        transaction_source=source,
-        model_extensions=model_extensions,
+    model = compile_model(
+        analysis, resources, terminology,
+        transaction_source=source, model_extensions=model_extensions,
     )
+    write_json(model_dir / "model.json", model)
+    return model

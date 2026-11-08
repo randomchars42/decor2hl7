@@ -9,8 +9,11 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .runtime_config import _require, _explicit_path, _cda_mapping_path, _site_paths, _runtime_files
+from .runtime_config import (
+    require_path, explicit_path, cda_mapping_path, site_paths, load_runtime_bundle,
+)
 from . import runtime
+from .contracts import dataset_model, cda_model, target_mapping
 from .ui import say as _say, out as _out
 from .i18n import OUTPUT_LANGUAGE as _OUTPUT_LANGUAGE
 from . import __version__
@@ -70,7 +73,7 @@ def _parse_since(value: str | None) -> dt.date | None:
     try:
         return dt.date.fromisoformat(value)
     except ValueError as error:
-        raise ValueError("--since must use YYYY-MM-DD") from error
+        raise ValueError(_msg('ui.since_invalid')) from error
 
 
 def cmd_transform(args: argparse.Namespace) -> int:
@@ -303,7 +306,7 @@ def _compiler_inputs(root: Path) -> dict[str, Any]:
     transaction = selected_transaction(root)
     release_dir = release_spec_dir(root, release)
     tx_dir = transaction_spec_dir(root, release, transaction)
-    _require(tx_dir / "transaction.xml", "run `decor2hl7 fetch` first")
+    require_path(tx_dir / "transaction.xml", "run `decor2hl7 fetch` first")
     return dict(compiler_inputs(release_dir, tx_dir))
 
 
@@ -317,7 +320,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     from .compile.site import write_code_mapping
     from .cda.compile import write_cda_model
     from .cda.core import core_paths
-    from .compile.mapping import write_mapping_model
+    from .compile.mapping import write_cda_mapping
     from .compile.transaction import write_transaction_model
 
     root = _root(args)
@@ -394,7 +397,7 @@ def cmd_build(args: argparse.Namespace) -> int:
                 "status": "unavailable",
             },
         }
-    cda_mapping = write_mapping_model(
+    cda_mapping = write_cda_mapping(
         inputs["mapping_evidence"], model_dir, model, cda,
         output_language=args.output_language,
     )
@@ -438,7 +441,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         )
     audit_path = model_dir / "mapping-audit.json"
     if audit_path.is_file():
-        accepted_path = _cda_mapping_path(root, release, transaction)
+        accepted_path = cda_mapping_path(root, release, transaction)
         _report_coverage(
             model,
             cda,
@@ -474,11 +477,11 @@ def cmd_validate_cda(args: argparse.Namespace) -> int:
     release = selected_release(root)
     transaction = selected_transaction(root)
     model_dir = transaction_model_dir(root, release, transaction)
-    documents = [_explicit_path(value) for value in args.files]
+    documents = [explicit_path(value) for value in args.files]
     for document in documents:
-        _require(document, "CDA document does not exist")
+        require_path(document, "CDA document does not exist")
     report = (
-        _explicit_path(args.report)
+        explicit_path(args.report)
         if args.report else model_dir / "conformance-validation" / "cda-validation"
     )
     result = validate_cda_documents(
@@ -502,9 +505,9 @@ def cmd_propose_input(args: argparse.Namespace) -> int:
     release = selected_release(root)
     transaction = selected_transaction(root)
     model_dir = transaction_model_dir(root, release, transaction)
-    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build` first"))
+    model = dataset_model(load_json(require_path(model_dir / "model.json", "run `decor2hl7 build` first")))
     source_root = input_dir(root, args.input, required=True)
-    proposal_dir, _, _, _ = _site_paths(
+    proposal_dir, _, _, _ = site_paths(
         root, release, transaction, getattr(args, "site_config", None)
     )
     proposal_dir.mkdir(parents=True, exist_ok=True)
@@ -614,7 +617,7 @@ def _copy_generated_guide(
     output_language: str = "en",
 ) -> None:
     """Keep generated, read-only guidance beside the configuration it explains."""
-    source = _require(source)
+    source = require_path(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     original = source.read_text(encoding="utf-8")
     content = (original)
@@ -684,7 +687,7 @@ def _write_mapping_guides(
             model, cda, mapping, audit, output_language=output_language
         ),
     }
-    generated_details = _require(
+    generated_details = require_path(
         model_dir / "cda-mapping-details.md"
     ).read_text(encoding="utf-8")
     accepted_start = max(
@@ -777,12 +780,12 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
     release = selected_release(root)
     transaction = selected_transaction(root)
     model_dir = transaction_model_dir(root, release, transaction)
-    source = _require(
+    source = require_path(
         model_dir / "cda-mapping.proposed.json", "run `decor2hl7 build` first"
     )
-    model = load_json(_require(model_dir / "model.json"))
-    cda = load_json(_require(model_dir / "cda.json"))
-    destination = _cda_mapping_path(
+    model = dataset_model(load_json(require_path(model_dir / "model.json")))
+    cda = cda_model(load_json(require_path(model_dir / "cda.json")))
+    destination = cda_mapping_path(
         root, release, transaction, getattr(args, "cda_mapping", None)
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -797,7 +800,7 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
         _say((_msg('ui.created')) + str(destination))
     elif not reset:
         from .compile.mapping import _mapping_configuration_notes
-        audit = load_json(_require(model_dir / "mapping-audit.json"))
+        audit = load_json(require_path(model_dir / "mapping-audit.json"))
         notes = _merge_mapping_configuration_notes(
             source,
             destination,
@@ -820,7 +823,7 @@ def cmd_init_cda_mapping(args: argparse.Namespace) -> int:
     mapping = load_json(destination)
     proposal = load_json(source)
     audit = (
-        load_json(_require(model_dir / "mapping-audit.json"))
+        load_json(require_path(model_dir / "mapping-audit.json"))
         if _mapping_decisions_differ(mapping, proposal)
         else {"fields": {}, "groups": {}}
     )
@@ -841,7 +844,7 @@ def cmd_init_site_config(args: argparse.Namespace) -> int:
     root = _root(args)
     release = selected_release(root)
     transaction = selected_transaction(root)
-    proposal_dir, csv_destination, codes_destination, site = _site_paths(
+    proposal_dir, csv_destination, codes_destination, site = site_paths(
         root, release, transaction, getattr(args, "site_config", None)
     )
     model_dir = transaction_model_dir(root, release, transaction)
@@ -851,7 +854,7 @@ def cmd_init_site_config(args: argparse.Namespace) -> int:
     for name, destination in (
         ("csv-mapping", csv_destination), ("codes-mapping", codes_destination)
     ):
-        source = _require(
+        source = require_path(
             proposal_dir / f"{name}.proposed.json",
             "run `decor2hl7 propose-input --input PATH` first",
         )
@@ -919,7 +922,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     root = _root(args)
     release = selected_release(root)
-    runtime_bundle = _runtime_files(
+    runtime_bundle = load_runtime_bundle(
         root, args.cda_mapping, args.site_config
     )
     model, cda = runtime_bundle.model, runtime_bundle.cda
@@ -932,7 +935,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     errors.extend(source_errors)
     source_config = site.get("source", {})
     if isinstance(source_config, Mapping) and source_config.get("adapter") in ("odbc", "sqlite"):
-        bundle, _, _, site_path = _site_paths(
+        bundle, _, _, site_path = site_paths(
             root, release, selected_transaction(root), args.site_config
         )
         query_problems = source.query_errors(site, bundle)
@@ -982,10 +985,10 @@ def cmd_check_cda_mapping(args: argparse.Namespace) -> int:
     release = selected_release(root)
     transaction = selected_transaction(root)
     model_dir = transaction_model_dir(root, release, transaction)
-    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build`"))
-    cda = load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`"))
-    mapping_path = _cda_mapping_path(root, release, transaction, args.cda_mapping)
-    cda_mapping = load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`"))
+    model = dataset_model(load_json(require_path(model_dir / "model.json", "run `decor2hl7 build`")))
+    cda = cda_model(load_json(require_path(model_dir / "cda.json", "run `decor2hl7 build`")))
+    mapping_path = cda_mapping_path(root, release, transaction, args.cda_mapping)
+    cda_mapping = target_mapping(load_json(require_path(mapping_path, "run `decor2hl7 init-cda-mapping`")))
     neutral_csv = {
         "version": 1,
         "join": {"column": "case_id"},
@@ -1040,18 +1043,18 @@ def cmd_setup_test(args: argparse.Namespace) -> int:
     release = selected_release(root)
     transaction = selected_transaction(root)
     model_dir = transaction_model_dir(root, release, transaction)
-    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build`"))
-    cda = load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`"))
-    mapping_path = _cda_mapping_path(root, release, transaction, args.cda_mapping)
-    cda_mapping = load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`"))
+    model = dataset_model(load_json(require_path(model_dir / "model.json", "run `decor2hl7 build`")))
+    cda = cda_model(load_json(require_path(model_dir / "cda.json", "run `decor2hl7 build`")))
+    mapping_path = cda_mapping_path(root, release, transaction, args.cda_mapping)
+    cda_mapping = target_mapping(load_json(require_path(mapping_path, "run `decor2hl7 init-cda-mapping`")))
     test_dir = (
-        _explicit_path(args.test_dir) if args.test_dir
+        explicit_path(args.test_dir) if args.test_dir
         else transaction_test_dir(root, release, transaction)
     )
     expected = setup_fixture(
         test_dir, release, transaction, model, cda, cda_mapping,
         force=args.force,
-        scenario_dir=_explicit_path(args.scenario) if args.scenario else None,
+        scenario_dir=explicit_path(args.scenario) if args.scenario else None,
     )
     _say(f"{_msg('ui.test_fixture')} {test_dir}")
     if args.scenario:
@@ -1068,16 +1071,16 @@ def cmd_test_cda_mapping(args: argparse.Namespace) -> int:
     release = selected_release(root)
     transaction = selected_transaction(root)
     model_dir = transaction_model_dir(root, release, transaction)
-    model = load_json(_require(model_dir / "model.json", "run `decor2hl7 build`"))
-    cda = load_json(_require(model_dir / "cda.json", "run `decor2hl7 build`"))
-    mapping_path = _cda_mapping_path(root, release, transaction, args.cda_mapping)
-    cda_mapping = load_json(_require(mapping_path, "run `decor2hl7 init-cda-mapping`"))
+    model = dataset_model(load_json(require_path(model_dir / "model.json", "run `decor2hl7 build`")))
+    cda = cda_model(load_json(require_path(model_dir / "cda.json", "run `decor2hl7 build`")))
+    mapping_path = cda_mapping_path(root, release, transaction, args.cda_mapping)
+    cda_mapping = target_mapping(load_json(require_path(mapping_path, "run `decor2hl7 init-cda-mapping`")))
     test_dir = (
-        _explicit_path(args.test_dir) if args.test_dir
+        explicit_path(args.test_dir) if args.test_dir
         else transaction_test_dir(root, release, transaction)
     )
-    _require(test_dir / "expected.json", "run `decor2hl7 setup-test` first")
-    out_dir = _explicit_path(args.out) if args.out else test_dir / "out"
+    require_path(test_dir / "expected.json", "run `decor2hl7 setup-test` first")
+    out_dir = explicit_path(args.out) if args.out else test_dir / "out"
     result, status = run_fixture(
         test_dir, out_dir, model, cda, cda_mapping,
         output_language=args.output_language,
@@ -1095,7 +1098,7 @@ def cmd_check_input(args: argparse.Namespace) -> int:
 
     root = _root(args)
     source_root = input_dir(root, args.input, required=True)
-    runtime_bundle = _runtime_files(
+    runtime_bundle = load_runtime_bundle(
         root, args.cda_mapping, args.site_config
     )
     model, cda = runtime_bundle.model, runtime_bundle.cda

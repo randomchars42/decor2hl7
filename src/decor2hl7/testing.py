@@ -9,12 +9,11 @@ from __future__ import annotations
 
 from .contracts import NormalizedRecord
 from .scenario import case_filename_key, prepare_scenario_input
-from .hashing import json_digest as json_digest
+from .hashing import json_digest
 
 import csv
 import hashlib
 import json
-import re
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET

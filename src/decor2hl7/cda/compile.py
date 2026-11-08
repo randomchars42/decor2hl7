@@ -13,6 +13,8 @@ element.
 
 from __future__ import annotations
 
+from ..contracts import CdaModel, cda_model
+
 from collections import Counter, defaultdict, deque
 from copy import deepcopy
 from dataclasses import replace
@@ -2376,13 +2378,13 @@ def _required_binding_constraints(
                     if isinstance(entry, Mapping) else ""
                 ),
                 "resolved": bool(isinstance(codes, Mapping) and codes),
-                "members": sorted(
+                "members": [list(pair) for pair in sorted(
                     {
                         (str(code), str(info.get("code_system") or ""))
                         for code, info in codes.items()
                         if isinstance(info, Mapping)
                     }
-                ),
+                )],
             })
             keys.append(identity)
         if keys:
@@ -3460,13 +3462,13 @@ def _annotate_linked_narrative_targets(
 
 def compile_cda(
     xml_paths: Iterable[Path],
-    model: dict[str, Any],
+    model: Mapping[str, Any],
     *,
     strict: bool = True,
     strict_specializations: bool = False,
     core_definition_paths: Iterable[Path] = (),
     cda_extensions: Iterable[Mapping[str, Any]] = (),
-) -> dict[str, Any]:
+) -> CdaModel:
     template_id = str(model.get("meta", {}).get("template_id") or "")
     if not template_id:
         raise ValueError("model has no representing CDA template")
@@ -3605,7 +3607,7 @@ def compile_cda(
             attributes += nested_attributes + len(node.get("attributes", []))
         return elements, attributes
     element_count, attribute_count = constraint_counts(document)
-    return {
+    return cda_model({
         "version": 6,
         "format": "cda",
         "document_template": {
@@ -3661,15 +3663,15 @@ def compile_cda(
             "elements": element_count,
             "attributes": attribute_count,
         },
-    }
+    })
 
 
 def write_cda_model(
-    templates: Iterable[Path], model_dir: Path, model: dict[str, Any],
+    templates: Iterable[Path], model_dir: Path, model: Mapping[str, Any],
     core_definition_paths: Iterable[Path] = (),
     cda_extensions: Iterable[Mapping[str, Any]] = (),
     strict_specializations: bool = False,
-) -> dict[str, Any]:
+) -> CdaModel:
     """Write ``cda.json`` while retaining unresolved nested references."""
     cda = compile_cda(
         templates, model, strict=False,

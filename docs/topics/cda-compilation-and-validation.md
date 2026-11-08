@@ -135,3 +135,15 @@ with valid and invalid documents.
 Mapping coverage and CDA conformance remain independent. A legal leaf does not
 prove clinical meaning, and a reviewed mapping does not prove that the complete
 document passes its conformance gates.
+
+## Compiler and rendering boundaries
+
+CDA compilation returns a checked target-model contract. Nullable owner metadata,
+attribute optionality, prototype evidence and diagnostic changes remain explicit;
+required terminology pairs use their serialized list representation in memory as
+well as on disk. Typed CDA metadata serialization does not depend on generic
+`asdict` output.
+
+Rendering coordinates separate attribute assignment, scalar representation and
+required-value completion steps. These steps consume compiled representations and
+occurrence context; they do not select clinical mappings or re-read ART-DECOR.
