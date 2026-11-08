@@ -267,7 +267,8 @@ def validate_contexts(
     root: ET.Element,
     contexts: list[tuple[ET.Element, list[Mapping[str, Any]], Mapping[str, str]]],
 ) -> tuple[list[str], list[str]]:
-    errors: list[str] = []; warnings: list[str] = []
+    errors: list[str] = []
+    warnings: list[str] = []
     for element, rules, lets in contexts:
         for rule in rules:
             test = str(rule.get("test") or "")
@@ -288,7 +289,8 @@ def validate_contexts(
             if fired:
                 verb = "reported" if kind == "report" else "failed"
                 message = f"ART-DECOR {kind} {verb} [{source}]: {label} ({test})"
-                if role in {"fatal", "error"}: errors.append(message)
+                if role in {"fatal", "error"}:
+                    errors.append(message)
                 else: warnings.append(message)
             elif result is None:
                 message = f"ART-DECOR {kind} could not be evaluated [{source}]: {test}"

@@ -37,6 +37,7 @@ not a second copy of those semantic rules.
 src/decor2hl7/
 ├── cli.py                  command parsing and specification/setup commands
 ├── runtime.py              execution, pending delivery and run orchestration
+├── contracts.py            checked stable data shapes and named runtime bundle
 ├── runtime_config.py       selected runtime files and configuration paths
 ├── bundle.py               shared exact mapping-lock admission
 ├── pending.py              typed, validated pending document metadata
@@ -58,14 +59,17 @@ src/decor2hl7/
 │   ├── artifacts.py        identity and artifact-form contracts
 │   ├── expansion.py        frozen terminology expansions
 │   ├── sources.py          reviewed external source catalog
-│   ├── fetch.py            recursive cache/manifest/closure workflow
+│   ├── fetch.py            cache admission, root acquisition and explicit crawl stages
 │   └── xml.py              XML helpers and narrow repairs
 ├── compile/                model and mapping compilation
 │   ├── artifacts.py        validated compiler inputs and degradation
 │   ├── transaction.py      target-neutral dataset model
 │   ├── structural.py       generated occurrence rules
 │   ├── schematron.py       bounded supporting evidence
-│   ├── mapping.py          separate candidate, admission and report/audit stages
+│   ├── mapping.py          candidate discovery and proposal admission
+│   ├── mapping_decisions.py shared evidence and qualification labels
+│   ├── mapping_audit.py    checked serialization of final decisions
+│   ├── mapping_reports.py  presentation of completed decisions
 │   ├── site.py             site CSV and input-code proposals
 │   └── reports.py          readable generated products
 ├── cda/                    CDA target implementation
@@ -82,7 +86,8 @@ src/decor2hl7/
 │   ├── narrative.py        checked section-narrative rules and presentation IR
 │   └── render.py           representation-driven XML output
 ├── domain.py               target-neutral dataset value domains
-├── data.py                 CSV ingestion and occurrence normalization
+├── csv_input.py            strict streaming and materialized CSV tables
+├── data.py                 input ingestion and occurrence normalization
 ├── source.py               bounded ODBC/SQLite extraction and snapshot publication
 ├── bindings.py             mappings, structures, and construction values
 ├── transforms.py           declarative scalar transforms
@@ -90,7 +95,8 @@ src/decor2hl7/
 ├── assertions.py           ART-DECOR assertion evaluation
 ├── validate.py             model/config/record validation
 ├── conformance.py          package and CDA validation gates
-├── testing.py              synthetic and authored scenarios
+├── scenario.py             authored source admission and preparation
+├── testing.py              fixture generation and end-to-end mapping tests
 ├── state.py                SQLite lineage, delivery history, runs, and locking
 └── transport.py            bounded delivery adapters
 ```
@@ -146,7 +152,10 @@ See
 ### Mapping boundary
 
 `compile/mapping.py` combines the target-neutral model, physical CDA model, and
-bounded evidence graph. It emits a rich audit and concise proposal. Reviewed
+bounded evidence graph. Candidate discovery and admission produce the final
+decision state before `mapping_audit.py` serializes it and `mapping_reports.py`
+renders it. The audit and reports use shared coverage/qualification labels;
+presentation never changes the proposal. It emits a rich audit and concise proposal. Reviewed
 mapping remains outside generated `model/`, is protected by an identity lock,
 and may differ from the proposal.
 
@@ -186,6 +195,28 @@ delivery.
 See
 [`topics/input-runtime-and-delivery.md`](topics/input-runtime-and-delivery.md).
 
+## Checked data contracts
+
+CLI argument objects stop at `cli.py`; runtime entry points take explicit paths,
+dates and execution options. One admitted runtime bundle is reused by rendering,
+recovery and delivery within the run.
+
+`contracts.py` defines the shared serialized shapes for dataset fields/groups,
+CDA nodes/targets, input and target mappings, site configuration and normalized
+occurrences, plus mapping-audit decisions and summaries. Dataset and CDA
+compilers check their outputs at the producing boundary; runtime loading checks
+serialized input before bundle admission. Nested terminology and diagnostic
+metadata have explicit contracts, including legitimate nullable source values.
+`RuntimeBundle` names its six products explicitly instead of relying on tuple
+positions. Normalization checks its resulting records at the owning boundary.
+
+These types describe the internal format, not the names or membership of a
+particular specification. New datapoints, template identities and terminology
+members remain data. Additional non-executable owner metadata is retained as
+JSON; executable semantics remain checked by their owning validators. The
+contract readers preserve serialized values and do not add defaults, rename
+keys or migrate formats.
+
 ## Dependency direction
 
 The intended dependency direction is:
@@ -223,3 +254,8 @@ rather than runtime-oriented `validate.py`.
   importable.
 - Current unresolved technical and external boundaries are listed only in
   [`open-boundaries.md`](open-boundaries.md).
+
+Shared configuration path and bundle functions are explicit module interfaces.
+Compiler entry points write their owned artifacts directly, without compatibility
+wrappers or duplicate hash exports. Compact compound statements use separate
+lines so validation and mutation order remain visible.

@@ -31,6 +31,9 @@ unknown executable keys and invalid transforms fail configuration admission.
 CSV headers must be non-empty and unique, and every row must have exactly the
 header width. Integer parsing preserves exact values and rejects fractions;
 all numeric input must be finite. An invalid scalar quarantines its record.
+Runtime, authored scenarios and input proposals share the same strict CSV parser.
+Header discovery and observed-value sampling can stream files; runtime and
+scenario preparation materialize validated tables.
 
 A scalar field read from multiple rows requires exactly one explicitly marked
 primary row. Source order alone never selects a scalar clinical fact. Repeated
@@ -113,11 +116,24 @@ Validation is layered:
 5. normalized record validity;
 6. target construction, assertions, XSD, and Schematron.
 
+Configuration validation coordinates separate checks for mapping shapes and
+identity, field assignments, construction requirements, input aliases and site
+values. Record validation separately traverses occurrences, checks group
+cardinality and checks scalar constraints. Diagnostic order and severity are
+part of the existing contract.
+
 Mapping review can therefore run without site input, while actual
 transformation requires the selected site bundle and its declared construction
 values.
 
 ## Runtime
+
+Loading the runtime bundle checks the stable shapes of its models, mappings
+and site configuration. The returned bundle has named products; malformed
+nested executable data fails before ingestion. These structural checks do not
+replace terminology, occurrence or construction validation. Each command admits
+one bundle and reuses it for recovery, transformation and delivery; runtime
+functions receive explicit options rather than parser argument objects.
 
 Before input processing or delivery, the selected mapping lock must match the
 release key/date, transaction key/OID/date, and exact compiled model and CDA
@@ -155,6 +171,14 @@ current stream revision, append-only version history, exact current and prior
 CDA identities, delivery status, and a run ledger. Only the current SQLite
 schema is supported; legacy JSON state and older schemas require an explicit
 external conversion rather than an automatic migration. A workspace lock prevents overlapping transforming or delivering commands.
+
+`status` reports `delivered_documents` and `pending_documents`. The delivery count
+includes durable spool publication. Both status and explicit resend consult
+append-only committed history, so archived delivered revisions never become
+pending or get resent merely because a later correction changed the fingerprint.
+Status uses the same checked current sidecar contract as reuse and delivery;
+it does not reconstruct missing keys. The redundant `sent_documents` status
+alias is absent.
 
 State advances only after the selected transport reports a successful
 handover. A crash before that point leaves the record pending; retry therefore
@@ -209,6 +233,11 @@ Authored scenarios are versioned CSV source sets with a manifest pinned to the
 release and exact transaction. The manifest declares every source relationship,
 case identity, expected present/absent fields or templates, and optional local
 site/code values. Generated CDA is never accepted as its own oracle.
+
+Scenario admission first builds a complete validated input plan without changing
+files or site values. Only an admitted plan can copy sources and apply its site
+configuration. The fixture command still stages those files before replacing an
+existing fixture.
 
 `setup-test --scenario` creates an isolated fixture; `test-cda-mapping` runs the
 ordinary ingestion, validation, binding, rendering, and assertion modules

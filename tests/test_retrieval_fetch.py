@@ -24,7 +24,7 @@ from decor2hl7.retrieval.artifacts import (
     closure_records,
 )
 from decor2hl7.retrieval.fetch import (
-    RequestBudgetExceeded,
+    RequestBudget, RequestBudgetExceeded,
     _evidence_references,
     _fetch_want,
     _inventory,
@@ -313,7 +313,7 @@ class RetrievalFetchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             manifest: dict[str, Any] = {"resources": {}}
             want = {"kind": "template", "id": "1.2.3", "effective_date": "", "project": "first-"}
-            budget = {"made": 0, "max": 1}
+            budget = RequestBudget(made=0, max=1)
             def missing(_url: str, **_: object) -> bytes:
                 from urllib.error import HTTPError
                 raise HTTPError(_url, 404, "missing", Message(), None)

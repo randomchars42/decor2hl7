@@ -10,6 +10,8 @@ from typing import Any
 from decor2hl7.cli import main, parser
 from decor2hl7.compile.artifacts import write_build_diagnostics
 from decor2hl7.compile.mapping import cda_mapping_audit
+from decor2hl7.compile.mapping_reports import reason_for
+from decor2hl7.i18n import OUTPUT_LANGUAGE
 from decor2hl7.compile.reports import (
     render_accepted_cda_mappings_markdown,
     render_cda_mapping_extended_trees_markdown,
@@ -112,6 +114,22 @@ class OutputLanguageTests(unittest.TestCase):
         self.assertNotEqual(english[2:], german[2:])
         self.assertIn("Clinical leaf", german[2])
         self.assertNotIn("Blatt", "\n".join(german[2:]))
+
+    def test_mapping_reasons_localize_without_changing_owner_warnings(self) -> None:
+        detail = {"primary": {
+            "kind": "XPATH", "confidence": "STRONG", "target": "Owner.target",
+            "warnings": ["Owner originalText wording"],
+        }}
+        english = reason_for(detail)
+        token = OUTPUT_LANGUAGE.set("de")
+        try:
+            german = reason_for(detail)
+        finally:
+            OUTPUT_LANGUAGE.reset(token)
+        self.assertIn("implementation XPath", english)
+        self.assertIn("Implementierungs-XPath", german)
+        self.assertIn("Owner originalText wording", german)
+        self.assertIn("ART-DECOR", german)
 
     def test_all_other_markdown_families_accept_the_output_language(self) -> None:
         model: dict[str, Any] = {

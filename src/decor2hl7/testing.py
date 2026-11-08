@@ -7,12 +7,13 @@ production, but writes neither production state nor transport output.
 
 from __future__ import annotations
 
-from .hashing import json_digest as json_digest
+from .contracts import NormalizedRecord
+from .scenario import case_filename_key, prepare_scenario_input
+from .hashing import json_digest
 
 import csv
 import hashlib
 import json
-import re
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
@@ -28,13 +29,8 @@ from .cda.narrative import narrative_blocks, narrative_source_rules
 from .workspace import load_json, write_json
 
 
-def _slug(value: str) -> str:
-    text = re.sub(r"[^A-Za-z0-9]+", "-", value).strip("-").lower() or "repeat"
-    return text[:56]
-
-
 def _source_name(chain: tuple[str, ...]) -> str:
-    label = _slug(chain[-1].rsplit(".", 1)[-1])
+    label = case_filename_key(chain[-1].rsplit(".", 1)[-1])
     digest = hashlib.sha1("\0".join(chain).encode("utf-8")).hexdigest()[:7]
     return f"repeat-{label}-{digest}"
 
@@ -145,436 +141,6 @@ def _replace_managed_fixture(
             shutil.rmtree(path)
 
 
-def _scenario_file(root: Path, value: Any, label: str) -> tuple[Path, Path]:
-    relative = Path(str(value or ""))
-    if not str(value or "").strip() or relative.is_absolute():
-        raise ValueError(f"scenario {label} must be a non-empty relative path")
-    source = (root / relative).resolve()
-    try:
-        source.relative_to(root.resolve())
-    except ValueError as error:
-        raise ValueError(f"scenario {label} escapes its input directory") from error
-    if not source.is_file():
-        raise ValueError(f"scenario {label} does not exist: {source}")
-    return source, relative
-
-
-def _scenario_digest(
-    manifest: Mapping[str, Any], files: Iterable[tuple[str, Path]],
-) -> str:
-    digest = hashlib.sha256(
-        json.dumps(
-            manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-    )
-    for relative, path in sorted(files):
-        digest.update(b"\0")
-        digest.update(relative.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-    return digest.hexdigest()
-
-
-def _scenario_identity_errors(
-    manifest: Mapping[str, Any],
-    release: Mapping[str, Any],
-    transaction: Mapping[str, Any],
-) -> list[str]:
-    errors: list[str] = []
-    if manifest.get("release") != release.get("key"):
-        errors.append(
-            f"release {manifest.get('release')!r} does not match selected "
-            f"{release.get('key')!r}"
-        )
-    configured = manifest.get("transaction", {})
-    if not isinstance(configured, Mapping):
-        return [*errors, "transaction identity must be an object"]
-    for key, label in (
-        ("key", "key"), ("id", "OID"), ("effective_date", "effective date"),
-    ):
-        if configured.get(key) != transaction.get(key):
-            errors.append(
-                f"transaction {label} {configured.get(key)!r} does not match "
-                f"selected {transaction.get(key)!r}"
-            )
-    return errors
-
-
-def _copy_scenario_input(
-    scenario_dir: Path,
-    input_root: Path,
-    release: Mapping[str, Any],
-    transaction: Mapping[str, Any],
-    model: Mapping[str, Any],
-    site: dict[str, Any],
-) -> tuple[dict[str, str | None], dict[str, Any], list[dict[str, Any]]]:
-    manifest_path = scenario_dir / "scenario.json"
-    if not manifest_path.is_file():
-        raise ValueError(f"scenario manifest is missing: {manifest_path}")
-    manifest = load_json(manifest_path)
-    if not isinstance(manifest, Mapping):
-        raise ValueError("scenario.json must contain an object")
-    if manifest.get("version") != 1:
-        raise ValueError("scenario.json version must be 1")
-    identity_errors = _scenario_identity_errors(manifest, release, transaction)
-    if identity_errors:
-        raise ValueError("scenario identity mismatch: " + "; ".join(identity_errors))
-
-    input_cfg = manifest.get("input", {})
-    if not isinstance(input_cfg, Mapping):
-        raise ValueError("scenario input must be an object")
-    sources = input_cfg.get("sources", {})
-    if not isinstance(sources, Mapping) or not sources:
-        raise ValueError("scenario input.sources must be a non-empty object")
-    case_source = str(input_cfg.get("case_source") or "")
-    if not case_source or case_source not in sources:
-        raise ValueError("scenario input.case_source must name a configured source")
-    join_column = str(input_cfg.get("join_column") or "case_id")
-    encoding = str(input_cfg.get("encoding") or "utf-8-sig")
-    delimiter = str(input_cfg.get("delimiter") or ",")
-    if len(delimiter) != 1:
-        raise ValueError("scenario input.delimiter must be one character")
-
-    scenario_input = scenario_dir / "input"
-    if not scenario_input.is_dir():
-        raise ValueError(f"scenario input directory is missing: {scenario_input}")
-    model_fields = model.get("fields", {})
-    if not isinstance(model_fields, Mapping):
-        raise ValueError("compiled model fields must be an object")
-    model_groups = model.get("groups", {})
-    if not isinstance(model_groups, Mapping):
-        raise ValueError("compiled model groups must be an object")
-    locations: dict[str, list[str]] = {}
-    source_files: list[tuple[str, Path]] = []
-    copied_sources: dict[str, Any] = {}
-    repeat_sources: list[dict[str, Any]] = []
-    source_case_ids: dict[str, list[str]] = {}
-    case_rows: list[dict[str, str]] = []
-    case_join_column = join_column
-
-    for raw_name, raw_spec in sources.items():
-        name = str(raw_name)
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
-            raise ValueError(
-                f"scenario source name {name!r} must contain only letters, "
-                "digits, dot, underscore, or hyphen"
-            )
-        if not isinstance(raw_spec, Mapping):
-            raise ValueError(f"scenario input.sources.{name} must be an object")
-        source, relative = _scenario_file(
-            scenario_input, raw_spec.get("file"), f"input.sources.{name}.file"
-        )
-        if source.suffix.lower() != ".csv":
-            raise ValueError(f"scenario source {name!r} must be a CSV file")
-        relative_text = relative.as_posix()
-        if any(item[0] == relative_text for item in source_files):
-            raise ValueError(f"scenario CSV file is configured more than once: {relative_text}")
-        source_files.append((relative_text, source))
-        target = input_root / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
-
-        cardinality = str(raw_spec.get("cardinality") or "1:1")
-        if cardinality not in {"1:1", "1:n"}:
-            raise ValueError(
-                f"scenario input.sources.{name}.cardinality must be 1:1 or 1:n"
-            )
-        if name == case_source and cardinality != "1:1":
-            raise ValueError("scenario case source must have cardinality 1:1")
-        occurrence_keys = raw_spec.get("occurrence_keys", {})
-        if occurrence_keys is not None and not isinstance(occurrence_keys, Mapping):
-            raise ValueError(
-                f"scenario input.sources.{name}.occurrence_keys must be an object"
-            )
-        if isinstance(occurrence_keys, Mapping):
-            invalid_repeat_chains = [
-                str(path) for path in occurrence_keys
-                if not isinstance(model_groups.get(str(path)), Mapping)
-                or not model_groups[str(path)].get("repeating")
-            ]
-            if invalid_repeat_chains:
-                raise ValueError(
-                    f"scenario source {name!r} has unknown or non-repeating "
-                    "occurrence path(s): " + ", ".join(invalid_repeat_chains)
-                )
-        source_spec = dict(raw_spec)
-        source_spec["file"] = relative_text
-        copied_sources[name] = source_spec
-
-        with source.open(encoding=encoding, newline="") as handle:
-            reader = csv.DictReader(handle, delimiter=delimiter)
-            rows = list(reader)
-            headers = list(reader.fieldnames or [])
-        if len(headers) != len(set(headers)):
-            raise ValueError(f"scenario source {name!r} has duplicate CSV columns")
-        source_join = str(raw_spec.get("join_column") or join_column)
-        if source_join not in headers:
-            raise ValueError(
-                f"scenario source {name!r} is missing join column {source_join!r}"
-            )
-        row_case_ids = [
-            str(row.get(source_join) or "").strip() for row in rows
-        ]
-        if any(not case_id for case_id in row_case_ids):
-            raise ValueError(
-                f"scenario source {name!r} contains an empty case identifier"
-            )
-        if cardinality == "1:1" and len(row_case_ids) != len(set(row_case_ids)):
-            raise ValueError(
-                f"scenario 1:1 source {name!r} contains duplicate case identifiers"
-            )
-        source_case_ids[name] = row_case_ids
-        metadata_columns = {source_join}
-        if isinstance(occurrence_keys, Mapping):
-            metadata_columns.update(str(value) for value in occurrence_keys.values())
-        primary = raw_spec.get("primary", {})
-        if isinstance(primary, Mapping) and primary.get("column"):
-            metadata_columns.add(str(primary["column"]))
-        unknown = sorted(set(headers) - metadata_columns - set(model_fields))
-        if unknown:
-            raise ValueError(
-                f"scenario source {name!r} has unknown model column(s): "
-                + ", ".join(unknown)
-            )
-        source_model_fields = set(headers) & set(model_fields)
-        source_repeat_chain = (
-            [str(path) for path in occurrence_keys]
-            if isinstance(occurrence_keys, Mapping) else []
-        )
-        misplaced_fields = sorted(
-            str(path) for path in source_model_fields
-            if [
-                str(item)
-                for item in model_fields[str(path)].get("repeat_chain", [])
-            ] != source_repeat_chain
-        )
-        if misplaced_fields:
-            raise ValueError(
-                f"scenario source {name!r} has field(s) outside its declared "
-                "repeat chain: " + ", ".join(misplaced_fields)
-            )
-        for path in source_model_fields:
-            locations.setdefault(str(path), []).append(name)
-        if name == case_source:
-            case_rows = rows
-            case_join_column = source_join
-        if cardinality == "1:n":
-            if not occurrence_keys:
-                raise ValueError(
-                    f"scenario 1:n source {name!r} requires occurrence_keys"
-                )
-            occurrence_columns = [
-                str(value) for value in occurrence_keys.values()
-            ]
-            if len(occurrence_columns) != len(set(occurrence_columns)):
-                raise ValueError(
-                    f"scenario source {name!r} reuses an occurrence-key column"
-                )
-            missing_occurrence_columns = sorted(
-                set(occurrence_columns) - set(headers)
-            )
-            if missing_occurrence_columns:
-                raise ValueError(
-                    f"scenario source {name!r} is missing occurrence-key "
-                    "column(s): " + ", ".join(missing_occurrence_columns)
-                )
-            occurrence_identities = [
-                (
-                    row_case_ids[index],
-                    *(str(row.get(column) or "").strip()
-                      for column in occurrence_columns),
-                )
-                for index, row in enumerate(rows)
-            ]
-            if any(not all(identity) for identity in occurrence_identities):
-                raise ValueError(
-                    f"scenario source {name!r} contains an empty occurrence key"
-                )
-            if len(occurrence_identities) != len(set(occurrence_identities)):
-                raise ValueError(
-                    f"scenario source {name!r} contains duplicate occurrences"
-                )
-            repeat_sources.append({
-                "source": name,
-                "repeat_chains": sorted(
-                    str(key) for key in occurrence_keys
-                ) if isinstance(occurrence_keys, Mapping) else [],
-                "rows": len(rows),
-            })
-
-    duplicate_fields = {
-        path: names for path, names in locations.items() if len(names) != 1
-    }
-    if duplicate_fields:
-        details = ", ".join(
-            f"{path} ({', '.join(names)})"
-            for path, names in sorted(duplicate_fields.items())
-        )
-        raise ValueError(f"scenario maps model fields from multiple sources: {details}")
-    csv_fields: dict[str, str | None] = {
-        str(path): (
-            f"{locations[str(path)][0]}:{path}"
-            if str(path) in locations else None
-        )
-        for path in model_fields
-    }
-
-    actual_cases = [
-        str(row.get(case_join_column) or "").strip() for row in case_rows
-    ]
-    if not actual_cases or any(not key for key in actual_cases):
-        raise ValueError("scenario case source must contain non-empty case identifiers")
-    if len(set(actual_cases)) != len(actual_cases):
-        raise ValueError("scenario case source contains duplicate case identifiers")
-    slugs = [_slug(case) for case in actual_cases]
-    if len(set(slugs)) != len(slugs):
-        raise ValueError(
-            "scenario case identifiers collide when converted to CDA filenames"
-        )
-    known_cases = set(actual_cases)
-    for name, case_ids in source_case_ids.items():
-        unknown_cases = sorted(set(case_ids) - known_cases)
-        if unknown_cases:
-            raise ValueError(
-                f"scenario source {name!r} references unknown case(s): "
-                + ", ".join(unknown_cases)
-            )
-    expected_cfg = manifest.get("expected", {})
-    if not isinstance(expected_cfg, Mapping):
-        raise ValueError("scenario expected must be an object")
-    expected_cases = expected_cfg.get("cases")
-    if not isinstance(expected_cases, list) or not all(
-        isinstance(item, str) and item for item in expected_cases
-    ):
-        raise ValueError("scenario expected.cases must be a list of case identifiers")
-    if actual_cases != expected_cases:
-        raise ValueError(
-            f"scenario case rows {actual_cases!r} do not match expected.cases "
-            f"{expected_cases!r}"
-        )
-    expected_documents = expected_cfg.get("documents", len(expected_cases))
-    if (
-        not isinstance(expected_documents, int)
-        or isinstance(expected_documents, bool)
-        or expected_documents != len(expected_cases)
-    ):
-        raise ValueError(
-            "scenario expected.documents must equal the number of expected cases"
-        )
-    case_fields = expected_cfg.get("case_fields", {})
-    if not isinstance(case_fields, Mapping):
-        raise ValueError("scenario expected.case_fields must be an object")
-    unknown_case_expectations = sorted(set(case_fields) - set(actual_cases))
-    if unknown_case_expectations:
-        raise ValueError(
-            "scenario expected.case_fields names unknown case(s): "
-            + ", ".join(unknown_case_expectations)
-        )
-    for case, expectation in case_fields.items():
-        if not isinstance(expectation, Mapping):
-            raise ValueError(f"scenario case expectation {case!r} must be an object")
-        for key in ("present", "absent"):
-            paths = expectation.get(key, [])
-            if not isinstance(paths, list) or not all(
-                isinstance(item, str) and item in model_fields for item in paths
-            ):
-                raise ValueError(
-                    f"scenario expected.case_fields.{case}.{key} must contain "
-                    "known model paths"
-                )
-        present = {str(item) for item in expectation.get("present", [])}
-        absent = {str(item) for item in expectation.get("absent", [])}
-        if present & absent:
-            raise ValueError(
-                f"scenario expected.case_fields.{case} marks the same model "
-                "path present and absent"
-            )
-        for key in ("present_templates", "absent_templates"):
-            identities = expectation.get(key, [])
-            if not isinstance(identities, list) or not all(
-                isinstance(item, str) and item for item in identities
-            ):
-                raise ValueError(
-                    f"scenario expected.case_fields.{case}.{key} must contain "
-                    "non-empty template identifiers"
-                )
-        present_templates = {
-            str(item) for item in expectation.get("present_templates", [])
-        }
-        absent_templates = {
-            str(item) for item in expectation.get("absent_templates", [])
-        }
-        if present_templates & absent_templates:
-            raise ValueError(
-                f"scenario expected.case_fields.{case} marks the same CDA "
-                "template present and absent"
-            )
-
-    site_cfg = manifest.get("site", {})
-    if not isinstance(site_cfg, Mapping):
-        raise ValueError("scenario site must be an object")
-    scenario_cda = site_cfg.get("cda", {})
-    if not isinstance(scenario_cda, Mapping):
-        raise ValueError("scenario site.cda must be an object")
-    for key in ("values", "fallback_if_active"):
-        scenario_values = scenario_cda.get(key, {})
-        if not isinstance(scenario_values, Mapping):
-            raise ValueError(f"scenario site.cda.{key} must be an object")
-        site["cda"][key] = dict(scenario_values)
-
-    code_cfg = manifest.get("codes", {})
-    if not isinstance(code_cfg, Mapping):
-        raise ValueError("scenario codes must be an object")
-    for path, translations in code_cfg.items():
-        field = model_fields.get(str(path))
-        if not isinstance(field, Mapping) or field.get("type") != "code":
-            raise ValueError(
-                f"scenario codes references non-coded model field {path!r}"
-            )
-        if not isinstance(translations, Mapping) or not all(
-            isinstance(raw, str)
-            and raw
-            and (
-                isinstance(canonical, str) and bool(canonical)
-                or isinstance(canonical, Mapping)
-                and isinstance(canonical.get("code"), str)
-                and bool(canonical.get("code"))
-                and isinstance(canonical.get("codeSystem"), str)
-                and bool(canonical.get("codeSystem"))
-                and all(
-                    key in {"code", "codeSystem", "displayName"}
-                    and isinstance(value, str)
-                    for key, value in canonical.items()
-                )
-            )
-            for raw, canonical in translations.items()
-        ):
-            raise ValueError(
-                f"scenario codes.{path} must map non-empty strings to a "
-                "non-empty canonical string or an explicit code object"
-            )
-
-    site_input = site["input"]
-    for key in (
-        "encoding", "delimiter", "decimal_separator", "empty_is_null",
-        "null_values", "unit_aliases",
-    ):
-        if key in input_cfg:
-            site_input[key] = input_cfg[key]
-    site_input["join_column"] = join_column
-    site_input["case_source"] = case_source
-    site_input["sources"] = copied_sources
-    scenario_meta = {
-        "name": str(manifest.get("name") or scenario_dir.name),
-        "source": str(scenario_dir.resolve()),
-        "sha256": _scenario_digest(manifest, source_files),
-        "expected": dict(expected_cfg),
-        "codes": {
-            str(path): dict(translations)
-            for path, translations in code_cfg.items()
-        },
-    }
-    return csv_fields, scenario_meta, repeat_sources
 
 
 def _mapping_roots(
@@ -677,10 +243,13 @@ def setup_fixture(
         # last usable one even when --force was explicit.
         with tempfile.TemporaryDirectory(prefix="decor2hl7-scenario-") as tmp:
             staged_input = Path(tmp) / "input"
-            csv_fields, scenario_meta, repeat_sources = _copy_scenario_input(
+            scenario = prepare_scenario_input(
                 scenario_dir.resolve(), staged_input,
                 release, transaction, model, site,
             )
+            csv_fields = scenario.fields
+            scenario_meta = scenario.metadata
+            repeat_sources = scenario.repeats
             _replace_managed_fixture(test_dir, managed, force=force)
             input_root.mkdir(parents=True, exist_ok=True)
             shutil.copytree(staged_input, input_root, dirs_exist_ok=True)
@@ -900,7 +469,7 @@ def run_fixture(
     errors.extend(validate.check_config(
         model, cda, csv_mapping, cda_mapping, codes_mapping, site
     ))
-    records: list[dict[str, Any]] = []
+    records: list[NormalizedRecord] = []
     summary = {"records": 0, "errors": 0, "warnings": 0}
     if not errors:
         records = ingest(test_dir / "input", model, csv_mapping, codes_mapping, site)
@@ -941,7 +510,7 @@ def run_fixture(
                 errors.extend(_case_template_expectation_errors(
                     key, payload, expectation
                 ))
-                filename = f"{_slug(key)}.xml"
+                filename = f"{case_filename_key(key)}.xml"
                 (out_dir / filename).write_bytes(payload)
                 documents.append(filename)
                 render_warnings[key] = warnings
