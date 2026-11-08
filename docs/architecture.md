@@ -66,7 +66,10 @@ src/decor2hl7/
 │   ├── transaction.py      target-neutral dataset model
 │   ├── structural.py       generated occurrence rules
 │   ├── schematron.py       bounded supporting evidence
-│   ├── mapping.py          separate candidate, admission and report/audit stages
+│   ├── mapping.py          candidate discovery and proposal admission
+│   ├── mapping_decisions.py shared evidence and qualification labels
+│   ├── mapping_audit.py    checked serialization of final decisions
+│   ├── mapping_reports.py  presentation of completed decisions
 │   ├── site.py             site CSV and input-code proposals
 │   └── reports.py          readable generated products
 ├── cda/                    CDA target implementation
@@ -83,7 +86,8 @@ src/decor2hl7/
 │   ├── narrative.py        checked section-narrative rules and presentation IR
 │   └── render.py           representation-driven XML output
 ├── domain.py               target-neutral dataset value domains
-├── data.py                 CSV ingestion and occurrence normalization
+├── csv_input.py            strict streaming and materialized CSV tables
+├── data.py                 input ingestion and occurrence normalization
 ├── source.py               bounded ODBC/SQLite extraction and snapshot publication
 ├── bindings.py             mappings, structures, and construction values
 ├── transforms.py           declarative scalar transforms
@@ -148,7 +152,10 @@ See
 ### Mapping boundary
 
 `compile/mapping.py` combines the target-neutral model, physical CDA model, and
-bounded evidence graph. It emits a rich audit and concise proposal. Reviewed
+bounded evidence graph. Candidate discovery and admission produce the final
+decision state before `mapping_audit.py` serializes it and `mapping_reports.py`
+renders it. The audit and reports use shared coverage/qualification labels;
+presentation never changes the proposal. It emits a rich audit and concise proposal. Reviewed
 mapping remains outside generated `model/`, is protected by an identity lock,
 and may differ from the proposal.
 
@@ -196,7 +203,10 @@ recovery and delivery within the run.
 
 `contracts.py` defines the shared serialized shapes for dataset fields/groups,
 CDA nodes/targets, input and target mappings, site configuration and normalized
-occurrences. Runtime loading validates these shapes before bundle admission.
+occurrences, plus mapping-audit decisions and summaries. Dataset and CDA
+compilers check their outputs at the producing boundary; runtime loading checks
+serialized input before bundle admission. Nested terminology and diagnostic
+metadata have explicit contracts, including legitimate nullable source values.
 `RuntimeBundle` names its six products explicitly instead of relying on tuple
 positions. Normalization checks its resulting records at the owning boundary.
 
@@ -244,3 +254,8 @@ rather than runtime-oriented `validate.py`.
   importable.
 - Current unresolved technical and external boundaries are listed only in
   [`open-boundaries.md`](open-boundaries.md).
+
+Shared configuration path and bundle functions are explicit module interfaces.
+Compiler entry points write their owned artifacts directly, without compatibility
+wrappers or duplicate hash exports. Compact compound statements use separate
+lines so validation and mutation order remain visible.

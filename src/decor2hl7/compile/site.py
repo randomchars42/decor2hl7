@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import csv
 import difflib
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping
 
+from ..csv_input import open_csv_table
 from ..domain import accepted_values
 from ..i18n import message as _msg, localized
 from ..text import normalize_match_text as _norm
@@ -19,15 +19,8 @@ def _headers(input_dir: Path | None) -> dict[str, list[str]]:
     if input_dir is None or not input_dir.exists():
         return out
     for path in sorted(input_dir.glob("*.csv")):
-        with path.open(encoding="utf-8-sig", newline="") as handle:
-            sample = handle.read(8192)
-            handle.seek(0)
-            try:
-                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-            except csv.Error:
-                dialect = csv.excel
-            reader = csv.reader(handle, dialect)
-            out[path.stem] = next(reader, [])
+        with open_csv_table(path) as table:
+            out[path.stem] = table.columns
     return out
 
 
@@ -198,17 +191,12 @@ def _read_column_values(input_dir: Path | None, locator: str) -> set[str]:
     path = input_dir / f"{source}.csv"
     if not path.exists():
         return set()
-    with path.open(encoding="utf-8-sig", newline="") as handle:
-        sample = handle.read(8192)
-        handle.seek(0)
-        try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-        except csv.Error:
-            dialect = csv.excel
+    with open_csv_table(path) as table:
         return {
-            str(row.get(column, "")).strip()
-            for row in csv.DictReader(handle, dialect=dialect)
-            if str(row.get(column, "")).strip()
+            value.strip()
+            for row in table.rows
+            for value in [row.get(column, "")]
+            if value.strip()
         }
 
 

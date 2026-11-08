@@ -22,7 +22,10 @@ contradiction, not a reason to borrow from another dataset revision.
 
 Every compiled field retains identity, name and description, datatype and
 constraints, cardinality, parent, repeat chain, terminology associations,
-domain metadata, and provenance. Groups and fields remain distinct.
+domain metadata, and provenance. Groups and fields remain distinct. The compiler
+checks the stable serialized model shape before returning it. Clinical paths,
+owner identities, value-set members and new release content remain data; the
+contract describes the format, not a particular dataset revision.
 
 ## Reviewed local model extensions
 
